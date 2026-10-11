@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-voice-workbench"
+dynamic = ["version"]
+description = "Local speech service for the bilingual audio workflow"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "PyQt6>=6.6,<7", "httpx>=0.27,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-qt>=4,<5"]
+package = ["pyinstaller>=6.10,<7"]
+
+[tool.setuptools.packages.find]
+include = ["voice_workbench*"]
+
+[tool.setuptools.package-data]
+voice_workbench = ["assets/*.svg", "assets/*.ico", "assets/*.png", "assets/*.json", "assets/*LICENSE.txt"]
+
+[tool.setuptools.dynamic]
+version = {attr = "voice_workbench.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+qt_api = "pyqt6"
