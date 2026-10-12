@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialo
     QGridLayout, QHBoxLayout, QHeaderView, QLineEdit, QMenu, QMessageBox, QScrollArea, QStackedWidget, QTableWidget, QFrame,
     QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox, QFormLayout, QProgressBar, QSizePolicy)
 
-from .ui import ElidedLabel, button, icon, label, generation_elapsed
+from .ui import ElidedLabel, ModelDescriptionDelegate, audio_sort_combo, button, icon, label, generation_elapsed, sorted_audio
 
 DOWNLOAD_STATES = {"available": "可下载", "downloading": "下载中", "verifying": "校验中",
                    "pausing": "正在暂停", "paused": "已暂停", "failed": "下载失败", "done": "已下载",
@@ -224,6 +224,7 @@ class SettingsPanel(QWidget):
         self.model_update_notice.hide()
         layout.addWidget(self.model_update_notice)
         self.installed_table = self.table(("模型 / 功能", "大小", "状态", "操作"), whole_page=True)
+        self.installed_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.installed_table))
         self.installed_table.horizontalHeader().hide()
         self.installed_table.hide()
         for col, width in ((1, 84), (2, 105), (3, 190)):
@@ -240,6 +241,7 @@ class SettingsPanel(QWidget):
         available_head.addWidget(self.model_search)
         layout.addLayout(available_head)
         self.catalog_table = self.table(("模型 / 功能", "精度", "文件大小", "状态", "操作"), whole_page=True)
+        self.catalog_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.catalog_table))
         self.catalog_table.horizontalHeader().hide()
         self.catalog_table.hide()
         for col, width in ((1, 65), (2, 82), (3, 135), (4, 100)):
@@ -374,6 +376,9 @@ class SettingsPanel(QWidget):
         self.audio_search.setPlaceholderText("搜索作品、文本、模型或预设…")
         self.audio_search.textChanged.connect(self.render_audio)
         tools.addWidget(self.audio_search, 1)
+        self.audio_sort = audio_sort_combo()
+        self.audio_sort.currentIndexChanged.connect(self.render_audio)
+        tools.addWidget(self.audio_sort)
         self.selection_label = label("", "muted")
         tools.addWidget(self.selection_label)
         self.delete_selected = button("删除所选", lambda: self.delete_audio(), "trash")
@@ -540,7 +545,8 @@ class SettingsPanel(QWidget):
         self.table_rows(table, [m["id"] for m in installed])
         for row, m in enumerate(installed):
             title = m["name"] + (" · " + m["precision"] if m["precision"] else "")
-            self.cell(table, row, 0, title + "\n" + m["description"], title + "\n" + m["description"] + "\n" + m["path"] + f"\n关联预设：{m['preset_count']} 个")
+            cell = self.cell(table, row, 0, title + "\n" + m["description"], title + "\n" + m["description"] + "\n" + m["path"] + f"\n关联预设：{m['preset_count']} 个")
+            cell.setData(Qt.ItemDataRole.UserRole + 1, {"title": title, "description": m["description"]})
             self.cell(table, row, 1, "目录模型" if m.get("is_directory") else size_text(m["size"]) if m["exists"] else "文件缺失")
             status = m.get("update_status")
             summary = DOWNLOAD_STATES.get(status, status) if status else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型"
@@ -557,7 +563,8 @@ class SettingsPanel(QWidget):
         self.table_rows(table, [m["id"] for m in catalog])
         self.visible_catalog = catalog
         for row, m in enumerate(catalog):
-            self.cell(table, row, 0, m["name"] + "\n" + m["description"])
+            cell = self.cell(table, row, 0, m["name"] + "\n" + m["description"])
+            cell.setData(Qt.ItemDataRole.UserRole + 1, {"title": m["name"], "description": m["description"]})
             self.cell(table, row, 1, m["precision"])
             self.cell(table, row, 2, size_text(m["size"]))
             status = m["status"]
@@ -664,7 +671,10 @@ class SettingsPanel(QWidget):
         self.engine_version.setText("audio.cpp · " + (version or "本地版本未记录" if ready else "尚未安装"))
         upgrade = option.get("update_available", False)
         recommended = option.get("recommended_version", "")
-        self.engine_description.setText("可以生成 · 可选升级到 " + recommended if upgrade else "可以生成" if ready else "安装后即可使用本地模型")
+        installed = "audio.cpp " + (version or "版本未知")
+        self.engine_description.setText(installed + " · 可以生成" + (" · 可升级到 " + recommended if upgrade else "")
+                                        if ready else "安装后即可使用本地模型")
+        self.engine_description.setToolTip(self.engine_description.text() + "\n" + (runtime or ""))
         self.engine_release_url = engine.get("release") or self.engine_catalog["release"]
         status = option.get("status", "available")
         busy = status in ("downloading", "verifying", "extracting", "waiting", "pausing")
@@ -807,6 +817,7 @@ class SettingsPanel(QWidget):
     def render_audio(self, *_):
         text = self.audio_search.text().strip().casefold()
         self.visible_audio = [a for a in self.audio_data if not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a))).casefold()]
+        self.visible_audio = sorted_audio(self.visible_audio, self.audio_sort.currentData())
         table = self.audio_table
         scroll = table.verticalScrollBar().value()
         table.blockSignals(True)

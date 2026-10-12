@@ -27,6 +27,11 @@ def test_advanced_toggle_keeps_inspector_controls_in_place(tmp_path, qtbot, qapp
         window.model_controls.advanced_toggle.click()
         qtbot.wait(20)
         assert positions() == expected
+        if window.model_controls.advanced_toggle.isChecked():
+            controls = window.model_controls.generation_controls
+            assert controls.fields
+            assert all(field.isVisible() and field.height() > 0 for field in controls.fields.values())
+            assert controls.height() >= controls.minimumSizeHint().height()
     for _ in range(5):
         window.model_controls.generation_controls.reset()
         qtbot.wait(20)

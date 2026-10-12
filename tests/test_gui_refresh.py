@@ -67,8 +67,8 @@ def test_poll_keeps_rows_scroll_focus_and_open_state_and_only_changes_updated_ce
     assert window.clip_list.isVisible() and window.segments_table.currentRow() == 20
     assert window.segments_table.verticalScrollBar().value() == before_scroll
     assert all(window.segments_table.item(i, 2) is before[i] for i in range(30))
-    assert window.segments_table.item(29, 4).text() == "失败"
-    assert window.segments_table.item(29, 5).text() == "具体失败原因"
+    assert window.segments_table.item(0, 4).text() == "失败"
+    assert window.segments_table.item(0, 5).text() == "具体失败原因"
     window.close()
 
 

@@ -6,16 +6,59 @@ import sys
 import wave
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QCoreApplication, QObject, QPointF, QSize, Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor, QWheelEvent
+from PyQt6.QtCore import QByteArray, QCoreApplication, QObject, QPointF, QRect, QSize, Qt, QEvent, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDoubleSpinBox, QFrame, QLabel,
                             QPushButton, QSizePolicy, QSlider, QSpinBox, QStyledItemDelegate, QStyle,
-                            QTableWidget, QTextEdit, QWidget)
+                            QStyleOptionViewItem, QTableWidget, QTextEdit, QWidget)
 
 
 INK = "#18181a"
 ORANGE = "#e0651c"
+
+
+def sorted_audio(records, order="newest"):
+    return sorted(records, key=lambda item: (item.get("created") or 0, item.get("idx") or 0,
+                                             str(item.get("id", ""))), reverse=order == "newest")
+
+
+def audio_sort_combo():
+    control = NoWheelComboBox()
+    control.addItem("最新生成在前", "newest")
+    control.addItem("最早生成在前", "oldest")
+    control.setAccessibleName("生成音频排序")
+    control.setToolTip("按生成时间排序；相同时间按片段顺序排列。")
+    control.setFixedWidth(142)
+    return control
+
+
+class ModelDescriptionDelegate(QStyledItemDelegate):
+    """Two readable text levels without adding widgets to every model row."""
+    def paint(self, painter, option, index):
+        text = index.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(text, dict):
+            return super().paint(painter, option, index)
+        background = QStyleOptionViewItem(option)
+        self.initStyleOption(background, index)
+        background.text = ""
+        style = option.widget.style() if option.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, background, painter, option.widget)
+        painter.save()
+        painter.setClipRect(option.rect)
+        font = QFont(option.font)
+        for key, size, weight, color, top, height in (
+            ("title", 14, QFont.Weight.Medium, INK, 10, 23),
+            ("description", 12, QFont.Weight.Normal, "#77777c", 34, 20),
+        ):
+            font.setPixelSize(size)
+            font.setWeight(weight)
+            painter.setFont(font)
+            painter.setPen(QColor(color))
+            area = QRect(option.rect.x() + 10, option.rect.y() + top, max(0, option.rect.width() - 20), height)
+            line = QFontMetrics(font).elidedText(text[key], Qt.TextElideMode.ElideRight, area.width())
+            painter.drawText(area, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
+        painter.restore()
 
 
 def application_icon():

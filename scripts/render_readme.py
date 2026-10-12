@@ -81,6 +81,7 @@ def prepare(data, original):
     reference.parent.mkdir(parents=True)
     demo_wave(reference)
     atomic_json(data / "config.json", {"voices": voices, "model_templates": models,
+        **{key: original[key] for key in ("native_engine", "native_engine_version", "native_engine_backend", "native_engines") if key in original},
         "references": [{"id": "demo-reference", "name": "参考声音 · 女声示例", "reference_audio": str(reference),
                         "reference_text": "欢迎来到山海之间，愿每一段旅程都成为一个好故事。"}]})
     config = ConfigStore(data)
@@ -181,6 +182,7 @@ def main():
             capture("workflow")
             window.set_page(3)
             window.settings.set_section(0)
+            window.settings.model_directory.setText("应用数据目录 / models")
             window.settings.model_search.setText("VoxCPM2")
             window.settings.refresh()
             capture("models")

@@ -154,18 +154,18 @@ def test_player_popup_navigation_pause_and_poll_preserve_selection(tmp_path, qap
             "generation": index, "status": status, "audio": filename, "cached": 0,
             "error": {"message": "明确的错误原因"} if status == "failed" else None})
     window.render_job(job)
-    assert window.current_segment()["idx"] == 1
+    assert window.current_segment()["idx"] == 4
     assert window.play_button.isEnabled() and not window.previous_button.isEnabled() and window.next_button.isEnabled()
     calls = []
     monkeypatch.setattr(window.player, "play", lambda: calls.append("play"))
     monkeypatch.setattr(window.player, "pause", lambda: calls.append("pause"))
     window.next_button.click()
-    assert window.current_segment()["idx"] == 4 and calls == ["play"]
+    assert window.current_segment()["idx"] == 1 and calls == ["play"]
     assert not window.next_button.isEnabled() and window.previous_button.isEnabled()
     window.render_job(deepcopy(job))
-    assert window.current_segment()["idx"] == 4
+    assert window.current_segment()["idx"] == 1
     window.previous_button.click()
-    assert window.current_segment()["idx"] == 1 and calls == ["play", "play"]
+    assert window.current_segment()["idx"] == 4 and calls == ["play", "play"]
     monkeypatch.setattr(window.player, "playbackState", lambda: QMediaPlayer.PlaybackState.PlayingState)
     window.toggle_playback()
     assert calls[-1] == "pause"
@@ -199,7 +199,7 @@ def test_export_keeps_alternative_generation_out_of_selected_timeline(tmp_path, 
          "status": "done", "cached": 0, "error": None, "audio": name, "voice": {"speed": i}}
         for i, name in ((1, "one.wav"), (2, "two.wav"))]}
     window.render_job(job)
-    window.segments_table.selectRow(1)
+    window.segments_table.selectRow(0)
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args: str(tmp_path / "export"))
     window.export()
     folder = tmp_path / "export" / "work" / "生成-002"

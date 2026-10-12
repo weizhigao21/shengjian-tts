@@ -64,7 +64,7 @@ def test_latest_submission_plays_once_in_order_skips_failure_and_stays_in_its_ba
     window.render_job(deepcopy(job))
     window.playback_finished(QMediaPlayer.MediaStatus.EndOfMedia)
     assert played == [3, 4]  # Automatic continuation never enters a different generation.
-    window.play_adjacent(1)
+    window.play_adjacent(-1)
     assert played == [3, 4, 5]
     job["segments"].append(dict(segment(6, 4, audio="external.wav"), cached=1))
     window.submitted({"job_id": "work", "generation": 4, "segment_indices": [6]})

@@ -19,7 +19,12 @@ class SeedControl(QWidget):
         layout.setSpacing(6)
         self.random = QCheckBox("随机")
         self.random.setToolTip("每次生成使用新的种子；取消勾选可输入固定种子。")
-        self.number = NoWheelSpinBox()
+        # Native engine seeds are unsigned 32-bit; QSpinBox only accepts signed
+        # 32-bit bounds. Doubles represent this entire integer range exactly.
+        self.number = NoWheelDoubleSpinBox() if spec["max"] > 2147483647 else NoWheelSpinBox()
+        if isinstance(self.number, NoWheelDoubleSpinBox):
+            self.number.setDecimals(0)
+            self.number.setSingleStep(1)
         self.number.setRange(0, spec["max"])
         self.number.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.number.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -43,7 +48,7 @@ class SeedControl(QWidget):
         self.changed.emit()
 
     def value(self):
-        return -1 if self.random.isChecked() else self.number.value()
+        return -1 if self.random.isChecked() else int(self.number.value())
 
     def setValue(self, value):
         before = self.value()
@@ -57,7 +62,7 @@ class SeedControl(QWidget):
             self.changed.emit()
 
     def randomize(self):
-        self.setValue(secrets.randbelow(self.number.maximum() + 1))
+        self.setValue(secrets.randbelow(int(self.number.maximum()) + 1))
 
 
 class GenerationControls(QWidget):

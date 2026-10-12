@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QDoubleSpinBox, Q
 
 from .config import PROJECT_ROOT
 from . import __version__
-from .ui import application_icon, generation_elapsed
+from .ui import application_icon, generation_elapsed, sorted_audio
 from .subtitles import parse_text, normalize_timestamp
 from .runner import validate_wave
 from .runtime import service_command
@@ -82,6 +82,7 @@ class Window(UiLayout, QMainWindow):
         self.autoplay_indices = None
         self.selected_job = None
         self.job_data = None
+        self.visible_segments = []
         self.polling = False
         self.ready = False
         self.submitting = False
@@ -443,10 +444,10 @@ class Window(UiLayout, QMainWindow):
         if accepted and name.strip():
             self.call(lambda c: checked(c.patch(f"/jobs/{job['id']}", json={"title": name.strip()})), lambda r: self.poll())
 
-    def render_job(self, job):
+    def render_job(self, job, force=False):
         if job["id"] != self.selected_job:
             return
-        if job == self.job_data and self.segments_table.rowCount() == len(job["segments"]):
+        if not force and job == self.job_data and self.segments_table.rowCount() == len(job["segments"]):
             if self.auto_select_audio and self.playable_rows():
                 self.segments_table.selectRow(self.playable_rows()[0])
                 self.auto_select_audio = False
@@ -455,12 +456,13 @@ class Window(UiLayout, QMainWindow):
             return
         selected_idx = (self.current_segment() or {}).get("idx")
         self.job_data = job
-        selected_row = next((row for row, s in enumerate(job["segments"]) if s["idx"] == selected_idx), -1)
+        self.visible_segments = sorted_audio(job["segments"], self.clip_sort.currentData())
+        selected_row = next((row for row, s in enumerate(self.visible_segments) if s["idx"] == selected_idx), -1)
         self.segments_table.blockSignals(True)
         self.segments_table.setUpdatesEnabled(False)
         if self.segments_table.rowCount() != len(job["segments"]):
             self.segments_table.setRowCount(len(job["segments"]))
-        for row, item in enumerate(job["segments"]):
+        for row, item in enumerate(self.visible_segments):
             error = item["error"] or {}
             status = STATES[item["status"]] + (" · 缓存" if item["cached"] else "")
             created = item.get("created") or job.get("created")
@@ -610,9 +612,11 @@ class Window(UiLayout, QMainWindow):
 
     def current_segment(self):
         row = self.segments_table.currentRow()
-        return self.job_data["segments"][row] if self.job_data and 0 <= row < len(self.job_data["segments"]) else None
+        return self.visible_segments[row] if self.job_data and 0 <= row < len(self.visible_segments) else None
 
-    def play(self):
+    def play(self, automatic=False):
+        if not automatic:
+            self.clear_autoplay()
         self.settings.player.pause()
         item = self.current_segment()
         if item and item["status"] == "done":
@@ -818,12 +822,15 @@ class Window(UiLayout, QMainWindow):
 
     def closeEvent(self, event):
         self.closing = True
+        self.clear_autoplay()
         self.timer.stop()
         self.document_timer.stop()
         self.clip_list.hide()
         self.settings.close_management()
         self.player.stop()
+        self.player.setSource(QUrl())
         self.reference_player.stop()
+        self.reference_player.setSource(QUrl())
         for worker in list(self.workers):
             worker.blockSignals(True)
             worker.wait(30000)

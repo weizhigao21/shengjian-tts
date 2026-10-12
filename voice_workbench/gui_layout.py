@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDouble
     QTextEdit, QVBoxLayout, QWidget)
 
 from . import __version__
-from .ui import STYLE, ORANGE, AnchoredPopover, ElidedLabel, RecentTasks, ScriptEditor, Waveform, application_icon, button, icon, label
+from .ui import STYLE, ORANGE, AnchoredPopover, ElidedLabel, RecentTasks, ScriptEditor, Waveform, application_icon, audio_sort_combo, button, icon, label
 
 from .model_info import KOKORO_LANGUAGES, LANGUAGES, MODES, model_ui, selected_mode
 from .model_controls import ModelControls, populate, populate_voices
@@ -491,6 +491,9 @@ class UiLayout:
         header = QHBoxLayout()
         self.clip_list_title = label("生成记录", "section")
         header.addWidget(self.clip_list_title, 1)
+        self.clip_sort = audio_sort_combo()
+        self.clip_sort.currentIndexChanged.connect(self.sort_segments)
+        header.addWidget(self.clip_sort)
         self.retry_button = button("重试失败", self.retry, "retry", "ghost")
         self.cancel_button = button("取消生成", self.cancel, "close", "ghost")
         for control in (self.retry_button, self.cancel_button):
@@ -530,7 +533,7 @@ class UiLayout:
 
     def choose_clip(self, *_):
         self.auto_select_audio = False
-        self.autoplay_indices = None
+        self.clear_autoplay()
         item = self.current_segment()
         if item and item["status"] == "done" and self.play_button.isEnabled():
             self.player.setPosition(0)
@@ -542,26 +545,32 @@ class UiLayout:
         self.details()
 
     def playable_rows(self):
-        return [row for row, item in enumerate((self.job_data or {}).get("segments", []))
+        return [row for row, item in enumerate(self.visible_segments if self.job_data else [])
                 if item["status"] == "done" and item.get("audio") and (self.data_dir / "audio" / item["audio"]).is_file()]
 
     def adjacent_row(self, direction, indices=None):
         row = self.segments_table.currentRow()
-        playable = [i for i in self.playable_rows() if indices is None or self.job_data["segments"][i]["idx"] in indices]
+        playable = [i for i in self.playable_rows() if indices is None or self.visible_segments[i]["idx"] in indices]
+        if indices is not None:
+            current = self.current_segment()
+            if not current:
+                return None
+            rows = [i for i in playable if (self.visible_segments[i]["idx"] - current["idx"]) * direction > 0]
+            return min(rows, key=lambda i: abs(self.visible_segments[i]["idx"] - current["idx"])) if rows else None
         rows = [i for i in playable if i < row] if direction < 0 else [i for i in playable if i > row]
         return (rows[-1] if direction < 0 else rows[0]) if rows else None
 
     def play_adjacent(self, direction, automatic=False):
         if not automatic:
-            self.autoplay_indices = None
+            self.clear_autoplay()
         row = self.adjacent_row(direction, self.autoplay_indices if automatic else None)
         if row is not None:
             self.segments_table.selectRow(row)
             self.player.setPosition(0)
-            self.play()
+            self.play(automatic=automatic)
 
     def playback_finished(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+        if not self.closing and status == QMediaPlayer.MediaStatus.EndOfMedia and self.autoplay_indices:
             self.play_adjacent(1, automatic=True)
 
     def clear_autoplay(self):
@@ -576,14 +585,22 @@ class UiLayout:
         if len(items) != len(pending["indices"]) or any(s["status"] in ("queued", "running") for s in items):
             return
         self.pending_autoplay = None
-        rows = [row for row in self.playable_rows() if job["segments"][row]["idx"] in pending["indices"]]
+        rows = sorted((row for row in self.playable_rows() if self.visible_segments[row]["idx"] in pending["indices"]),
+                      key=lambda row: self.visible_segments[row]["idx"])
         if rows:
             self.autoplay_indices = pending["indices"]
             self.auto_select_audio = False
             self.segments_table.selectRow(rows[0])
             self.segments_table.scrollToItem(self.segments_table.item(rows[0], 0))
             self.player.setPosition(0)
-            self.play()
+            self.play(automatic=True)
+
+    def sort_segments(self):
+        if self.job_data:
+            self.render_job(self.job_data, force=True)
+            row = self.segments_table.currentRow()
+            if row >= 0:
+                self.segments_table.scrollToItem(self.segments_table.item(row, 0))
 
     def show_toast(self, message):
         self.toast_text.setText(message)
@@ -781,6 +798,7 @@ class UiLayout:
         self.update_transport()
 
     def toggle_playback(self):
+        self.clear_autoplay()
         self.settings.player.pause()
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
@@ -820,7 +838,7 @@ class UiLayout:
         self.cancel_button.setEnabled(job["status"] in ("running", "queued"))
         self.segments_table.setColumnHidden(5, not counts["failed"])
         self.result_hint.setText("双击失败片段，查看具体原因、修复建议和原始异常。" if counts["failed"] else "点击片段播放 · 上一个 / 下一个切换 · 每次生成保留在当前作品")
-        for row, item in enumerate(job["segments"]):
+        for row, item in enumerate(self.visible_segments):
             color = "#ad5427" if item["status"] == "failed" else "#3c7a51" if item["status"] == "done" else "#88888e"
             cell = self.segments_table.item(row, 4)
             if cell.foreground().color() != QColor(color):

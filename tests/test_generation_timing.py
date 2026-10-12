@@ -97,8 +97,8 @@ def test_both_audio_lists_show_elapsed_cache_and_old_records_without_refresh_fli
         window.render_job(job)
         table = window.segments_table
         assert table.horizontalHeaderItem(3).text() == "生成耗时"
-        assert [table.item(r, 3).text() for r in range(3)] == ["4.2 秒", "缓存", "未记录"]
-        assert "不包含排队" in table.item(0, 3).toolTip()
+        assert [table.item(r, 3).text() for r in range(3)] == ["未记录", "缓存", "4.2 秒"]
+        assert "不包含排队" in table.item(2, 3).toolTip()
         assert table.isColumnHidden(5) and table.item(0, 4).text() == "已完成"
         table.selectRow(1)
         timing = table.item(0, 3)
