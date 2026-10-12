@@ -1,6 +1,7 @@
 """Model contracts, advanced values, inference forwarding and cache isolation."""
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 from voice_workbench.api import create_app
 from voice_workbench.audio_cpp import build_native_request
@@ -55,6 +56,44 @@ def test_declared_option_contract_controls_ranges_and_available_fields(tmp_path,
     controls.close()
 
 
+def test_seed_can_be_typed_randomized_and_keeps_its_value_on_refresh(tmp_path, qtbot, monkeypatch):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QSignalSpy
+
+    voice = vox_voice(tmp_path)
+    controls = ModelControls()
+    qtbot.addWidget(controls)
+    controls.bind(voice)
+    controls.advanced_toggle.setChecked(True)
+    controls.show()
+    seed = controls.generation_controls.fields["seed"]
+    assert controls.generation_controls.form.itemAt(0).widget().text() == "随机种子"
+    assert seed.random.isChecked() and not seed.number.isEnabled() and seed.value() == -1
+    qtbot.mouseClick(seed.random, Qt.MouseButton.LeftButton)
+    seed.number.lineEdit().selectAll()
+    qtbot.keyClicks(seed.number.lineEdit(), "2147483647")
+    qtbot.keyClick(seed.number.lineEdit(), Qt.Key.Key_Enter)
+    assert seed.value() == 2147483647
+    controls.bind(dict(voice))
+    assert controls.overrides()["request_options"]["seed"] == 2147483647
+    qtbot.mouseClick(seed.random, Qt.MouseButton.LeftButton)
+    assert controls.overrides()["request_options"]["seed"] == -1
+    qtbot.mouseClick(seed.random, Qt.MouseButton.LeftButton)
+    assert seed.value() == 2147483647
+    monkeypatch.setattr("voice_workbench.generation_controls.secrets.randbelow", lambda maximum: 123)
+    qtbot.mouseClick(seed.random, Qt.MouseButton.LeftButton)
+    changed = QSignalSpy(controls.changed)
+    qtbot.mouseClick(seed.new_seed, Qt.MouseButton.LeftButton)
+    assert not seed.random.isChecked() and seed.number.isEnabled() and seed.value() == 123
+    assert len(changed) == 1
+    seed.number.lineEdit().selectAll()
+    qtbot.keyClicks(seed.number.lineEdit(), "0")
+    qtbot.keyClick(seed.number.lineEdit(), Qt.Key.Key_Enter)
+    assert controls.overrides()["request_options"]["seed"] == 0
+    controls.generation_controls.reset()
+    assert controls.overrides()["request_options"]["seed"] == -1
+
+
 def test_advanced_wheel_scrolls_page_without_editing_focused_controls(tmp_path, qtbot):
     from PyQt6.QtCore import QPoint, QPointF, Qt
     from PyQt6.QtGui import QWheelEvent
@@ -77,12 +116,14 @@ def test_advanced_wheel_scrolls_page_without_editing_focused_controls(tmp_path, 
     fields = controls.generation_controls.fields
     fields["guidance_scale"].setValue(2.8)
     fields["num_inference_steps"].setValue(18)
+    fields["seed"].setValue(45)
     combo = fields["voxcpm2.chunk_strategy"]
     combo.setCurrentIndex(1)
     controls.device.setCurrentIndex(1)
     slider = controls.generation_controls.findChild(QSlider)
     targets = (fields["guidance_scale"], fields["guidance_scale"].lineEdit(),
-               fields["num_inference_steps"], slider, combo,
+               fields["num_inference_steps"], fields["seed"].number,
+               fields["seed"].number.lineEdit(), slider, combo,
                controls.device, controls.timeout, controls.timeout.lineEdit())
     expected = controls.overrides()
     changed = QSignalSpy(controls.changed)
@@ -150,6 +191,28 @@ def done(client, job_id):
             return job
         time.sleep(.01)
     raise AssertionError("job timed out")
+
+
+@pytest.mark.parametrize("seed", [0, 2147483647])
+def test_saved_fixed_seed_is_used_by_every_workflow_batch(tmp_path, seed):
+    voice = vox_voice(tmp_path)
+    voice["request_options"] = {"seed": seed}
+    root = tmp_path / "data"
+    ConfigStore(root).save_voice(voice)
+    runner = CaptureRunner()
+    with TestClient(create_app(root, runner=runner)) as client:
+        ids = []
+        for text in ("第一批字幕", "第二批字幕"):
+            response = client.post("/jobs", json={"voice_id": voice["id"],
+                "segments": [{"text": text}], "workflow_key": "fixed-seed-test", "delivery_ack": True})
+            assert response.status_code == 202, response.text
+            ids.append(response.json()["job_id"])
+            job = done(client, ids[-1])
+            assert job["voice"]["request_options"]["seed"] == seed
+            assert all(s["voice"]["request_options"]["seed"] == seed for s in job["segments"])
+        assert len(set(ids)) == 1 and client.get("/jobs").json() == []
+        assert [r["request"]["options"]["seed"] for r in runner.requests] == [seed, seed]
+        assert next(v for v in ConfigStore(root).voices() if v["id"] == voice["id"])["request_options"]["seed"] == seed
 
 
 def test_advanced_options_save_merge_in_tasks_and_change_cached_audio(tmp_path):

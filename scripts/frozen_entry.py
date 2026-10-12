@@ -24,8 +24,10 @@ def main():
         for index, argument in enumerate(sys.argv[:-1]):
             if argument == "--data-dir":
                 data = Path(sys.argv[index + 1])
-        (data / "logs").mkdir(parents=True, exist_ok=True)
-        log = (data / "logs" / "startup.log").open("a", encoding="utf-8", buffering=1)
+        # Leave default data uncreated until the atomic legacy migration has finished.
+        logs = data.parent / "logs" if data == DEFAULT_DATA else data / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log = (logs / "startup.log").open("a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stdout or log
         sys.stderr = sys.stderr or log
     from voice_workbench.__main__ import main as app_main

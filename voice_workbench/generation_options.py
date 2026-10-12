@@ -12,7 +12,7 @@ def number(name, label, default, minimum, maximum, step=1, **extra):
 
 CHUNK_MODES = {"default": "自动分段", "tag_aware": "保留标签", "japanese": "日语分段", "endline": "按换行分段"}
 STRATEGIES = {"continuation": "连续生成", "stateless": "各段独立生成"}
-SEED = number("seed", "随机种子", -1, -1, 2147483647, help="随机种子固定后可复现生成；-1 为随机。")
+SEED = number("seed", "随机种子", -1, -1, 2147483647, help="固定种子有助于复现生成；-1 为每次随机。")
 
 
 def chunk_options(default, mode="default", minimum=0):

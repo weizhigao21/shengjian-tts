@@ -1,9 +1,63 @@
 """Compact controls rendered from the selected model's request-option definitions."""
+import secrets
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractSpinBox, QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QSizePolicy, QWidget
 
 from .ui import (NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSlider,
                  NoWheelSpinBox, button, label)
+
+
+class SeedControl(QWidget):
+    """An explicit random mode with a remembered, directly editable fixed seed."""
+    changed = pyqtSignal()
+
+    def __init__(self, spec, value):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.random = QCheckBox("随机")
+        self.random.setToolTip("每次生成使用新的种子；取消勾选可输入固定种子。")
+        self.number = NoWheelSpinBox()
+        self.number.setRange(0, spec["max"])
+        self.number.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.number.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.number.setFixedWidth(112)
+        self.number.setKeyboardTracking(False)
+        self.number.setAccessibleName("固定随机种子")
+        self.number.setToolTip(f"固定种子：0–{spec['max']}。同样的种子有助于复现生成。")
+        self.new_seed = button("", self.randomize, "retry", "icon")
+        self.new_seed.setFixedWidth(28)
+        self.new_seed.setToolTip("生成一个新的固定种子")
+        self.new_seed.setAccessibleName("生成新的固定种子")
+        layout.addWidget(self.random)
+        layout.addWidget(self.number)
+        layout.addWidget(self.new_seed)
+        self.random.toggled.connect(self.random_changed)
+        self.number.valueChanged.connect(self.changed)
+        self.setValue(value)
+
+    def random_changed(self, checked):
+        self.number.setEnabled(not checked)
+        self.changed.emit()
+
+    def value(self):
+        return -1 if self.random.isChecked() else self.number.value()
+
+    def setValue(self, value):
+        before = self.value()
+        blocked = self.blockSignals(True)
+        if value != -1:
+            self.number.setValue(value)
+        self.random.setChecked(value == -1)
+        self.number.setEnabled(value != -1)
+        self.blockSignals(blocked)
+        if self.value() != before:
+            self.changed.emit()
+
+    def randomize(self):
+        self.setValue(secrets.randbelow(self.number.maximum() + 1))
 
 
 class GenerationControls(QWidget):
@@ -27,12 +81,17 @@ class GenerationControls(QWidget):
             self.form.removeRow(0)
         self.fields, self.specs = {}, specs
         self.extra = {k: v for k, v in values.items() if k not in {s['name'] for s in specs}}
-        for spec in specs:
+        # Put the seed first so it is visible as soon as advanced settings open.
+        for spec in sorted(specs, key=lambda s: s["name"] != "seed"):
             name, type_ = spec["name"], spec["type"]
             value = values.get(name, spec["default"])
             caption = label(spec["label"], "muted")
             caption.setToolTip(spec.get("help") or spec.get("description", ""))
-            if type_ == "enum":
+            if name == "seed" and type_ == "int":
+                field = SeedControl(spec, value)
+                field.changed.connect(self.changed)
+                self.add_compact_row(caption, field)
+            elif type_ == "enum":
                 field = NoWheelComboBox()
                 choices = spec["values"]
                 for choice in choices:
@@ -54,10 +113,8 @@ class GenerationControls(QWidget):
                 field.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 if type_ == "float":
                     field.setDecimals(2 if spec["step"] < .1 else 1)
-                if name == "seed":
-                    field.setSpecialValueText("随机")
                 field.setValue(value)
-                field.setFixedWidth(86 if name != "seed" else 120)
+                field.setFixedWidth(86)
                 field.valueChanged.connect(self.changed)
                 if spec.get("slider"):
                     row = QWidget()

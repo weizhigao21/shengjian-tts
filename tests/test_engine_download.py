@@ -16,6 +16,8 @@ from voice_workbench.api import create_app
 from voice_workbench.engine_management import EngineManager
 from voice_workbench.manager import Manager
 from test_inline_generation import Runner, index_voice
+from pe_fixture import engine_files, pe_binary
+from voice_workbench.engine_validation import CUDA_DLLS
 
 
 @pytest.fixture(autouse=True)
@@ -32,10 +34,9 @@ def archive(files):
 
 
 def installer(manager, handle=None, files=None, cuda=False):
-    payloads = {"engine.zip": archive(files or {"bin/audiocpp_server.exe": b"MZ fixture",
-                                               "bin/ggml.dll": b"engine DLL", "LICENSE": b"Apache-2.0"})}
+    payloads = {"engine.zip": archive(files or engine_files(cuda))}
     if cuda:
-        payloads["cudart.zip"] = archive({"cuda/bin/cublas64_12.dll": b"CUDA fixture"})
+        payloads["cudart.zip"] = archive({"cuda/bin/" + name: pe_binary() for name in CUDA_DLLS})
     entries = [{"name": name, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
                for name, content in payloads.items()]
     backend = "cuda" if cuda else "cpu"
@@ -62,14 +63,14 @@ def test_first_engine_install_updates_presets_and_templates_keeps_originals(tmp_
         assert engines.states[backend]["status"] == "done"
         configured = manager.config.read()
         path = Path(configured["native_engine"])
-        assert path.is_relative_to(engines.root) and path.read_bytes() == b"MZ fixture"
+        assert path.is_relative_to(engines.root) and path.read_bytes() == pe_binary(["ggml.dll"])
         assert configured["native_engine_backend"] == backend
         assert all(v["engine_executable"] == str(path) and v["device"] == backend
                    for v in manager.config.voices() if v["backend"] == "audio_cpp")
         assert Path(voice["engine_executable"]).read_bytes() == original
         assert (path.parent.parent / "LICENSE").is_file()
         if cuda:
-            assert (path.parent / "cublas64_12.dll").read_bytes() == b"CUDA fixture"
+            assert (path.parent / "cublas64_12.dll").read_bytes() == pe_binary()
         assert not list(engines.download_dir.glob("*.zip"))
         engines.start(backend)
         engines.threads[backend].join(3)
@@ -99,6 +100,87 @@ def test_engine_partial_transfer_resumes_or_restarts_safely(tmp_path, resume):
         assert len(requests) == 1
     finally:
         manager.close()
+
+
+def test_archive_progress_tracks_both_packages_and_survives_cache_cleanup(tmp_path):
+    manager = Manager(tmp_path / "data", Runner())
+    try:
+        engines, payloads = installer(manager, cuda=True)
+        program, runtime = engines.entries["cuda"]["archives"]
+        (engines.download_dir / program["name"]).write_bytes(payloads[program["name"]])
+        part = engines.download_dir / (runtime["name"] + ".part")
+        part.write_bytes(payloads[runtime["name"]][:50])
+        engines.states["cuda"] = {"status": "downloading", "archive": runtime["name"],
+                                  "received": program["size"] + 50, "error": ""}
+        files = engines.listing()["options"][0]["archives"]
+        assert [(a["status"], a["received"]) for a in files] == [("downloaded", program["size"]), ("downloading", 50)]
+        part.write_bytes(payloads[runtime["name"]])
+        engines.states["cuda"]["status"] = "verifying"
+        assert engines.listing()["options"][0]["archives"][1]["status"] == "verifying"
+        engines.states["cuda"]["status"] = "paused"
+        assert engines.listing()["options"][0]["archives"][1]["status"] == "pending_verification"
+        engines.start("cuda")
+        engines.threads["cuda"].join(3)
+        assert engines.states["cuda"]["status"] == "done"
+        assert not list(engines.download_dir.iterdir())
+        files = engines.listing()["options"][0]["archives"]
+        assert all(a["status"] == "done" and a["received"] == a["size"] for a in files)
+        engines.states.clear()  # Restarting also retains installed component state.
+        assert all(a["status"] == "done" for a in engines.listing()["options"][0]["archives"])
+    finally:
+        manager.close()
+
+
+def test_combined_install_button_pauses_and_resumes_pending_activation(tmp_path, qtbot, monkeypatch):
+    from voice_workbench.gui import Window
+    with TestClient(create_app(tmp_path / "data", runner=Runner())) as client:
+        manager = client.app.state.manager
+        engines, _ = installer(manager)
+        window = Window(8789, manager.root, autostart=False)
+        qtbot.addWidget(window)
+        window.timer.stop()
+        window.settings.timer.stop()
+        window.ready = True
+        monkeypatch.setattr(window, "poll", lambda: None)
+        monkeypatch.setattr(window.settings, "refresh", lambda: None)
+        def immediate(action, success=None, failure=None):
+            value = action(client)
+            if success:
+                success(value)
+        monkeypatch.setattr(window, "call", immediate)
+        routes, original_post = [], client.post
+        def recorded_post(path, **kwargs):
+            routes.append(path)
+            return original_post(path, **kwargs)
+        monkeypatch.setattr(client, "post", recorded_post)
+        def sync():
+            window.settings.model_data = {"engine": engines.listing()}
+            window.settings.engine_backend.setCurrentIndex(window.settings.engine_backend.findData("cpu"))
+            window.settings.render_engine()
+        manager.current = ("generation-in-progress", 1)
+        try:
+            client.post("/models/runtime/download", json={"backend": "cpu"})
+            qtbot.waitUntil(lambda: engines.states["cpu"]["status"] == "waiting", timeout=3000)
+            sync()
+            control = window.settings.engine_download
+            assert control.isEnabled() and control.text() == "暂停安装"
+            control.click()
+            engines.threads["cpu"].join(3)
+            assert routes[-1] == "/models/runtime/pause" and engines.states["cpu"]["status"] == "paused"
+            assert not manager.config.read().get("native_engine")
+            sync()
+            assert control.isEnabled() and control.text() == "继续安装"
+            control.click()
+            assert routes[-1] == "/models/runtime/download"  # Activation still waits for the current generation.
+            qtbot.waitUntil(lambda: engines.states["cpu"]["status"] == "waiting", timeout=3000)
+            manager.current = None
+            engines.threads["cpu"].join(3)
+            sync()
+            assert not control.isEnabled() and control.text() == "已拥有"
+            assert engines.listing()["ready"]
+        finally:
+            manager.current = None
+            window.close()
 
 
 @pytest.mark.parametrize("problem", ["hash", "missing", "escape", "invalid_executable", "network"])

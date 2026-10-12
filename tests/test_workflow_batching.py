@@ -28,7 +28,8 @@ def test_micro_batches_share_one_work_and_keep_their_own_results(tmp_path):
                                [(2, "00:02", "second", "unused", 0), (3, "00:03", "third", "unused", 0)], workflow_context=context)
         third = run_local_job(session, "http://testserver", "default",
                               [(4, "00:04", "last", "unused", 0)], workflow_context=context)
-        jobs = client.get("/jobs").json()
+        assert client.get("/jobs").json() == []
+        jobs = client.app.state.manager.store.list(include_workflow=True)
         assert len(jobs) == 1 and jobs[0]["title"] == context["title"]
         assert jobs[0]["total"] == 4 and jobs[0]["completed"] == 3
         assert first[0][1] and all(url and error is None for url, error in second + third)

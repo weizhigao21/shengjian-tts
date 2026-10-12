@@ -7,8 +7,21 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
+
 
 ROOT = Path(__file__).resolve().parent.parent
+DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
+DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
+    "app", "workbench", "generation-list", "voice-library", "workflow", "models", "audio-manager"))
+
+
+def copy_documentation(candidate):
+    """Keep relative README images working in the unpacked program folder."""
+    for name in (*DOCUMENTATION, *DOCUMENTATION_ASSETS):
+        destination = candidate / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, destination)
 
 
 def contained(path, parent):
@@ -48,6 +61,24 @@ def publish(candidate, target, backup):
             print("已有 data 已延续到新发布目录；旧程序备份不重复保存 data。", flush=True)
 
 
+def distribution_archive(candidate, destination):
+    """Publish program files only, even if a locally used folder contains user data."""
+    contained(destination, ROOT / "dist")
+    allowed = {"声笺.exe", "声笺服务.exe", "_internal", *DOCUMENTATION}
+    temporary = destination.with_suffix('.zip.tmp')
+    try:
+        with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(candidate.rglob('*')):
+                relative = path.relative_to(candidate)
+                included = relative.parts[0] in allowed or relative.as_posix() in DOCUMENTATION_ASSETS
+                if path.is_file() and not path.is_symlink() and included:
+                    archive.write(path, str(Path('声笺') / relative))
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
 def main():
     if os.name != "nt":
         raise RuntimeError("此脚本用于 Windows 打包。")
@@ -66,22 +97,24 @@ def main():
                     "--noconfirm"], cwd=ROOT, env=environment, check=True)
     candidate = work / "dist" / "声笺"
     for name in ("声笺.exe", "声笺服务.exe", "_internal/voice_workbench/assets/app.ico",
-                 "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py"):
+                 "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py",
+                 "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
         if not (candidate / name).is_file():
             raise RuntimeError(f"产物不完整：{candidate / name}")
     result = subprocess.run([str(candidate / "声笺服务.exe"), "--version"], capture_output=True,
                             text=True, encoding="utf-8", env=dict(os.environ, PYTHONUTF8="1"), check=True,
                             creationflags=subprocess.CREATE_NO_WINDOW, timeout=30)
     print("[5/5] 产物入口验证：" + result.stdout.strip(), flush=True)
-    for name in ("README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md"):
-        shutil.copy2(ROOT / name, candidate / name)
+    copy_documentation(candidate)
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
+    version = result.stdout.strip().rsplit(' ', 1)[-1]
+    archive = distribution_archive(candidate, dist / f"声笺-v{version}-windows-x64.zip")
     target = dist / "声笺"
     backup = dist / ("声笺-backup-" + stamp)
     publish(candidate, target, backup)
     print(f"打包完成：{target / '声笺.exe'}", flush=True)
-    print("分发时请压缩整个声笺文件夹。模型和外部引擎不包含在包内。", flush=True)
+    print(f"分发包：{archive}（只含程序文件，不含数据库、音色与生成音频）", flush=True)
 
 
 if __name__ == "__main__":

@@ -172,9 +172,10 @@ def check_workflow_batching(client, voice):
                 response.raise_for_status()
                 with wave.open(io.BytesIO(response.content), "rb") as audio:
                     assert audio.getframerate() == 24000 and audio.getnframes() > 0
-            assert len([j for j in client.get("/jobs").json() if j.get("workflow_key") == "packaged-workflow-check"]) == 1
-            print("打包工作流验证：2 批 / 4 条字幕归入 1 个任务，音频完整。", flush=True)
-            return {"batches": 2, "segments": 4, "jobs": 1, "workers": 2, "maximum_active": maximum}
+            assert not any(j.get("workflow_key") == "packaged-workflow-check" for j in client.get("/jobs").json())
+            assert all(s["audio"] is None for s in client.get("/jobs/" + submissions[0]["job_id"]).json()["segments"])
+            print("打包工作流验证：2 批 / 4 条字幕只保留数据库记录，音频传输后清理。", flush=True)
+            return {"batches": 2, "segments": 4, "jobs": 0, "workers": 2, "maximum_active": maximum}
         time.sleep(.05)
     raise RuntimeError("打包批量推理超时")
 

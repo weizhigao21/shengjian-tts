@@ -19,6 +19,7 @@ from .config import atomic_json
 from .errors import VoiceError
 from .runner import ProcessRunner, check_voice
 from .model_info import KOKORO_LANGUAGES, model_ui, selected_mode
+from .native_paths import NativePaths
 
 
 def build_native_request(voice, text):
@@ -73,6 +74,7 @@ class AudioCppRunner:
         self.key = None
         self.endpoint = None
         self.log_handle = None
+        self.native_paths = None
 
     def start(self, voice, cancelled):
         load = voice.get("load_options", {})
@@ -84,33 +86,40 @@ class AudioCppRunner:
             if self.process and self.process.poll() is None and self.key == key:
                 return self.process, self.endpoint
             self.interrupt()
-            with socket.socket() as probe:
-                probe.bind(("127.0.0.1", 0))
-                port = probe.getsockname()[1]
-            task = "vdes" if voice["family"] == "qwen3_tts" and selected_mode(voice) == "design" else "tts"
-            entry = {"id": "speech", "family": voice["family"], "path": voice["model_dir"], "task": task, "mode": "offline"}
-            if load:
-                entry["load_options"] = load
-            if voice["family"] == "voxcpm2":
-                entry["session_options"] = {"voxcpm2.audiovae_encoder_sample_capacity": 960000}
-            config = {"host": "127.0.0.1", "port": port, "backend": voice["device"], "device": 0,
-                      "threads": self.cpu_threads or min(8, max(1, (os.cpu_count() or 4) // 2)), "lazy_load": True,
-                      "max_loaded_models": 1, "idle_unload_ms": 120000, "log_request_body": False,
-                      "max_request_body_bytes": 1048576, "models": [entry]}
-            config_path = self.root / "engine-server.json"
-            atomic_json(config_path, config)
-            logs = self.root / "logs"
-            logs.mkdir(parents=True, exist_ok=True)
-            self.log_handle = (logs / "audio-cpp.log").open("ab")
-            executable = Path(voice["engine_executable"])
-            with external_environment() as environment:
-                self.process = subprocess.Popen([str(executable), "--config", str(config_path), "--no-ui"],
-                                                cwd=executable.parent, stdout=self.log_handle, stderr=self.log_handle,
-                                                env=environment,
-                                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-            self.key = key
-            self.endpoint = f"http://127.0.0.1:{port}"
-            process, endpoint = self.process, self.endpoint
+            try:
+                self.native_paths = NativePaths()
+                with socket.socket() as probe:
+                    probe.bind(("127.0.0.1", 0))
+                    port = probe.getsockname()[1]
+                task = "vdes" if voice["family"] == "qwen3_tts" and selected_mode(voice) == "design" else "tts"
+                native_model = self.native_paths.model(voice["model_dir"])
+                entry = {"id": "speech", "family": voice["family"], "path": native_model, "task": task, "mode": "offline"}
+                if load:
+                    entry["load_options"] = load
+                if voice["family"] == "voxcpm2":
+                    entry["session_options"] = {"voxcpm2.audiovae_encoder_sample_capacity": 960000}
+                config = {"host": "127.0.0.1", "port": port, "backend": voice["device"], "device": 0,
+                          "threads": self.cpu_threads or min(8, max(1, (os.cpu_count() or 4) // 2)), "lazy_load": True,
+                          "max_loaded_models": 1, "idle_unload_ms": 120000, "log_request_body": False,
+                          "max_request_body_bytes": 1048576, "models": [entry]}
+                config_path = self.root / "engine-server.json"
+                atomic_json(config_path, config)
+                native_config_path = self.native_paths.config(config)
+                logs = self.root / "logs"
+                logs.mkdir(parents=True, exist_ok=True)
+                self.log_handle = (logs / "audio-cpp.log").open("ab")
+                executable = Path(voice["engine_executable"])
+                with external_environment() as environment:
+                    self.process = subprocess.Popen([str(executable), "--config", str(native_config_path), "--no-ui"],
+                                                    cwd=executable.parent, stdout=self.log_handle, stderr=self.log_handle,
+                                                    env=environment,
+                                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                self.key = key
+                self.endpoint = f"http://127.0.0.1:{port}"
+                process, endpoint = self.process, self.endpoint
+            except Exception:
+                self.interrupt()
+                raise
         deadline = time.monotonic() + min(voice["timeout"], 120)
         with httpx.Client(trust_env=False, timeout=1) as client:
             while time.monotonic() < deadline:
@@ -118,6 +127,7 @@ class AudioCppRunner:
                     self.interrupt()
                     raise VoiceError("CANCELLED", "任务已取消")
                 if process.poll() is not None:
+                    self.interrupt()
                     raise VoiceError("ENGINE_EXITED", f"统一引擎启动失败，退出码 {process.returncode}", "打开 audio-cpp.log 查看 DLL、后端或配置错误。", "引擎启动")
                 try:
                     if client.get(endpoint + "/health").status_code == 200:
@@ -178,6 +188,9 @@ class AudioCppRunner:
             if self.log_handle:
                 self.log_handle.close()
                 self.log_handle = None
+            if self.native_paths:
+                self.native_paths.close()
+                self.native_paths = None
 
 
 class UnifiedRunner:

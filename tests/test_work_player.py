@@ -178,7 +178,7 @@ def test_player_popup_navigation_pause_and_poll_preserve_selection(tmp_path, qap
     assert "旁白" in window.segments_table.item(0, 2).text()
     assert ":" in window.segments_table.item(0, 1).text()
     assert "字幕时间" in window.segments_table.item(0, 1).toolTip()
-    assert window.retry_button.isEnabled() and not window.segments_table.isColumnHidden(4)
+    assert window.retry_button.isEnabled() and not window.segments_table.isColumnHidden(5)
     window.segments_table.selectRow(3)
     window.choose_clip()
     assert window.clip_list.isHidden() and calls[-1] == "play"

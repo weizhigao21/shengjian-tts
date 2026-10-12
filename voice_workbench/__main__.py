@@ -1,8 +1,9 @@
 import argparse
 from pathlib import Path
+import sqlite3
 
-from .config import DEFAULT_DATA
 from . import __version__
+from .data_paths import prepare_data_dir
 
 
 def main():
@@ -10,8 +11,18 @@ def main():
     parser.add_argument("--version", action="version", version=f"声笺 {__version__}")
     parser.add_argument("mode", choices=["gui", "serve"], nargs="?", default="gui")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
+    parser.add_argument("--data-dir", type=Path, default=None,
+                        help="指定数据目录；安装版默认使用用户目录并迁移旧版 data")
     args = parser.parse_args()
+    try:
+        args.data_dir = args.data_dir if args.data_dir is not None else prepare_data_dir(args.port)
+    except (OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
+        if args.mode == "gui":
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            app = QApplication([])
+            QMessageBox.critical(None, "数据目录准备失败", str(exc))
+            raise SystemExit(1)
+        parser.error(str(exc))
     if args.mode == "serve":
         import uvicorn
         from .api import create_app

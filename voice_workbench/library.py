@@ -423,14 +423,17 @@ class PresetDialog(PaperDialog):
 
 
 class ReferenceDialog(PaperDialog):
-    def __init__(self, owner, item=None, selected=None):
-        super().__init__(owner, "编辑参考声音" if item else "导入参考声音")
+    def __init__(self, owner, item=None, selected=None, source=None):
+        super().__init__(owner, "编辑参考声音" if item else "添加为参考声音" if source else "导入参考声音")
         self.owner, self.item, self.selected = owner, item, selected
-        self.path = item.get("reference_audio", "") if item else ""
+        initial = item or source or {}
+        self.path = initial.get("reference_audio", "")
         self.file = button(Path(self.path).name if self.path else "选择 WAV 音频 · 1–60 秒", self.browse, "import")
         if item:
             self.file.setText(f"参考音频 · {item.get('duration', 0):.1f} 秒")
             self.file.setEnabled(False)
+        elif source:
+            self.file.setText("已选择生成音频 · 点击更换")
         self.file.setToolTip(self.path)
         self.file.setObjectName("audioDrop")
         self.file.setMinimumHeight(64)
@@ -438,12 +441,12 @@ class ReferenceDialog(PaperDialog):
         self.waveform = Waveform()
         self.waveform.load(Path(self.path) if self.path else None)
         self.content.addWidget(self.waveform)
-        self.name = QLineEdit(item["name"] if item else "")
+        self.name = QLineEdit(initial.get("name", ""))
         self.name.setMaxLength(100)
         self.name.setPlaceholderText("为这段参考声音起个名字")
         self.content.addWidget(label("声音名称", "muted"))
         self.content.addWidget(self.name)
-        self.text = QPlainTextEdit(item.get("reference_text", "") if item else "")
+        self.text = QPlainTextEdit(initial.get("reference_text", ""))
         self.text.setPlaceholderText("可选：与音频一致的原文，用于精细克隆")
         self.content.addWidget(label("参考原文", "muted"))
         self.content.addWidget(self.text, 1)

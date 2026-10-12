@@ -8,6 +8,8 @@ import shutil
 import secrets
 import re
 import threading
+import time
+from time import perf_counter
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -15,7 +17,7 @@ from .config import ConfigStore, atomic_json, file_digest, voice_fingerprint
 from .errors import VoiceError, describe_error
 from .runner import check_voice, validate_wave
 from .audio_cpp import UnifiedRunner
-from .store import Store
+from .store import Store, WORKFLOW_TITLES
 from .model_info import MODES, model_ui, selected_mode
 
 
@@ -72,13 +74,17 @@ class Manager:
         self.current = None
         for folder in ("audio", "logs", "temporary"):
             (self.root / folder).mkdir(exist_ok=True)
+        from .workflow_audio import WorkflowAudio
+        self.workflow_audio = WorkflowAudio(self)
+        self.workflow_audio.expired()
         from .model_management import ModelManager
         self.models = ModelManager(self)
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
 
-    def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None, use_preset=True):
+    def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
+               use_preset=True, record_only=False, delivery_ack=False):
         # Validation and enqueue must be atomic with model deletion/reconfiguration.
         with self.lock:
             if self.stopping.is_set():
@@ -88,9 +94,12 @@ class Manager:
                     job_id = self.store.workflow_job(workflow_key)
                 except ValueError as exc:
                     raise VoiceError("JOB_NOT_FOUND", str(exc), stage="工作流提交") from exc
-            return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key, use_preset)
+            record_only = record_only or bool(workflow_key) or title in WORKFLOW_TITLES
+            return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key,
+                                use_preset, record_only, delivery_ack)
 
-    def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None, use_preset=True):
+    def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
+                use_preset=True, record_only=False, delivery_ack=False):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
         voice, _ = self.config.resolve(model_name, allow_missing_reference=overrides is not None and "reference_audio" in overrides)
@@ -132,9 +141,13 @@ class Manager:
                     raise VoiceError("JOB_NOT_FOUND", "当前作品不存在", stage="提交")
                 if script is None:
                     script = existing.get("script")
-                self.store.append(job_id, title, voice, fingerprint, segments, script, provenance, workflow=bool(workflow_key))
+                if record_only and not existing["record_only"]:
+                    raise VoiceError("WORKFLOW_TARGET_MISMATCH", "工作流记录不能追加到创作作品", stage="工作流提交")
+                self.store.append(job_id, title, voice, fingerprint, segments, script, provenance,
+                                  workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack)
             else:
-                job_id = self.store.create(title, voice, fingerprint, segments, script, provenance, workflow_key)
+                job_id = self.store.create(title, voice, fingerprint, segments, script, provenance, workflow_key,
+                                           record_only, delivery_ack)
             self.wake.set()
         return job_id
 
@@ -146,6 +159,7 @@ class Manager:
                     active["cancelled"].set()
                     if slot in self.runners:
                         self.runners[slot].interrupt()
+            self.workflow_audio.cancelled(job_id, generation)
 
     def retry(self, job_id):
         with self.lock:
@@ -174,7 +188,7 @@ class Manager:
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
                     "active": [{"job_id": a["job_id"], "index": a["index"]} for a in self.active.values()],
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
-                    "queue": sum(j["status"] in ("queued", "running") for j in self.store.list(10000))}
+                    "queue": sum(j["status"] in ("queued", "running") for j in self.store.list(10000, include_workflow=True))}
 
     def release_runners(self):
         for runner in self.runners.values():
@@ -262,10 +276,14 @@ class Manager:
         # Each lane owns its engine process. audio.cpp v0.7.4 serializes one model's
         # requests internally, so concurrent HTTP calls to one engine cannot speed it up.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="voice-inference") as pool:
+            next_cleanup = time.monotonic()
             while not self.stopping.is_set():
                 submitted = False
                 with self.lock:
                     if not self.stopping.is_set():
+                        if time.monotonic() >= next_cleanup:
+                            self.workflow_audio.expired()
+                            next_cleanup = time.monotonic() + 60
                         cohort = next(iter(self.active.values()), None)
                         capacity = cohort["capacity"] if cohort else 4
                         if cohort and cohort["job_id"] in self.serial_jobs:
@@ -297,6 +315,8 @@ class Manager:
         job_id, index = job["id"], item["idx"]
         voice, fingerprint = item["voice"], item["fingerprint"]
         temporary = self.root / "temporary" / f"{job_id}-{index}.wav"
+        inference_started = None
+        generation_seconds = None
         try:
             with self.lock:
                 if cancelled.is_set() or self.stopping.is_set():
@@ -305,10 +325,13 @@ class Manager:
             if voice_fingerprint(voice) != fingerprint:
                 raise VoiceError("VOICE_VERSION_CHANGED", "排队期间模型或参考音频发生变化", "恢复原文件或按新配置提交任务。", "配置检查")
             key = hashlib.sha256((fingerprint + "\n" + item["text"]).encode("utf-8")).hexdigest()
-            output = self.root / "audio" / f"{key}.wav"
+            transient = item["audio_storage"] == "temporary"
+            if transient:
+                key = hashlib.sha256(f"{job_id}:{index}:{key}".encode("ascii")).hexdigest()
+            output = (self.workflow_audio.root if transient else self.root / "audio") / f"{key}.wav"
             cached = False
             with self.lock:
-                cache = self.store.cache_get(key)
+                cache = None if transient else self.store.cache_get(key)
                 if cache:
                     try:
                         details = validate_wave(output)
@@ -316,20 +339,27 @@ class Manager:
                     except Exception:
                         cached = False
                 if cached and not self.stopping.is_set() and not cancelled.is_set():
-                    self.store.finish(job_id, index, audio=output.name, cached=True, duration=details["duration"])
+                    self.store.finish(job_id, index, audio=output.name, cached=True, duration=details["duration"], generation_seconds=0.0)
                     return
             if not cached:
+                # Include engine/model loading in generate(), but exclude queueing
+                # and persistence. A monotonic clock tolerates system clock changes.
+                inference_started = perf_counter()
                 runner.generate({"voice": voice, "fingerprint": fingerprint,
                                       "text": item["text"], "output": str(temporary),
                                       "job_id": job_id, "index": index}, cancelled)
                 details = validate_wave(temporary)
+                generation_seconds = max(0.0, perf_counter() - inference_started)
                 with self.lock:
                     if self.stopping.is_set() or cancelled.is_set():
                         return
                     os.replace(temporary, output)
-                    self.store.cache_put(key, output, file_digest(str(output)))
-                    self.store.finish(job_id, index, audio=output.name, cached=False, duration=details["duration"])
+                    if not transient:
+                        self.store.cache_put(key, output, file_digest(str(output)))
+                    self.store.finish(job_id, index, audio=output.name, cached=False, duration=details["duration"], generation_seconds=generation_seconds)
         except Exception as exc:
+            if inference_started is not None and generation_seconds is None:
+                generation_seconds = max(0.0, perf_counter() - inference_started)
             error = describe_error(exc, "推理")
             error["log"] = f"/logs/{job_id}/{index}"
             log = {"job_id": job_id, "index": index, "text": item["text"], "timestamp": item["timestamp"],
@@ -338,13 +368,13 @@ class Manager:
             atomic_json(self.root / "logs" / f"{job_id}-{index}.json", log)
             with self.lock:
                 if not self.stopping.is_set() and not cancelled.is_set():
-                    if error["code"] == "GPU_OUT_OF_MEMORY" and job.get("workflow_key") and self.active[slot]["capacity"] > 1 and (job_id, index) not in self.oom_retried:
+                    if error["code"] == "GPU_OUT_OF_MEMORY" and item.get("workflow") and self.active[slot]["capacity"] > 1 and (job_id, index) not in self.oom_retried:
                         self.serial_jobs.add(job_id)
                         self.oom_retried.add((job_id, index))
                         self.performance_notice = "批量并发遇到显存不足，当前任务已降为单实例，失败片段自动重试一次。"
                         self.store.requeue(job_id, index)
                     else:
-                        self.store.finish(job_id, index, error=error)
+                        self.store.finish(job_id, index, error=error, generation_seconds=generation_seconds)
         finally:
             temporary.unlink(missing_ok=True)
             with self.lock:

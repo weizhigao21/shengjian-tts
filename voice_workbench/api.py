@@ -9,6 +9,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.background import BackgroundTask
 
 from . import __version__
 from .config import DEFAULT_DATA
@@ -33,7 +34,7 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
 
     @app.exception_handler(VoiceError)
     async def voice_error(request, exc):
-        return JSONResponse(status_code=404 if exc.code in ("JOB_NOT_FOUND", "VOICE_NOT_FOUND", "REFERENCE_NOT_FOUND") else 400,
+        return JSONResponse(status_code=404 if exc.code in ("JOB_NOT_FOUND", "VOICE_NOT_FOUND", "REFERENCE_NOT_FOUND", "WORKFLOW_AUDIO_NOT_FOUND") else 400,
                             content={"msg": exc.message, "error": exc.as_dict()})
 
     @app.exception_handler(RequestValidationError)
@@ -60,18 +61,43 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
         if job is None:
             raise VoiceError("JOB_NOT_FOUND", "任务不存在", stage="任务查询")
         for item in job["segments"]:
-            item["audio_url"] = f"/audio/{item['audio']}" if item["audio"] else None
+            prefix = "/workflow/audio" if job["record_only"] else "/audio"
+            item["audio_url"] = f"{prefix}/{item['audio']}" if item["audio"] else None
         return job
 
     @app.get("/")
     @app.get("/health")
     def health(request: Request):
-        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "engine_download"],
+        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "workflow_record_only", "engine_download", "engine_verification"],
                 "status": "running", "data_dir": str(manager(request).root), "engine": manager(request).models.engines.listing(), **manager(request).status()}
 
     @app.get("/workflow")
     def workflow(request: Request):
         return workflow_manifest(manager(request).config, str(request.base_url))
+
+    @app.get("/workflow/records")
+    def workflow_records(request: Request, limit: int = 200):
+        return manager(request).store.workflow_records(max(1, min(limit, 500)))
+
+    @app.post("/workflow/records/cleanup")
+    def cleanup_workflow_records(request: Request):
+        return manager(request).workflow_audio.cleanup_all()
+
+    @app.api_route("/workflow/audio/{filename}", methods=["GET", "HEAD"])
+    def workflow_audio(filename: str, request: Request):
+        delivery = manager(request).workflow_audio
+        path, acknowledged = delivery.lookup(filename)
+        # Updated adapters acknowledge after an atomic save. Old adapters consume
+        # only a complete GET; HEAD/range previews must never release the file.
+        background = None
+        if not acknowledged and request.method == "GET" and "range" not in request.headers:
+            background = BackgroundTask(delivery.delivered, filename)
+        return FileResponse(path, media_type="audio/wav", background=background,
+                            headers={"Cache-Control": "no-store"})
+
+    @app.post("/workflow/audio/{filename}/release")
+    def release_workflow_audio(filename: str, request: Request):
+        return manager(request).workflow_audio.delivered(filename)
 
     @app.get("/models")
     def models(request: Request):
@@ -96,6 +122,10 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     @app.post("/models/runtime/use")
     def use_runtime(body: EngineDownload, request: Request):
         return manager(request).models.engines.use(body.backend)
+
+    @app.post("/models/runtime/verify")
+    def verify_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.verify(body.backend)
 
     @app.post("/models/{model_id}/download", status_code=202)
     def download_model(model_id: str, body: ModelDownload, request: Request):
@@ -171,7 +201,8 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
         with m.lock:
             job_id = m.submit(body.title, body.voice_id, [s.model_dump() for s in body.segments],
                               overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
-                              script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset)
+                              script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset,
+                              record_only=body.record_only, delivery_ack=body.delivery_ack)
             return submitted(m, job_id)
 
     def submitted(m, job_id):
@@ -190,7 +221,8 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
             title = body.title if "title" in body.model_fields_set else existing["title"]
             m.submit(title, body.voice_id, [s.model_dump() for s in body.segments],
                      overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
-                     job_id=job_id, script=body.script, use_preset=body.use_preset)
+                     job_id=job_id, script=body.script, use_preset=body.use_preset,
+                     record_only=body.record_only, delivery_ack=body.delivery_ack)
             return submitted(m, job_id)
 
     @app.patch("/jobs/{job_id}/document")
@@ -314,11 +346,11 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
             if job["status"] in ("done", "failed", "cancelled"):
                 break
             if await request.is_disconnected():
-                # 不丢弃已生成音频；任务可从管理界面查看和恢复。
+                # Keep pending clips for their download grace period, without a sidebar work.
                 return JSONResponse(status_code=202, content={"job_id": job_id, "msg": "任务仍在服务队列中"})
             await asyncio.sleep(0.1)
         else:
-            return {"job_id": job_id, "msg": "任务仍在生成或排队；请在管理界面查看。新工作流适配器使用轮询，不受兼容接口等待时间限制。"}
+            return {"job_id": job_id, "msg": "工作流仍在生成或排队；记录可通过接口查询。新版工作流适配器使用轮询，不受兼容接口等待时间限制。"}
         if job["status"] != "done":
             item = next((s for s in job["segments"] if s["error"]), None)
             error = item["error"] if item else {"message": "任务已取消"}

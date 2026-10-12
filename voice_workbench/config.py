@@ -11,9 +11,10 @@ import shutil
 
 from .errors import VoiceError
 from .runtime import project_root
+from .data_paths import default_data_dir
 
 PROJECT_ROOT = project_root()
-DEFAULT_DATA = PROJECT_ROOT / "data"
+DEFAULT_DATA = default_data_dir()
 
 
 def atomic_json(path: Path, value):
@@ -104,7 +105,20 @@ class ConfigStore:
         value = self.read()
         voices = value["voices"]
         installed = {self.model_identity(v) for v in voices}
-        return voices + [dict(v, is_template=True) for v in value.get("model_templates", []) if self.model_identity(v) not in installed]
+        templates = []
+        from .model_info import model_ui
+        for voice in value.get("model_templates", []):
+            if self.model_identity(voice) in installed:
+                continue
+            template = dict(voice, is_template=True)
+            info = model_ui(template)
+            builtin = info.get("builtin_voices", [])
+            if builtin and template.get("native_voice") not in builtin:
+                template["native_voice"] = builtin[0]
+            if info.get("languages") and template.get("language") not in info["languages"]:
+                template["language"] = info["languages"][0]
+            templates.append(template)
+        return voices + templates
 
     @staticmethod
     def model_identity(voice):

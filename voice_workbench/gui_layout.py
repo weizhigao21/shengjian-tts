@@ -38,6 +38,11 @@ def model_label(voice):
         name += " 2.5" if "2_5" in stem or "2.5" in stem else " 2"
     elif voice.get("family") == "kokoro_tts" and "82m" in stem.lower():
         name += " 82M"
+    elif voice.get("family") == "qwen3_tts":
+        info = voice.get("model_ui") or model_ui(voice)
+        variant = {"custom_voice": "CustomVoice", "voice_design": "VoiceDesign", "base": "Base"}.get(info.get("variant"), "")
+        size = re.search(r"(?:^|[-_])(\d+(?:\.\d+)?b)(?:[-_]|$)", stem, re.I)
+        name += (" " + size.group(1).upper() if size else "") + (" " + variant if variant else "")
     precision = re.search(r"(?:q\d+(?:[_-][a-z0-9]+)?|bf16|f16|orig)$", stem, re.I)
     return name + (" · " + precision.group().upper().replace("-", "_") if precision else "")
 
@@ -85,7 +90,7 @@ class UiLayout:
         nav.addWidget(self.new_document_button)
         nav.addSpacing(12)
         self.nav_buttons = []
-        for index, (text, symbol) in enumerate((("语音创作", "pen"), ("声音库", "voices"), ("工作流联动", "link"))):
+        for index, (text, symbol) in enumerate((("语音创作", "pen"), ("声音库", "voices"), ("工作流联动", "link"), ("设置", "settings"))):
             control = button(text, lambda _, i=index: self.set_page(i), symbol, "nav")
             control.setCheckable(True)
             self.nav_buttons.append(control)
@@ -107,15 +112,21 @@ class UiLayout:
         self.jobs_empty = label("新建作品后，生成记录保存在作品里", "muted")
         self.jobs_empty.setWordWrap(True)
         nav.addWidget(self.jobs_empty)
-        settings_button = button("设置", lambda: self.set_page(3), "settings", "nav")
-        settings_button.setCheckable(True)
-        self.nav_buttons.append(settings_button)
-        nav.addWidget(settings_button)
-        nav.addWidget(button("打开本地文件", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_dir))), "folder", "ghost"))
+        footer = QWidget()
+        footer.setObjectName("sidebarFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(8)
         self.version_label = label(f"v{__version__}", "muted")
         self.version_label.setObjectName("appVersion")
         self.version_label.setToolTip("声笺 · 本地配音工作台")
-        nav.addWidget(self.version_label)
+        footer_layout.addWidget(self.version_label)
+        self.banner = ElidedLabel("连接本地服务…")
+        self.banner.setObjectName("banner")
+        self.banner.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.banner.setToolTip(self.url)
+        footer_layout.addWidget(self.banner, 1)
+        nav.addWidget(footer)
         outer.addWidget(sidebar)
 
         sheet = QWidget()
@@ -129,10 +140,6 @@ class UiLayout:
         self.page_title = label("工作台  /  语音创作", "muted")
         header.addWidget(self.page_title)
         header.addStretch()
-        self.banner = QLabel("连接本地服务…")
-        self.banner.setObjectName("banner")
-        self.banner.setToolTip(self.url)
-        nav.insertWidget(nav.count() - 2, self.banner)
         main.addWidget(self.workspace_header)
         self.tabs = QStackedWidget()
         # Connect after all pages exist.
@@ -357,7 +364,7 @@ class UiLayout:
         layout.setContentsMargins(28, 18, 28, 22)
         layout.setSpacing(16)
         layout.addWidget(label("连接你的双语工作流", "title"))
-        layout.addWidget(label("字幕 → 配音片段 → 混音。继续使用你熟悉的工作流。", "muted"))
+        layout.addWidget(label("字幕 → 配音片段 → 混音。仅保留生成记录，音频接收后自动清理。", "muted"))
         config_card, config_layout = card("音色自动发现", "复制接入链接到双语工作流，读取声音预设后选择音色并批量生成。")
         row = QHBoxLayout()
         badge = label("仅本机访问")
@@ -489,13 +496,13 @@ class UiLayout:
         close.setToolTip("收起列表")
         header.addWidget(close)
         result.addLayout(header)
-        self.segments_table = QTableWidget(0, 5)
+        self.segments_table = QTableWidget(0, 6)
         self.configure_table(self.segments_table)
-        self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "状态", "错误原因"])
-        for col, width in ((0, 38), (1, 135), (3, 88)):
+        self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "生成耗时", "状态", "错误原因"])
+        for col, width in ((0, 56), (1, 135), (3, 96), (4, 100)):
             self.segments_table.setColumnWidth(col, width)
         self.segments_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.segments_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.segments_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.segments_table.itemDoubleClicked.connect(self.clip_details)
         self.segments_table.itemSelectionChanged.connect(self.preview_segment)
         self.segments_table.itemClicked.connect(self.choose_clip)
@@ -734,6 +741,7 @@ class UiLayout:
 
     def set_service_state(self, text, state):
         self.banner.setText(text)
+        self.banner.setToolTip(f"{text}\n{self.url}")
         self.banner.setProperty("state", state)
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
@@ -806,11 +814,11 @@ class UiLayout:
         self.export_button.setEnabled(done > 0)
         self.retry_button.setEnabled(counts["failed"] + counts["cancelled"] > 0)
         self.cancel_button.setEnabled(job["status"] in ("running", "queued"))
-        self.segments_table.setColumnHidden(4, not counts["failed"])
+        self.segments_table.setColumnHidden(5, not counts["failed"])
         self.result_hint.setText("双击失败片段，查看具体原因、修复建议和原始异常。" if counts["failed"] else "点击片段播放 · 上一个 / 下一个切换 · 每次生成保留在当前作品")
         for row, item in enumerate(job["segments"]):
             color = "#ad5427" if item["status"] == "failed" else "#3c7a51" if item["status"] == "done" else "#88888e"
-            cell = self.segments_table.item(row, 3)
+            cell = self.segments_table.item(row, 4)
             if cell.foreground().color() != QColor(color):
                 cell.setForeground(QColor(color))
         self.preview_segment()

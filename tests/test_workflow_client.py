@@ -25,7 +25,7 @@ def test_workflow_keeps_partial_success_and_reports_original_subtitle_position(t
         session = Session(client)
         assert is_local_service(session, "http://127.0.0.1:8765")
         results = run_local_job(session, "http://127.0.0.1:8765", "default", tasks)
-        assert results[0][0].startswith("http://127.0.0.1:8765/audio/")
+        assert results[0][0].startswith("http://127.0.0.1:8765/workflow/audio/")
         assert results[0][1] is None
         assert results[1][0] is None
         assert "第 37 段 [00:01:05.00]" in results[1][1]
@@ -40,7 +40,8 @@ def test_workflow_stop_cancels_submitted_service_job(tmp_path):
                                 [(1, "00:00:00.00", "hello", "unused", 0)], cancel_check=lambda: True)
         assert results[0][0] is None
         assert "任务已取消" in results[0][1]
-        jobs = client.get("/jobs").json()
+        assert client.get("/jobs").json() == []
+        jobs = client.app.state.manager.store.list(include_workflow=True)
         assert jobs[0]["status"] == "cancelled"
 
 

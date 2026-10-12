@@ -105,6 +105,56 @@ def test_qwen_variants_do_not_offer_other_variants_modes(tmp_path):
     assert model_ui(voice)["modes"] == ["design"]
 
 
+@pytest.mark.parametrize("nested", [True, False])
+def test_qwen_customvoice_reads_actual_speakers_and_controls_correct_request(tmp_path, qapp, nested):
+    from voice_workbench.model_controls import ModelControls
+    from voice_workbench.gui_layout import model_label
+    path = tmp_path / "qwen3-tts-12hz-1.7b-customvoice-bf16.gguf"
+    speakers = {"serena": 3066, "vivian": 3065, "ryan": 3061}
+    config = {"tts_model_type": "custom_voice", "talker_config": {"codec_language_id": {"chinese": 2055, "english": 2050}}}
+    config["talker_config" if nested else "spk_id"] = {**config["talker_config"], "spk_id": speakers} if nested else speakers
+    gguf(path, {"family": "qwen3_tts"}, config=config)
+    voice = {"id": "qwen", "backend": "audio_cpp", "family": "qwen3_tts", "model_dir": str(path),
+             "native_voice": "zf_xiaobei", "language": "zh", "speed": 1, "emotion": ""}
+    info = model_ui(voice)
+    assert info["modes"] == ["builtin"] and info["builtin_voices"] == list(speakers)
+    assert info["languages"] == ["zh", "en"] and "CustomVoice" in model_label(voice)
+    controls = ModelControls()
+    controls.bind({**kokoro(tmp_path), "id": "kokoro"})
+    controls.bind(voice)
+    assert not controls.native_voice.isHidden() and controls.native_voice.currentData() == "serena"
+    assert controls.reference.isHidden() and controls.reference_text.isHidden()
+    assert controls.form.labelForField(controls.description).text() == "风格指令（可选）"
+    controls.native_voice.setCurrentIndex(controls.native_voice.findData("ryan"))
+    controls.language.setCurrentIndex(controls.language.findData("en"))
+    controls.description.setText("Read calmly")
+    selected = {**voice, **controls.overrides()}
+    assert validate_capabilities(selected) == "builtin"
+    request = build_native_request(selected, "Hello")["request"]
+    assert request["language"] == "English" and request["options"]["speaker"] == "ryan"
+    assert request["options"]["instruct"] == "Read calmly" and "voice_ref" not in request
+    controls.bind(dict(voice))
+    assert controls.native_voice.currentData() == "ryan", "Polling must preserve the selected Qwen speaker"
+    with pytest.raises(VoiceError, match="不支持所选语言"):
+        validate_capabilities({**selected, "language": "ar"})
+    controls.close()
+
+
+def test_legacy_qwen_model_template_uses_package_default_without_changing_saved_preset(tmp_path, monkeypatch):
+    from voice_workbench.config import ConfigStore, atomic_json
+    monkeypatch.setattr("voice_workbench.discovery.discover_yovoice", lambda _: [])
+    path = tmp_path / "qwen.gguf"
+    gguf(path, {"family": "qwen3_tts"}, config={"tts_model_type": "custom_voice", "talker_config": {"spk_id": {"serena": 3066}}})
+    store = ConfigStore(tmp_path / "data")
+    voice = {"id": "qwen", "name": "旧模型", "backend": "audio_cpp", "family": "qwen3_tts", "model_dir": str(path),
+             "native_voice": "zf_xiaobei", "language": "zh", "speed": 1, "emotion": "", "voice_mode": "auto"}
+    atomic_json(store.path, {"voices": [], "model_templates": [voice]})
+    assert store.voices()[0]["native_voice"] == "serena"
+    assert store.read()["model_templates"][0]["native_voice"] == "zf_xiaobei"
+    store.save_voice({**voice, "id": "saved", "python": sys.executable})
+    assert store.voices()[0]["native_voice"] == "zf_xiaobei", "User presets need explicit correction, not silent substitution"
+
+
 def test_wrong_family_is_reported_before_inference(tmp_path):
     voice = kokoro(tmp_path)
     with pytest.raises(VoiceError, match="属于 kokoro_tts"):

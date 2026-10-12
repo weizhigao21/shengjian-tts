@@ -39,6 +39,22 @@ echo [1/5] 使用 Python: %PYCMD%
 %PYCMD% --version
 echo.
 
+rem 有些虚拟环境没有安装 pip；使用 Python 自带的离线安装器修复。
+%PYCMD% -m pip --version >nul 2>nul
+if errorlevel 1 (
+    echo [1/5] 当前环境缺少 pip，正在自动修复…
+    %PYCMD% -m ensurepip --upgrade
+    if errorlevel 1 (
+        echo [错误] 无法自动安装 pip。请修复 Python 安装，确保包含 pip 和 ensurepip 后重试。
+        goto fail
+    )
+)
+%PYCMD% -m pip --version >nul 2>nul
+if errorlevel 1 (
+    echo [错误] pip 修复后仍不可用，请检查上方安装日志。
+    goto fail
+)
+
 %PYCMD% -c "import fastapi, uvicorn, PyQt6, httpx" >nul 2>nul
 if errorlevel 1 (
     echo [2/5] 安装运行依赖…
@@ -65,10 +81,10 @@ echo ============================================
 echo 产物目录: %~dp0dist\声笺\
 echo 主程序:   %~dp0dist\声笺\声笺.exe
 echo.
-echo 请整体压缩声笺文件夹分发，首次运行无需安装 Python。
+echo 请分发 dist 中自动生成的版本 ZIP，首次运行无需安装 Python。
 echo GGUF 模型、audio.cpp 引擎及备用 IndexTTS 环境需另行配置。
-echo 新安装的数据位于 EXE 同级 data，已有发布目录的 data 会保留。
-echo 不会将项目当前的 data、参考音频和历史生成音频打入新包。
+echo 安装版数据位于用户目录，首次升级自动迁移原 EXE 同级 data。
+echo ZIP 不包含 data、参考音频和历史生成音频，已有发布目录 data 会保留。
 echo.
 if /i "%~1"=="--no-pause" exit /b 0
 explorer "%~dp0dist\声笺" >nul 2>nul

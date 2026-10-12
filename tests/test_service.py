@@ -128,7 +128,7 @@ def test_api_legacy_download_validation_and_async_error(tmp_path):
         response = client.post("/infer_single", json={"model_name": voice["model_name"], "text": "hello", "dl_url": "http://untrusted.invalid"})
         assert response.status_code == 200
         audio_url = response.json()["audio_url"]
-        assert audio_url.startswith("http://testserver/audio/")
+        assert audio_url.startswith("http://testserver/workflow/audio/")
         assert client.get(audio_url).content[:4] == b"RIFF"
         bulk = client.post("/infer_bulk", json={"model_name": "default", "texts": ["one", "two"]}).json()
         assert len(bulk["audio_urls"]) == 2

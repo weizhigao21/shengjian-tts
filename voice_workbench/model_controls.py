@@ -29,6 +29,10 @@ def populate(combo, entries, current=None):
 
 
 def voice_label(value):
+    qwen_names = {"serena": "Serena", "vivian": "Vivian", "uncle_fu": "Uncle Fu", "ryan": "Ryan",
+                  "aiden": "Aiden", "ono_anna": "Ono Anna", "sohee": "Sohee", "eric": "Eric", "dylan": "Dylan"}
+    if value in qwen_names:
+        return qwen_names[value]
     gender = "女声" if len(value) > 1 and value[1] == "f" else "男声" if len(value) > 1 and value[1] == "m" else ""
     names = {"zf_xiaobei": "小北", "zf_xiaoni": "小妮", "zf_xiaoxiao": "小小", "zf_xiaoyi": "小伊",
              "zm_yunjian": "云健", "zm_yunxi": "云希", "zm_yunxia": "云夏", "zm_yunyang": "云扬"}
@@ -271,6 +275,9 @@ class ModelControls(QWidget):
         self.form.setRowVisible(self.emotion, self.info["emotion"])
         describe = mode == "design" or (self.info["family"] == "voxcpm2" and mode == "clone") or (self.info["family"] == "qwen3_tts" and mode == "builtin")
         self.form.setRowVisible(self.description, describe)
+        instruction = self.info["family"] == "qwen3_tts" and mode == "builtin"
+        self.form.labelForField(self.description).setText("风格指令（可选）" if instruction else "声音描述")
+        self.description.setPlaceholderText("例如：用温柔、平静的语气朗读" if instruction else "例如：温柔女声，语速舒缓，自然演绎")
         backend = self.voice.get("backend")
         self.advanced_form.setRowVisible(self.device, backend != "windows_sapi")
         for name, row in self.asset_rows.items():

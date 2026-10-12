@@ -45,5 +45,5 @@ def workflow_manifest(config, base_url):
     base = base_url.rstrip("/")
     return {"schema_version": 1, "service": "local-voice-workbench", "name": "声笺",
             "version": __version__, "base_url": base, "discovery_url": base + "/workflow",
-            "capabilities": ["voice_discovery", "async_jobs"], "voices": voices,
+            "capabilities": ["voice_discovery", "async_jobs", "workflow_record_only"], "voices": voices,
             "available_count": sum(v["available"] for v in voices)}

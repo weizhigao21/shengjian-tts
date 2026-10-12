@@ -1,19 +1,22 @@
 """Compact model and generated-audio management inside Settings."""
 from datetime import datetime
+import json
 from pathlib import Path
 
 from PyQt6.QtCore import QCoreApplication, QEvent, QPointF, Qt, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog,
-    QHBoxLayout, QHeaderView, QLineEdit, QMessageBox, QScrollArea, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox, QFormLayout, QProgressBar)
+    QGridLayout, QHBoxLayout, QHeaderView, QLineEdit, QMenu, QMessageBox, QScrollArea, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox, QFormLayout, QProgressBar, QSizePolicy)
 
-from .ui import button, icon, label
+from .ui import ElidedLabel, button, icon, label, generation_elapsed
 
 DOWNLOAD_STATES = {"available": "可下载", "downloading": "下载中", "verifying": "校验中",
                    "pausing": "正在暂停", "paused": "已暂停", "failed": "下载失败", "done": "已下载",
                    "extracting": "正在安装", "waiting": "已安装，等待当前生成结束后启用"}
+ARCHIVE_STATES = {**DOWNLOAD_STATES, "available": "待下载", "downloaded": "下载完成",
+                  "pending_verification": "待校验", "done": "已拥有"}
 
 
 def size_text(size):
@@ -74,6 +77,8 @@ class SettingsPanel(QWidget):
         self.selected_ids = set()
         self.playing_id = None
         self.performance_dirty = False
+        self.engine_catalog = json.loads((Path(__file__).parent / "assets" / "engine_catalog.json").read_text(encoding="utf-8"))
+        self.engine_release_url = self.engine_catalog["release"]
         self.output = QAudioOutput(self)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.output)
@@ -84,7 +89,14 @@ class SettingsPanel(QWidget):
         layout.setSpacing(16)
         heading = QHBoxLayout()
         heading.addWidget(label("设置", "section"))
-        heading.addStretch()
+        self.data_location = ElidedLabel("数据目录 · " + str(self.owner.data_dir))
+        self.data_location.setProperty("role", "muted")
+        self.data_location.setToolTip(f"数据库、声音预设、音频和下载文件保存在这里\n{self.owner.data_dir}")
+        heading.addWidget(self.data_location, 1)
+        self.open_files_button = button("打开本地文件", lambda: QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(self.owner.data_dir))), "folder", "ghost")
+        self.open_files_button.setToolTip(f"打开配置、任务、模型和音频所在的数据目录\n{self.owner.data_dir}")
+        heading.addWidget(self.open_files_button)
         heading.addWidget(button("刷新", self.refresh, "retry", "ghost"))
         layout.addLayout(heading)
         tabs = QHBoxLayout()
@@ -139,8 +151,9 @@ class SettingsPanel(QWidget):
         page = QWidget()
         page.setObjectName("modelManagementContent")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 12, 0)
         layout.setSpacing(6)
+        layout.addWidget(self._engine_panel())
         tools = QHBoxLayout()
         self.model_search = QLineEdit()
         self.model_search.setPlaceholderText("搜索模型名称、能力或精度…")
@@ -152,33 +165,7 @@ class SettingsPanel(QWidget):
         self.source_combo.setToolTip("下载源；更换源后可继续未完成的下载")
         tools.addWidget(self.source_combo)
         tools.addWidget(button("导入模型", self.import_model, "import"))
-        tools.addWidget(button("本地引擎", self.choose_runtime, "cpu", "ghost"))
         layout.addLayout(tools)
-        self.runtime_label = label("", "muted")
-        self.runtime_label.setWordWrap(True)
-        layout.addWidget(self.runtime_label)
-        engine_tools = QHBoxLayout()
-        self.engine_backend = QComboBox()
-        self.engine_backend.addItem("NVIDIA CUDA 12.4 · 约 1 GB", "cuda")
-        self.engine_backend.addItem("CPU 便携版 · 21.3 MB", "cpu")
-        self.engine_backend.currentIndexChanged.connect(self.render_engine)
-        engine_tools.addWidget(self.engine_backend)
-        self.engine_status = label("未找到推理引擎，下载完成后自动配置。", "muted")
-        engine_tools.addWidget(self.engine_status, 1)
-        self.engine_download = button("下载引擎", self.download_engine, "import")
-        engine_tools.addWidget(self.engine_download)
-        self.engine_pause = button("暂停", self.pause_engine, "pause", "ghost")
-        self.engine_pause.hide()
-        engine_tools.addWidget(self.engine_pause)
-        layout.addLayout(engine_tools)
-        self.engine_progress = QProgressBar()
-        self.engine_progress.setTextVisible(False)
-        self.engine_progress.hide()
-        layout.addWidget(self.engine_progress)
-        self.engine_error = label("", "error")
-        self.engine_error.setWordWrap(True)
-        self.engine_error.hide()
-        layout.addWidget(self.engine_error)
         self.installed_label = label("正在读取已添加的模型…", "hint")
         layout.addWidget(self.installed_label)
         self.installed_table = self.table(("已添加的模型", "文件大小", "位置", "操作"), whole_page=True)
@@ -203,6 +190,89 @@ class SettingsPanel(QWidget):
         self.models_scroll.setWidget(page)
         self.pages.addWidget(self.models_scroll)
 
+    def _engine_panel(self):
+        panel = QWidget()
+        panel.setObjectName("engineManagement")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 12)
+        layout.setSpacing(6)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(label("推理引擎", "section"))
+        self.engine_backend = QComboBox()
+        self.engine_backend.addItem("NVIDIA CUDA 12.4", "cuda")
+        self.engine_backend.addItem("CPU 便携版", "cpu")
+        self.engine_backend.currentIndexChanged.connect(self.render_engine)
+        header.addWidget(self.engine_backend)
+        self.engine_status = ElidedLabel("等待服务连接")
+        self.engine_status.setProperty("role", "muted")
+        header.addWidget(self.engine_status, 1)
+        self.engine_verify = button("验证", self.verify_engine, "check", "ghost")
+        self.engine_verify.setToolTip("检查本地推理程序、计算后端及运行库；缺失文件会明确列出。")
+        self.engine_verify.setEnabled(False)
+        header.addWidget(self.engine_verify)
+        self.engine_download = button("下载并安装", self.toggle_engine_install, "import")
+        self.engine_download.setFixedWidth(136)
+        self.engine_download.setEnabled(False)
+        header.addWidget(self.engine_download)
+        self.engine_more = button("更多", lambda: None, kind="ghost")
+        self.engine_menu = QMenu(self.engine_more)
+        self.local_engine_action = self.engine_menu.addAction("使用本地引擎…", self.choose_runtime)
+        self.local_engine_action.setEnabled(False)
+        self.engine_release_action = self.engine_menu.addAction("官方下载", lambda: QDesktopServices.openUrl(QUrl(self.engine_release_url)))
+        self.engine_more.setMenu(self.engine_menu)
+        header.addWidget(self.engine_more)
+        layout.addLayout(header)
+        note = QHBoxLayout()
+        self.engine_description = ElidedLabel()
+        self.engine_description.setProperty("role", "hint")
+        note.addWidget(self.engine_description, 1)
+        self.runtime_label = ElidedLabel()
+        self.runtime_label.setProperty("role", "muted")
+        self.runtime_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        note.addWidget(self.runtime_label, 1)
+        layout.addLayout(note)
+        self.engine_assets = QWidget()
+        grid = QGridLayout(self.engine_assets)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(2, 1)
+        self.engine_asset_rows = []
+        for index in range(max(len(e["archives"]) for e in self.engine_catalog["backends"])):
+            title, amount, state = (ElidedLabel() for _ in range(3))
+            for text in (title, amount, state):
+                text.setProperty("role", "muted")
+                text.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            progress = QProgressBar()
+            progress.setTextVisible(False)
+            progress.setFixedHeight(3)
+            progress.setObjectName("engineAssetProgress")
+            amount.setMinimumWidth(156)
+            amount.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            title.setFixedWidth(84)
+            state.setFixedWidth(100)
+            state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            for col, widget in enumerate((title, amount, progress, state)):
+                grid.addWidget(widget, index, col)
+            self.engine_asset_rows.append((title, amount, progress, state))
+        layout.addWidget(self.engine_assets)
+        self.engine_progress = QProgressBar()
+        self.engine_progress.setTextVisible(False)
+        self.engine_progress.setFixedHeight(3)
+        policy = self.engine_progress.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.engine_progress.setSizePolicy(policy)
+        self.engine_progress.hide()
+        layout.addWidget(self.engine_progress)
+        self.engine_error = label("", "hint")
+        self.engine_error.setObjectName("engineError")
+        self.engine_error.setWordWrap(True)
+        self.engine_error.hide()
+        layout.addWidget(self.engine_error)
+        self.render_engine()
+        return panel
+
     def _audio_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -223,14 +293,16 @@ class SettingsPanel(QWidget):
         tools.addWidget(self.delete_selected)
         tools.addWidget(self.delete_all)
         layout.addLayout(tools)
-        self.audio_table = self.table(("", "作品 / 生成文本", "模型 / 模式", "声音预设", "生成时间 / 时长", "试听", "详情", "删除"))
+        self.audio_table = self.table(("", "作品 / 生成文本", "模型 / 模式", "声音预设", "生成时间 / 时长", "生成耗时", "试听", "详情", "删除"))
         self.audio_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.audio_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.audio_table.horizontalHeader().setMinimumSectionSize(28)
-        for col, width in ((0, 32), (2, 175), (3, 135), (4, 150), (5, 42), (6, 42), (7, 42)):
+        for col, width in ((0, 32), (2, 165), (3, 120), (4, 150), (5, 96), (6, 42), (7, 42), (8, 42)):
             self.audio_table.setColumnWidth(col, width)
         self.audio_table.itemChanged.connect(self.checked_item)
         self.audio_table.cellDoubleClicked.connect(lambda row, _: self.audio_details(self.visible_audio[row]))
+        self.audio_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.audio_table.customContextMenuRequested.connect(self.audio_context_menu)
         layout.addWidget(self.audio_table, 1)
         footer = QHBoxLayout()
         self.audio_count = label("还没有生成的音频", "muted")
@@ -415,43 +487,93 @@ class SettingsPanel(QWidget):
         table.setUpdatesEnabled(True)
 
     def render_engine(self, *_):
-        if self.model_data is None:
-            return
-        engine = self.model_data.get("engine", {})
-        runtime = engine.get("path") or self.model_data.get("runtime")
+        data = self.model_data or {}
+        engine = data.get("engine", {})
+        runtime = engine.get("path") or data.get("runtime")
         ready = engine.get("ready", bool(runtime and Path(runtime).is_file()))
-        self.runtime_label.setText("推理引擎：" + ("已配置 · " + Path(runtime).name if ready else "未找到，下载后自动配置到程序数据目录"))
-        self.runtime_label.setToolTip(runtime or engine.get("directory", ""))
+        self.runtime_label.setText("当前 · " + Path(runtime).name if ready and runtime else "当前未配置引擎")
+        self.runtime_label.setToolTip(runtime or engine.get("directory") or str(self.owner.data_dir / "runtime"))
         backend = self.engine_backend.currentData()
+        entry = next(e for e in self.engine_catalog["backends"] if e["id"] == backend)
         option = next((e for e in engine.get("options", []) if e["backend"] == backend), {})
+        self.engine_description.setText(f"audio.cpp {option.get('version', self.engine_catalog['version'])} · " +
+                                       ("程序与 CUDA 运行库一起安装" if backend == "cuda" else "包含 CPU 所需运行依赖"))
         status = option.get("status", "available")
         busy = status in ("downloading", "verifying", "extracting", "waiting", "pausing")
         any_busy = any(e.get("status") in ("downloading", "verifying", "extracting", "waiting", "pausing") for e in engine.get("options", []))
         active = bool(ready and option.get("path") == runtime)
-        caption = "已启用" if active else "使用引擎" if option.get("installed") else "继续下载" if status == "paused" else "重试下载" if status == "failed" else "下载引擎"
+        caption = ("正在暂停" if status == "pausing" else "暂停下载" if status == "downloading" else
+                   "暂停安装" if busy else "继续安装" if status == "paused" else "已拥有" if active else
+                   "启用引擎" if option.get("installed") else "重试安装" if status == "failed" else
+                   "补全缺失组件" if any(a.get("verified") for a in option.get("archives", [])) else "下载并安装")
         self.engine_download.setText(caption)
-        self.engine_download.setEnabled(engine.get("supported", True) and not any_busy and not active)
-        self.engine_download.setToolTip(option.get("description", "下载到程序的 data/runtime/，完成后自动更新模型的引擎路径。"))
-        self.engine_pause.setVisible(busy)
-        self.engine_pause.setEnabled(status != "pausing")
-        self.engine_status.setText(("已启用" if active else DOWNLOAD_STATES.get(status, status)) +
-                                  (f" · {size_text(option.get('received', 0))} / {size_text(option['size'])}" if option.get("size") and status in ("downloading", "paused", "pausing", "verifying") else ""))
-        self.engine_status.setToolTip(option.get("archive", "") + "\n" + option.get("description", ""))
+        self.engine_download.setIcon(icon("pause" if busy else "check" if active else "import"))
+        self.engine_download.setEnabled(self.owner.ready and engine.get("supported", True) and status != "pausing"
+                                        and (busy or (not any_busy and not active)))
+        self.local_engine_action.setEnabled(self.owner.ready and not any_busy)
+        self.engine_verify.setEnabled(self.owner.ready and not any_busy)
+        self.engine_download.setToolTip(option.get("description", "完成后自动更新模型的引擎路径。") +
+                                       "\n保存目录：" + str(self.owner.data_dir / "runtime"))
+        self.engine_status.setText("等待服务连接" if not self.owner.ready else DOWNLOAD_STATES[status] if busy else
+                                   "已拥有 · 当前使用" if active else "已拥有" if option.get("installed") else DOWNLOAD_STATES.get(status, status))
+        self.engine_status.setToolTip(self.engine_status.text() + "\n" + option.get("archive", "") + "\n" + option.get("description", entry["description"]))
+        archives = option.get("archives") or [{**a, "received": a["size"] if option.get("installed") else 0,
+                                               "status": "done" if option.get("installed") else "available"}
+                                              for a in entry["archives"]]
+        for index, widgets in enumerate(self.engine_asset_rows):
+            for widget in widgets:
+                widget.setVisible(index < len(archives))
+            if index >= len(archives):
+                continue
+            archive = archives[index]
+            title, amount, progress, state = widgets
+            title.setText("推理程序" if index == 0 else "CUDA 运行库")
+            title.setToolTip(archive["name"])
+            received, total = archive.get("received", 0), archive["size"]
+            amount.setText(size_text(total) if archive["status"] == "done" else f"{size_text(received)} / {size_text(total)}")
+            progress.setRange(0, 1000)
+            progress.setValue(min(1000, int(received * 1000 / (total or 1))))
+            state.setText(ARCHIVE_STATES.get(archive["status"], archive["status"]))
+            state.setToolTip(archive["name"] + "\n" + state.text() + "\n" + "\n".join(archive.get("issues", [])))
         self.engine_progress.setVisible(busy or status == "paused")
+        self.engine_progress.setToolTip(f"整体进度：{size_text(option.get('received', 0))} / {size_text(option.get('size', sum(a['size'] for a in archives)))}")
         if status in ("extracting", "waiting"):
             self.engine_progress.setRange(0, 0)
         else:
             self.engine_progress.setRange(0, 1000)
             self.engine_progress.setValue(min(1000, int(option.get("received", 0) * 1000 / (option.get("size") or 1))))
-        self.engine_error.setText(option.get("error", ""))
-        self.engine_error.setVisible(bool(option.get("error")))
+        validation = option.get("verification", {})
+        issues = validation.get("issues", []) if validation.get("path") and Path(validation["path"]).is_file() else []
+        error = option.get("error") or ("验证未通过：" + "；".join(issues) if issues and not busy else "")
+        self.engine_error.setText(error)
+        self.engine_error.setVisible(bool(error))
+
+    def verify_engine(self):
+        from .gui import checked
+        backend = self.engine_backend.currentData()
+        self.engine_verify.setEnabled(False)
+        def done(value):
+            self.model_data = {**(self.model_data or {}), "engine": value["engine"]}
+            self.render_engine()
+            result = value["verification"]
+            self.owner.statusBar().showMessage("验证通过，推理引擎和运行库已拥有。" if result["valid"] else "验证未通过：" + "；".join(result["issues"]), 6000)
+        self.owner.call(lambda c: checked(c.post("/models/runtime/verify", json={"backend": backend})), done,
+                        lambda message: (self.render_engine(), self.owner.statusBar().showMessage(str(message), 6000)))
+
+    def toggle_engine_install(self):
+        backend = self.engine_backend.currentData()
+        option = next((e for e in (self.model_data or {}).get("engine", {}).get("options", []) if e["backend"] == backend), {})
+        if option.get("status") in ("downloading", "verifying", "extracting", "waiting"):
+            self.pause_engine()
+        else:
+            self.download_engine()
 
     def download_engine(self, _checked=False, *, backend=None):
         backend = backend or self.engine_backend.currentData()
         self.engine_backend.setCurrentIndex(self.engine_backend.findData(backend))
         engine = (self.model_data or {}).get("engine", {})
         option = next((e for e in engine.get("options", []) if e["backend"] == backend), {})
-        action = "use" if option.get("installed") else "download"
+        action = "use" if option.get("installed") and option.get("status") not in ("paused", "failed") else "download"
         self.mutate(lambda c: c.post(f"/models/runtime/{action}", json={"backend": backend}),
                     "已启用推理引擎。" if action == "use" else "引擎开始下载，完成后自动配置；设置中可查看进度。")
 
@@ -530,12 +652,15 @@ class SettingsPanel(QWidget):
             duration = f"{a['duration']:.2f} 秒" if a.get("duration") is not None else "时长未知"
             date, _, clock = stamp.partition(" ")
             self.cell(table, row, 4, date + "\n" + (clock + " · " if clock else "") + duration, stamp + "\n" + duration)
-            play = self.action_cell(table, row, 5, a["id"], lambda v=a: button("", lambda: self.play_audio(v), "play", "ghost"))
+            elapsed, elapsed_tip = generation_elapsed(a)
+            timing = self.cell(table, row, 5, elapsed, elapsed_tip)
+            timing.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            play = self.action_cell(table, row, 6, a["id"], lambda v=a: button("", lambda: self.play_audio(v), "play", "ghost"))
             play.setToolTip("试听 / 暂停")
             play.setEnabled(a["available"])
-            details = self.action_cell(table, row, 6, a["id"], lambda v=a: button("", lambda: self.audio_details(v), "info", "ghost"))
+            details = self.action_cell(table, row, 7, a["id"], lambda v=a: button("", lambda: self.audio_details(v), "info", "ghost"))
             details.setToolTip("查看音频、完整文本与生成配置")
-            delete = self.action_cell(table, row, 7, a["id"], lambda v=a: button("", lambda: self.delete_audio([v["id"]]), "trash", "ghost"))
+            delete = self.action_cell(table, row, 8, a["id"], lambda v=a: button("", lambda: self.delete_audio([v["id"]]), "trash", "ghost"))
             delete.setToolTip("删除此音频")
             table.setRowHeight(row, 64)
         table.verticalScrollBar().setValue(scroll)
@@ -554,6 +679,41 @@ class SettingsPanel(QWidget):
         else:
             self.selected_ids.discard(identity)
         self.update_selection()
+
+    def audio_context_menu(self, position):
+        row = self.audio_table.rowAt(position.y())
+        if not 0 <= row < len(self.visible_audio):
+            return
+        # Keep the clicked record even if polling or filtering changes the table.
+        item = dict(self.visible_audio[row])
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        reference = menu.addAction(icon("voices"), "添加为参考音频…")
+        reference.setEnabled(item["available"] and self.owner.ready and not self.deleting)
+        hint = ("音频文件已不存在，请刷新列表。" if not item["available"] else
+                "本地服务未连接，请连接后再添加。" if not self.owner.ready else
+                "带入音频与生成文本，保存到声音库；参考音频需要 1–60 秒。")
+        reference.setToolTip(hint)
+        details = menu.addAction(icon("info"), "查看详情")
+        chosen = menu.exec(self.audio_table.viewport().mapToGlobal(position))
+        menu.deleteLater()
+        if chosen is reference:
+            self.add_audio_reference(item)
+        elif chosen is details:
+            self.audio_details(item)
+
+    def add_audio_reference(self, item):
+        folder = (self.owner.data_dir / "audio").resolve()
+        path = (folder / item["audio"]).resolve()
+        if path.parent != folder or not path.is_file():
+            self.owner.show_error("音频文件已不存在，请刷新列表后重试。")
+            return
+        self.stop()
+        source = {"reference_audio": str(path),
+                  "name": f"{item['work_title']} · 片段 {item['idx']}"[:100],
+                  "reference_text": item["text"]}
+        return self.owner.import_reference(source=source, selected=lambda _: self.owner.statusBar().showMessage(
+            "已添加到声音库 → 参考声音，原生成音频保留。", 5000))
 
     def toggle_all(self, checked):
         ids = {a["id"] for a in self.visible_audio}
@@ -582,7 +742,7 @@ class SettingsPanel(QWidget):
 
     def update_play_buttons(self, *_):
         for row, a in enumerate(self.visible_audio):
-            control = self.audio_table.cellWidget(row, 5)
+            control = self.audio_table.cellWidget(row, 6)
             if control:
                 active = a["id"] == self.playing_id and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
                 control.setIcon(icon("pause" if active else "play"))
@@ -600,7 +760,7 @@ class SettingsPanel(QWidget):
         details = (f"作品：{item['work_title']}\n生成：第 {item['generation']} 次，第 {item['idx']} 段\n"
                    f"音频：{item['audio']}\n模型：{item['model']}\n模型路径：{voice.get('model_dir', '')}\n"
                    f"模式：{item['mode']}\n预设：{preset_text(item)}\n时间：{stamp}\n"
-                   f"时长：{duration}\n字幕时间：{item.get('timestamp') or '无'}\n\n生成文本：\n{item['text']}")
+                   f"时长：{duration}\n生成耗时：{generation_elapsed(item)[0]}\n字幕时间：{item.get('timestamp') or '无'}\n\n生成文本：\n{item['text']}")
         import json
         self.owner.show_details(details + "\n\n生成时配置：\n" + json.dumps(voice, ensure_ascii=False, indent=2))
 

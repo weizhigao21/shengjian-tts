@@ -16,6 +16,7 @@ import httpx
 from .config import atomic_json, file_digest
 from .downloads import DownloadPaused, download_file
 from .errors import VoiceError
+from .engine_validation import CUDA_DLLS, clear_binary_cache, inspect_engine
 
 
 class EngineManager:
@@ -31,7 +32,43 @@ class EngineManager:
                                                  timeout=httpx.Timeout(15, connect=10, read=10)))
         self.lock = threading.RLock()
         self.states, self.threads, self.cancel = {}, {}, {}
+        self.validation_cache = {}
         self.closed = False
+
+    def _inspect(self, path, backend):
+        try:
+            signature = tuple(sorted((p.name.lower(), p.stat().st_size, p.stat().st_mtime_ns)
+                                     for p in Path(path).parent.iterdir() if p.is_file() and p.suffix.lower() in (".dll", ".exe")))
+        except OSError:
+            signature = ()
+        key = (str(path), backend)
+        previous = self.validation_cache.get(key)
+        if previous is None or previous[0] != signature:
+            self.validation_cache[key] = (signature, inspect_engine(path, backend))
+        return self.validation_cache[key][1]
+
+    def _find(self, backend):
+        value = self.config.read()
+        registered = value.get("native_engines", {}).get(backend, {})
+        candidates = [registered.get("path"), self.models.runtime()]
+        candidates += [v.get("engine_executable") for v in self.config.voices() if v.get("backend") == "audio_cpp"]
+        best = None
+        for path in dict.fromkeys(p for p in candidates if p):
+            result = self._inspect(path, backend)
+            if best is None or sum(c["valid"] for c in result["components"]) > sum(c["valid"] for c in best["components"]):
+                best = result
+            if result["valid"]:
+                break
+        return best or {**inspect_engine("", backend), "path": "", "issues": ["尚未配置本地引擎"]}
+
+    def verify(self, backend):
+        if backend not in self.entries:
+            raise VoiceError("ENGINE_BACKEND_UNSUPPORTED", "请选择 NVIDIA CUDA 或 CPU 引擎", stage="引擎验证")
+        with self.lock:
+            self.validation_cache.clear()
+            clear_binary_cache()
+            result = self._find(backend)
+        return {"verification": result, "engine": self.listing()}
 
     def listing(self):
         runtime = self.models.runtime()
@@ -40,18 +77,42 @@ class EngineManager:
         with self.lock:
             for backend, entry in self.entries.items():
                 installed = saved.get(backend, {})
-                path = installed.get("path", "")
-                exists = bool(path and Path(path).is_file())
+                validation = self._find(backend)
+                path = validation["path"] if validation["valid"] or any(c["valid"] for c in validation["components"]) else installed.get("path", "")
+                exists = validation["valid"]
                 total = sum(a["size"] for a in entry["archives"])
                 received = sum(self._received(a) for a in entry["archives"])
                 state = self.states.get(backend, {"status": "done" if exists else "paused" if received else "available",
                                                   "received": received, "error": ""})
                 if state["status"] == "done" and not exists:
                     state = {**state, "status": "available"}
+                archives = []
+                for index, archive in enumerate(entry["archives"]):
+                    component = validation["components"][min(index, len(validation["components"]) - 1)]
+                    owned = component["valid"]
+                    amount = archive["size"] if owned else self._received(archive)
+                    current = state.get("archive") == archive["name"]
+                    cached = (self.download_dir / archive["name"]).is_file()
+                    if owned:
+                        status = "done"
+                    elif current and state["status"] in ("downloading", "verifying", "pausing"):
+                        status = state["status"]
+                    elif cached:
+                        status = "downloaded"
+                    elif current and state["status"] == "failed":
+                        status = "failed"
+                    elif amount == archive["size"]:
+                        status = "pending_verification"
+                    else:
+                        status = "paused" if amount else "available"
+                    archives.append({"name": archive["name"], "size": archive["size"],
+                                     "received": amount, "status": status, "verified": owned, "issues": component["issues"]})
                 options.append({"backend": backend, "name": entry["name"], "description": entry["description"],
                                 "version": self.catalog["version"], "size": total, "installed": exists,
-                                "path": path, **state})
-        return {"ready": bool(runtime and Path(runtime).is_file()), "path": runtime,
+                                "path": path, "archives": archives, "verification": validation, **state})
+        value = self.config.read()
+        active_backend = value.get("native_engine_backend") or next((v.get("device", "cuda") for v in self.config.voices() if v.get("engine_executable") == runtime), "cuda")
+        return {"ready": bool(runtime and self._inspect(runtime, active_backend)["valid"]), "path": runtime,
                 "directory": str(self.root), "supported": platform.system() == "Windows" and platform.machine().lower() in ("amd64", "x86_64"),
                 "options": options}
 
@@ -91,10 +152,11 @@ class EngineManager:
             self.states[backend].update(changes)
 
     def use(self, backend):
+        result = self._find(backend)
+        if not result["valid"]:
+            raise VoiceError("ENGINE_MISSING", "引擎验证未通过：" + "；".join(result["issues"]), stage="引擎配置")
         installed = self.config.read().get("native_engines", {}).get(backend, {})
-        if not installed.get("path") or not Path(installed["path"]).is_file():
-            raise VoiceError("ENGINE_MISSING", "该引擎尚未安装，请先下载", stage="引擎配置")
-        return self.models.set_runtime(installed["path"], backend=backend, version=installed["version"])
+        return self.models.set_runtime(result["path"], backend=backend, version=installed.get("version"))
 
     def _extract(self, archive, directory, event):
         with zipfile.ZipFile(archive) as package:
@@ -121,12 +183,33 @@ class EngineManager:
         staging = None
         try:
             installed = self.config.read().get("native_engines", {}).get(backend, {})
-            if installed.get("version") == self.catalog["version"] and Path(installed.get("path") or ".").is_file():
+            previous = self._find(backend)
+            if previous["valid"]:
                 self._activate(backend, event)
                 return
             entry = self.entries[backend]
+            staging = Path(tempfile.mkdtemp(prefix=".install-", dir=self.root))
+            owned = previous["components"]
+            # Reuse validated local components. Never write into the original installation.
+            source = Path(previous["path"]).parent
+            if any(c["valid"] for c in owned):
+                target = staging / "local"
+                target.mkdir()
+                cuda_names = {name.lower() for name in CUDA_DLLS}
+                for item in source.iterdir():
+                    runtime_file = item.name.lower() in cuda_names
+                    keep = owned[1]["valid"] if runtime_file and backend == "cuda" else owned[0]["valid"]
+                    if keep and item.is_file() and item.suffix.lower() in (".exe", ".dll"):
+                        shutil.copy2(item, target / item.name)
+                    elif keep and item.is_dir() and item.name == "model_specs":
+                        shutil.copytree(item, target / item.name)
             completed = 0
-            for archive in entry["archives"]:
+            missing_archives = []
+            for index, archive in enumerate(entry["archives"]):
+                if owned[min(index, len(owned) - 1)]["valid"]:
+                    completed += archive["size"]
+                    continue
+                missing_archives.append(archive)
                 def progress(**changes):
                     if "received" in changes:
                         changes["received"] += completed
@@ -142,8 +225,7 @@ class EngineManager:
                     raise
                 completed += archive["size"]
             self._state(backend, status="extracting", received=completed)
-            staging = Path(tempfile.mkdtemp(prefix=".install-", dir=self.root))
-            for archive in entry["archives"]:
+            for archive in missing_archives:
                 self._extract(self.download_dir / archive["name"], staging, event)
             executables = list(staging.rglob("audiocpp_server.exe"))
             if len(executables) != 1:
@@ -159,6 +241,9 @@ class EngineManager:
                         raise ValueError(f"引擎包存在不同版本的同名 DLL：{dll.name}")
                     if not target.exists():
                         dll.replace(target)
+            validation = inspect_engine(str(executable), backend)
+            if not validation["valid"]:
+                raise ValueError("引擎验证未通过：" + "；".join(validation["issues"]))
             if event.is_set():
                 raise DownloadPaused()
             directory = self.root / f"{self.catalog['version']}-{backend}-{uuid.uuid4().hex[:8]}"

@@ -341,9 +341,9 @@ def test_settings_multi_selection_search_and_buttons_keep_state_on_refresh(tmp_p
     checkbox = settings.audio_table.item(0, 0)
     checkbox.setCheckState(Qt.CheckState.Checked)
     assert settings.delete_selected.isEnabled() and len(settings.selected_ids) == 1
-    before = settings.audio_table.cellWidget(0, 7)
+    before = settings.audio_table.cellWidget(0, 8)
     settings.render_audio()
-    assert settings.audio_table.cellWidget(0, 7) is before
+    assert settings.audio_table.cellWidget(0, 8) is before
     assert settings.audio_table.item(0, 0).checkState() == Qt.CheckState.Checked
     qtbot.mouseClick(settings.select_all, Qt.MouseButton.LeftButton)
     assert len(settings.selected_ids) == 2
@@ -351,7 +351,7 @@ def test_settings_multi_selection_search_and_buttons_keep_state_on_refresh(tmp_p
     assert settings.audio_table.rowCount() == 1 and len(settings.selected_ids) == 2
     shown = []
     monkeypatch.setattr(window, "show_details", shown.append)
-    qtbot.mouseClick(settings.audio_table.cellWidget(0, 6), Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(settings.audio_table.cellWidget(0, 7), Qt.MouseButton.LeftButton)
     assert "第一句" in shown[0] and "生成时配置" in shown[0] and "声音" in shown[0]
     captured = []
     class Response:

@@ -5,6 +5,7 @@ import threading
 import time
 from copy import deepcopy
 from urllib.parse import urlsplit, urljoin
+import wave
 
 _capabilities = {}
 _lock = threading.Lock()
@@ -151,11 +152,15 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
     base = api_url.rstrip("/")
     try:
         payload = {"voice_id": model_name, "title": "双语工作流配音",
-                   "segments": [{"text": task[2], "timestamp": task[1]} for task in tasks]}
+                   "segments": [{"text": task[2], "timestamp": task[1]} for task in tasks],
+                   "record_only": True, "delivery_ack": True}
+        health = session.get(base + "/health", timeout=3)
+        capabilities = health.json().get("capabilities", []) if health.status_code == 200 else []
+        if "workflow_record_only" not in capabilities:
+            raise RuntimeError("当前声笺服务不支持工作流临时音频，请更新并重启声笺至 v0.7.11 或以上。")
         if workflow_context:
-            health = session.get(base + "/health", timeout=3)
-            if health.status_code != 200 or "workflow_grouping" not in health.json().get("capabilities", []):
-                raise RuntimeError("当前声笺服务不支持工作流任务合并，请更新并重启声笺至 v0.7.0 或以上。")
+            if "workflow_grouping" not in capabilities:
+                raise RuntimeError("当前声笺服务不支持工作流批次合并，请更新并重启声笺。")
             payload.update(workflow_key=workflow_context["key"], title=workflow_context["title"])
         response = session.post(base + "/jobs", json=payload, timeout=15)
         if response.status_code != 202:
@@ -173,7 +178,7 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
                 stopped = session.post(cancel_url, timeout=15)
                 if stopped.status_code != 200:
                     raise RuntimeError("取消服务任务失败：" + _error(stopped))
-                return [(None, f"第 {t[0]} 段 [{t[1]}]：任务已取消；已完成结果保留在本地服务。") for t in tasks]
+                return [(None, f"第 {t[0]} 段 [{t[1]}]：任务已取消；服务保留生成记录，未接收音频已清理。") for t in tasks]
             result = session.get(status_url, timeout=10)
             if result.status_code != 200:
                 raise RuntimeError(_error(result))
@@ -196,7 +201,7 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
                         results.append((None, detail))
                 return results
             time.sleep(0.3)
-        return [(None, f"等待任务 {job_id} 超过 {timeout} 秒；任务仍在本地服务中，可在管理界面查看。") for _ in tasks]
+        return [(None, f"等待工作流记录 {job_id} 超过 {timeout} 秒；服务仍在生成或排队，记录可通过接口查询。") for _ in tasks]
     except Exception as exc:
         return [(None, f"第 {t[0]} 段 [{t[1]}]：本地配音服务请求失败：{exc}") for t in tasks]
 
@@ -211,8 +216,21 @@ def generate_local_tasks(session, api_url, model_name, tasks, audio_cache, cache
         save_path = filename(index, timestamp, text, save_dir)
         try:
             download(audio_url, save_path)
+            # Acknowledge after the workflow's downloader commits a valid WAV.
+            with wave.open(str(save_path), "rb") as audio:
+                if not audio.getnframes() or not audio.getframerate() or not audio.readframes(1):
+                    raise ValueError("下载的音频不是有效 WAV")
             audio_cache.save_audio_cache(text, save_path, cache_model, api_url, source_version=str(int(mtime)))
-            results.append((True, f"完成：{index:04d} [{timestamp}]"))
         except Exception as exc:
             results.append((False, f"第 {index} 段 [{timestamp}] 音频下载失败：{exc}"))
+            continue
+        message = f"完成：{index:04d} [{timestamp}]"
+        try:
+            released = session.post(audio_url + "/release", timeout=10)
+            if released.status_code != 200 or released.json().get("errors"):
+                raise RuntimeError("服务尚未确认清理")
+        except Exception:
+            # Saved output remains usable if the acknowledgement is lost.
+            message += "；临时音频将在服务端到期清理"
+        results.append((True, message))
     return results

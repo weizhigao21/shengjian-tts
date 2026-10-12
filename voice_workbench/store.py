@@ -9,6 +9,9 @@ import uuid
 
 from .naming import UNNAMED, work_title
 
+WORKFLOW_TITLES = ("双语工作流配音", "工作流兼容请求")
+WORKFLOW_AUDIO_TTL = 3600
+
 
 class Store:
     @staticmethod
@@ -22,7 +25,15 @@ class Store:
             columns = {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
             segment_columns = {r[1] for r in db.execute("PRAGMA table_info(segments)")}
             segment_filter = " AND s.audio_deleted=0" if "audio_deleted" in segment_columns else ""
-            visible = "WHERE j.deleted=0" if "deleted" in columns else ""
+            filters = ["j.deleted=0"] if "deleted" in columns else []
+            if "record_only" in columns:
+                filters.append("j.record_only=0")
+            else:
+                # Hide old adapter records even before the service performs its migration.
+                filters.append("j.title NOT IN ('双语工作流配音','工作流兼容请求')")
+                if "workflow_key" in columns:
+                    filters.append("j.workflow_key IS NULL")
+            visible = "WHERE " + " AND ".join(filters)
             rows = db.execute(f"""SELECT j.*,count(s.idx) AS total,
                 COALESCE(SUM(CASE WHEN s.status='done' THEN 1 ELSE 0 END),0) AS completed,
                 COALESCE(SUM(CASE WHEN s.status='failed' THEN 1 ELSE 0 END),0) AS failed
@@ -51,15 +62,19 @@ class Store:
           CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, path TEXT, checksum TEXT);
         """)
         for table, fields in {
-            "jobs": {"deleted": "INTEGER NOT NULL DEFAULT 0", "script": "TEXT", "auto_named": "INTEGER NOT NULL DEFAULT 0", "workflow_key": "TEXT", "workflow_closed": "INTEGER NOT NULL DEFAULT 0"},
+            "jobs": {"deleted": "INTEGER NOT NULL DEFAULT 0", "script": "TEXT", "auto_named": "INTEGER NOT NULL DEFAULT 0", "workflow_key": "TEXT", "workflow_closed": "INTEGER NOT NULL DEFAULT 0", "record_only": "INTEGER NOT NULL DEFAULT 0"},
             "segments": {"voice": "TEXT", "fingerprint": "TEXT", "batch_title": "TEXT",
                          "created": "REAL", "generation": "INTEGER NOT NULL DEFAULT 1",
-                         "provenance": "TEXT", "duration": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0"},
+                         "provenance": "TEXT", "duration": "REAL", "generation_seconds": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0",
+                         "audio_storage": "TEXT NOT NULL DEFAULT 'permanent'", "delivery_ack": "INTEGER NOT NULL DEFAULT 0",
+                         "audio_expires": "REAL", "audio_released": "REAL", "audio_release_reason": "TEXT"},
         }.items():
             existing = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for name, declaration in fields.items():
                 if name not in existing:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+        self.db.execute("""UPDATE jobs SET record_only=1 WHERE workflow_key IS NOT NULL
+            OR title IN ('双语工作流配音','工作流兼容请求')""")
         # Freeze old segment snapshots before a later generation changes the work's voice.
         self.db.execute("""UPDATE segments SET
             voice=COALESCE(voice,(SELECT voice FROM jobs WHERE id=job_id)),
@@ -71,6 +86,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS workflow_jobs ON jobs(workflow_key);
             CREATE INDEX IF NOT EXISTS queued_segments ON segments(status,job_id,idx);
             CREATE INDEX IF NOT EXISTS generation_segments ON segments(job_id,generation);
+            CREATE INDEX IF NOT EXISTS workflow_audio_expiry ON segments(audio_expires);
         """)
 
     def recover(self):
@@ -78,16 +94,18 @@ class Store:
             self.db.execute("UPDATE segments SET status='queued' WHERE status='running'")
             self.db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
 
-    def create(self, title, voice, fingerprint, segments, script=None, provenance=None, workflow_key=None):
+    def create(self, title, voice, fingerprint, segments, script=None, provenance=None, workflow_key=None,
+               record_only=False, delivery_ack=False):
         job_id = uuid.uuid4().hex
         now = time.time()
         automatic = int(title.strip() in UNNAMED)
         title = work_title(title, script, now, segments)
         with self.lock, self.db:
-            self.db.execute("INSERT INTO jobs(id,title,voice,fingerprint,status,created,updated,script,auto_named,workflow_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                            (job_id, title, json.dumps(voice, ensure_ascii=False), fingerprint, "draft", now, now, script, automatic, workflow_key))
+            self.db.execute("INSERT INTO jobs(id,title,voice,fingerprint,status,created,updated,script,auto_named,workflow_key,record_only) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (job_id, title, json.dumps(voice, ensure_ascii=False), fingerprint, "draft", now, now, script, automatic, workflow_key, int(record_only or bool(workflow_key))))
             if segments:
-                self.append(job_id, title, voice, fingerprint, segments, script, provenance, workflow=bool(workflow_key))
+                self.append(job_id, title, voice, fingerprint, segments, script, provenance,
+                            workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack)
         return job_id
 
     def workflow_job(self, key):
@@ -107,17 +125,19 @@ class Store:
             return {"job_id": job_id, "title": title, "generation": generation, "segment_indices": indices,
                     "status_url": f"/jobs/{job_id}?generation={generation}"}
 
-    def append(self, job_id, title, voice, fingerprint, segments, script=None, provenance=None, workflow=False):
+    def append(self, job_id, title, voice, fingerprint, segments, script=None, provenance=None, workflow=False, delivery_ack=False):
         now = time.time()
         snapshot = json.dumps(voice, ensure_ascii=False)
         with self.lock, self.db:
             title, automatic = self.document_title(job_id, title, script, segments)
+            record_only = self.db.execute("SELECT record_only FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             last, generation = self.db.execute("SELECT COALESCE(MAX(idx),0),COALESCE(MAX(generation),0) FROM segments WHERE job_id=?", (job_id,)).fetchone()
             self.db.executemany("""INSERT INTO segments
-                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
+                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
                 "queued", snapshot, fingerprint, title, now, generation+1,
-                json.dumps(provenance, ensure_ascii=False) if provenance is not None else None, int(workflow)) for i, s in enumerate(segments, 1)])
+                json.dumps(provenance, ensure_ascii=False) if provenance is not None else None, int(workflow),
+                "temporary" if record_only else "permanent", int(delivery_ack and record_only)) for i, s in enumerate(segments, 1)])
             self.db.execute("UPDATE jobs SET title=?,voice=?,fingerprint=?,script=?,updated=?,auto_named=? WHERE id=?",
                             (title, snapshot, fingerprint, script, now, automatic, job_id))
             self._refresh(job_id)
@@ -159,13 +179,14 @@ class Store:
                 job["status"] = next(s for s in ("running", "queued", "failed", "cancelled", "done") if s in states)
             return job
 
-    def list(self, limit=100):
+    def list(self, limit=100, include_workflow=False):
         with self.lock:
             jobs = [dict(row) for row in self.db.execute("""SELECT j.*,count(s.idx) AS total,
                 COALESCE(SUM(CASE WHEN s.status='done' THEN 1 ELSE 0 END),0) AS completed,
                 COALESCE(SUM(CASE WHEN s.status='failed' THEN 1 ELSE 0 END),0) AS failed
-                FROM jobs j LEFT JOIN segments s ON s.job_id=j.id AND s.audio_deleted=0 WHERE j.deleted=0 GROUP BY j.id
-                ORDER BY j.created DESC LIMIT ?""", (limit,))]
+                FROM jobs j LEFT JOIN segments s ON s.job_id=j.id AND s.audio_deleted=0
+                WHERE j.deleted=0 AND (j.record_only=0 OR ?) GROUP BY j.id
+                ORDER BY j.created DESC LIMIT ?""", (int(include_workflow), limit))]
             for job in jobs:
                 job["voice"] = json.loads(job["voice"])
             return jobs
@@ -185,26 +206,33 @@ class Store:
             item["fingerprint"] = item["fingerprint"] or job["fingerprint"]
             if admitted and not admitted(job, item):
                 return None
-            self.db.execute("UPDATE segments SET status='running',attempts=attempts+1,error=NULL WHERE job_id=? AND idx=?", tuple(row))
+            self.db.execute("UPDATE segments SET status='running',attempts=attempts+1,error=NULL,generation_seconds=NULL WHERE job_id=? AND idx=?", tuple(row))
             self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row[0]))
             job["status"] = item["status"] = "running"
             item["attempts"] += 1
             item["error"] = None
+            item["generation_seconds"] = None
             item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
             return job, item
 
-    def finish(self, job_id, index, *, audio="", error=None, cached=False, duration=None):
+    def finish(self, job_id, index, *, audio="", error=None, cached=False, duration=None, generation_seconds=None):
         with self.lock, self.db:
-            self.db.execute("""UPDATE segments SET status=?,audio=?,error=?,cached=?,duration=?
+            self.db.execute("""UPDATE segments SET status=?,audio=?,error=?,cached=?,duration=?,generation_seconds=?
                 WHERE job_id=? AND idx=? AND status='running'""",
                 ("failed" if error else "done", audio, json.dumps(error, ensure_ascii=False) if error else None,
-                 int(cached), duration, job_id, index))
+                 int(cached), duration, generation_seconds, job_id, index))
             self._refresh(job_id)
 
     def _refresh(self, job_id):
         states = [r[0] for r in self.db.execute("SELECT status FROM segments WHERE job_id=? AND audio_deleted=0", (job_id,))]
         state = "draft" if not states else "running" if "running" in states else "queued" if "queued" in states else "failed" if "failed" in states else "cancelled" if "cancelled" in states else "done"
         self.db.execute("UPDATE jobs SET status=?,updated=? WHERE id=?", (state, time.time(), job_id))
+        # A large batch can take hours. Start the download grace period only when
+        # its own generation is terminal, rather than when the first clip finishes.
+        self.db.execute("""UPDATE segments SET audio_expires=? WHERE job_id=?
+            AND audio_storage='temporary' AND audio IS NOT NULL AND audio!='' AND audio_expires IS NULL
+            AND generation NOT IN (SELECT generation FROM segments WHERE job_id=? AND status IN ('queued','running'))""",
+            (time.time() + WORKFLOW_AUDIO_TTL, job_id, job_id))
 
     def requeue(self, job_id, index):
         with self.lock, self.db:
@@ -220,7 +248,7 @@ class Store:
 
     def retry(self, job_id):
         with self.lock, self.db:
-            self.db.execute("UPDATE segments SET status='queued',error=NULL WHERE job_id=? AND status IN ('failed','cancelled')", (job_id,))
+            self.db.execute("UPDATE segments SET status='queued',error=NULL,generation_seconds=NULL WHERE job_id=? AND status IN ('failed','cancelled')", (job_id,))
             self._refresh(job_id)
 
     def delete(self, job_id):
@@ -250,7 +278,7 @@ class Store:
         with self.lock:
             rows = self.db.execute("""SELECT s.*,j.title AS work_title,j.deleted AS work_deleted
                 FROM segments s JOIN jobs j ON j.id=s.job_id
-                WHERE s.audio_deleted=0 AND s.status='done' AND s.audio IS NOT NULL AND s.audio!=''
+                WHERE j.record_only=0 AND s.audio_deleted=0 AND s.status='done' AND s.audio IS NOT NULL AND s.audio!=''
                 ORDER BY s.created DESC,s.job_id,s.idx DESC""")
             result = []
             for row in rows:
@@ -274,6 +302,48 @@ class Store:
     def forget_cache(self, filename):
         with self.lock, self.db:
             self.db.execute("DELETE FROM cache WHERE path=?", (str(self.root / "audio" / filename),))
+
+    def workflow_audio_records(self, *, filename=None, job_id=None, generation=None, expired=False):
+        with self.lock:
+            rows = self.db.execute("""SELECT s.* FROM segments s JOIN jobs j ON j.id=s.job_id
+                WHERE j.record_only=1 AND s.audio_deleted=0 AND s.audio IS NOT NULL AND s.audio!=''
+                AND (? IS NULL OR s.audio=?) AND (? IS NULL OR s.job_id=?)
+                AND (? IS NULL OR s.generation=?) AND (?=0 OR s.audio_expires<=?)""",
+                (filename, filename, job_id, job_id, generation, generation, int(expired), time.time()))
+            return [dict(r) for r in rows]
+
+    def audio_references(self, filename, storage):
+        with self.lock:
+            return {f"{r[0]}:{r[1]}" for r in self.db.execute("""SELECT job_id,idx FROM segments
+                WHERE audio=? AND audio_storage=? AND audio_deleted=0""", (filename, storage))}
+
+    def reference_audio_paths(self):
+        with self.lock:
+            raw = {json.loads(r[0]).get("reference_audio") for r in self.db.execute(
+                "SELECT DISTINCT voice FROM segments WHERE voice IS NOT NULL AND voice!=''")}
+            return {Path(value).resolve() for value in raw if value}
+
+    def release_workflow_audio(self, records, reason, cache_filenames=()):
+        with self.lock, self.db:
+            self.db.executemany("""UPDATE segments SET audio=NULL,audio_storage='released',
+                audio_expires=NULL,audio_released=?,audio_release_reason=? WHERE job_id=? AND idx=?
+                AND job_id IN (SELECT id FROM jobs WHERE record_only=1)""",
+                [(time.time(), reason, r["job_id"], r["idx"]) for r in records])
+            self.db.executemany("DELETE FROM cache WHERE path=?",
+                               [(str(self.root / "audio" / filename),) for filename in cache_filenames])
+
+    def workflow_records(self, limit=200):
+        with self.lock:
+            rows = self.db.execute("""SELECT s.*,j.title AS work_title FROM segments s
+                JOIN jobs j ON j.id=s.job_id WHERE j.record_only=1
+                ORDER BY s.created DESC,s.job_id,s.idx DESC LIMIT ?""", (limit,))
+            result = []
+            for row in rows:
+                item = dict(row)
+                for name in ("voice", "provenance", "error"):
+                    item[name] = json.loads(item[name]) if item[name] else None
+                result.append(item)
+            return result
 
     def close(self):
         with self.lock:

@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 import httpx
-from PyQt6.QtCore import QThread, QTimer, QUrl, Qt, pyqtSignal
+from PyQt6.QtCore import QLibraryInfo, QLocale, QThread, QTimer, QTranslator, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QFontDatabase
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QDoubleSpinBox, Q
 
 from .config import PROJECT_ROOT
 from . import __version__
-from .ui import application_icon
+from .ui import application_icon, generation_elapsed
 from .subtitles import parse_text, normalize_timestamp
 from .runner import validate_wave
 from .runtime import service_command
@@ -126,7 +126,7 @@ class Window(UiLayout, QMainWindow):
         if Path(value["data_dir"]).resolve() != self.data_dir:
             self.show_error("该端口上的服务使用另一个数据目录。请用对应 --data-dir 启动界面。")
             return
-        if not {"reference_library", "generation_options", "work_generations", "asset_management", "voice_discovery"}.issubset(value.get("capabilities", [])):
+        if not {"reference_library", "generation_options", "work_generations", "asset_management", "voice_discovery", "engine_verification", "workflow_record_only"}.issubset(value.get("capabilities", [])):
             self.show_error("本地服务仍是旧版本。请关闭旧程序及独立运行的语音服务，再重新启动。")
             return
         self.ready = True
@@ -202,7 +202,7 @@ class Window(UiLayout, QMainWindow):
         current = health.get("current")
         self.set_service_state(f"●  正在生成第 {current['index']} 段" if current else
                                f"●  本地服务在线 · 队列 {health['queue']}" if health['queue'] else "●  本地服务在线", "ready")
-        self.banner.setToolTip(f"{self.url} · 队列 {health['queue']} 个任务")
+        self.banner.setToolTip(f"{self.banner.text()}\n{self.url} · 队列 {health['queue']} 个任务")
         voice_ids = [(v["id"], v["name"], v.get("model_name")) for v in voices]
         old_ids = [(v["id"], v["name"], v.get("model_name")) for v in self.voices]
         self.voices = voices
@@ -408,10 +408,13 @@ class Window(UiLayout, QMainWindow):
             created = item.get("created") or job.get("created")
             stamp = datetime.fromtimestamp(created).strftime("%m-%d %H:%M:%S") if created else item.get("timestamp", "")
             name = f"{item.get('batch_title') or job['title']} · 第 {item.get('generation', 1)} 次 · {item['text']}"
-            for col, text in enumerate((str(item["idx"]), stamp, name, status, error.get("message", ""))):
+            elapsed, elapsed_tip = generation_elapsed(item)
+            for col, text in enumerate((str(item["idx"]), stamp, name, elapsed, status, error.get("message", ""))):
                 tooltip = ("生成时间：" + stamp + ("\n字幕时间：" + item["timestamp"] if item["timestamp"] else "")) if col == 1 else text
+                if col == 3:
+                    tooltip = elapsed_tip
                 cell = self.update_table_cell(self.segments_table, row, col, text, tooltip)
-                if col in (0, 1) and cell.textAlignment() != Qt.AlignmentFlag.AlignCenter:
+                if col in (0, 1, 3) and cell.textAlignment() != Qt.AlignmentFlag.AlignCenter:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         if 0 <= selected_row < len(job["segments"]) and self.segments_table.currentRow() != selected_row:
             self.segments_table.selectRow(selected_row)
@@ -605,9 +608,9 @@ class Window(UiLayout, QMainWindow):
         from .library import ReferencePicker
         self.open_dialog(ReferencePicker(self, controls))
 
-    def import_reference(self, *, selected=None):
+    def import_reference(self, *, selected=None, source=None):
         from .library import ReferenceDialog
-        return self.open_dialog(ReferenceDialog(self, selected=selected))
+        return self.open_dialog(ReferenceDialog(self, selected=selected, source=source))
 
     def edit_reference(self, item):
         from .library import ReferenceDialog
@@ -800,11 +803,25 @@ def configure_font(app):
             app.setFont(QFont(families[0], 10))
 
 
+def configure_language(app):
+    """Localize Qt's standard actions and keep the translator alive."""
+    QLocale.setDefault(QLocale("zh_CN"))
+    if getattr(app, "_chinese_translator", None) is not None:
+        return
+    translator = QTranslator(app)
+    translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    if not translator.load("qtbase_zh_CN", translations):
+        raise RuntimeError("缺少 Qt 简体中文资源 qtbase_zh_CN.qm，请保留完整的 _internal 文件夹。")
+    app.installTranslator(translator)
+    app._chinese_translator = translator
+
+
 def launch(port, data_dir):
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Shengjian.VoiceWorkbench")
     app = QApplication(sys.argv)
+    configure_language(app)
     app.setApplicationName("声笺")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("Shengjian")

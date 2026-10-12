@@ -17,6 +17,9 @@ MODES = {"builtin": "内置音色", "clone": "声音克隆", "design": "文本�
 KOKORO_LANGUAGES = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi",
                     "i": "it", "j": "ja", "p": "pt-br", "z": "zh"}
 SCALARS = {0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i", 6: "f", 7: "?", 10: "Q", 11: "q", 12: "d"}
+QWEN_LANGUAGES = {"chinese": "zh", "english": "en", "japanese": "ja", "korean": "ko",
+                  "german": "de", "french": "fr", "russian": "ru", "portuguese": "pt",
+                  "spanish": "es", "italian": "it"}
 WANTED = {"audiocpp.model_spec.json", "audiocpp.model_spec.family", "audiocpp.embedded_files.names",
           "audiocpp.embedded_files.offsets", "audiocpp.embedded_files.data"}
 
@@ -115,7 +118,7 @@ def model_ui(voice):
                 "languages": ["zh", "en", "ja", "es", "ar"] if official and voice.get("index_version") == "2.5" else ["zh", "en"],
                 "builtin_voices": [], "speed": not official or voice.get("index_version") == "2.5", "emotion": official,
                 "reference_text": False, "language_auto": False, "generation_options": []}
-    package, warning = {}, ""
+    package, warning, variant = {}, "", None
     path = Path(voice.get("model_dir") or "")
     try:
         stat = path.stat()
@@ -162,11 +165,19 @@ def model_ui(voice):
         builtin = list(actual_voices)
     builtin = [v for v in builtin if isinstance(v, str)]
     if family == "qwen3_tts" and modes == ["builtin"]:
-        builtin = list(package.get("files", {}).get("config.json", {}).get("spk_id", {}))
+        config = package.get("files", {}).get("config.json", {})
+        talker = config.get("talker_config", {})
+        # Official packages nest speakers in the talker; older converters used the top level.
+        speakers = talker.get("spk_id", config.get("spk_id", {})) if isinstance(talker, dict) else config.get("spk_id", {})
+        builtin = [name for name in speakers if isinstance(name, str)] if isinstance(speakers, dict) else []
     if family == "kokoro_tts":
         languages = list(dict.fromkeys(KOKORO_LANGUAGES[v[0]] for v in builtin if v and v[0] in KOKORO_LANGUAGES))
     else:
         languages = [v for v in spec.get("languages", ["zh", "en", "ja", "es", "ar"]) if v in LANGUAGES]
+        if family == "qwen3_tts":
+            talker = package.get("files", {}).get("config.json", {}).get("talker_config", {})
+            declared_languages = talker.get("codec_language_id", {}) if isinstance(talker, dict) else {}
+            languages = [QWEN_LANGUAGES[name] for name in declared_languages if name in QWEN_LANGUAGES] or list(QWEN_LANGUAGES.values())
     declared_options = spec.get("options", {})
     options = declared_options.get("request", []) if isinstance(declared_options, dict) else []
     options = [v for v in options if isinstance(v, dict)] if isinstance(options, list) else []
@@ -174,7 +185,7 @@ def model_ui(voice):
     declared = options if isinstance(declared_options, dict) and "request" in declared_options else None
     if mismatch:
         warning = f"模型文件属于 {actual_family}，当前选择了 {family}，请修改模型家族。"
-    return {"family": family, "actual_family": actual_family, "source": source, "warning": warning,
+    return {"family": family, "actual_family": actual_family, "variant": variant, "source": source, "warning": warning,
             "mismatch": mismatch, "display_name": spec.get("display_name", family), "modes": modes,
             "builtin_voices": builtin, "languages": languages, "language_auto": family == "voxcpm2",
             "speed": family == "index_tts2" or (family == "kokoro_tts" and "speed" in names),
@@ -212,6 +223,6 @@ def validate_capabilities(voice, info=None):
         native = voice.get("native_voice")
         if not native or native not in info["builtin_voices"]:
             raise VoiceError("BUILTIN_VOICE_NOT_FOUND", f"模型包中没有内置音色：{native}", "从该模型的内置音色列表选择。", "配置检查")
-    elif not info["language_auto"] and info["languages"] and voice.get("language") not in info["languages"]:
+    if not info["language_auto"] and info["languages"] and voice.get("language") not in info["languages"]:
         raise VoiceError("UNSUPPORTED_LANGUAGE", "该模型不支持所选语言", "选择模型支持的语言。", "配置检查")
     return mode

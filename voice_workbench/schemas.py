@@ -65,6 +65,8 @@ class JobInput(BaseModel):
     overrides: GenerationOverrides | None = None
     script: str | None = Field(default=None, max_length=2000000)
     workflow_key: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.:-]{1,160}$")
+    record_only: bool = False
+    delivery_ack: bool = False
 
 
 class PerformanceSettings(BaseModel):

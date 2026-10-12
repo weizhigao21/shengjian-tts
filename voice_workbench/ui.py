@@ -82,6 +82,22 @@ def label(text, role=None):
     return control
 
 
+def generation_elapsed(item):
+    """Use one elapsed-time presentation for both audio lists."""
+    if item.get("cached"):
+        return "缓存", "复用已有音频，本次未进行推理。"
+    if item.get("status") in ("queued", "running", "draft", "cancelled"):
+        return "—", "生成完成后记录耗时，不包含排队时间。"
+    seconds = item.get("generation_seconds")
+    if seconds is None:
+        return "未记录", "此记录没有生成耗时数据，无法从音频时长推算。"
+    # Round before splitting to avoid displaying 1分 60.0秒 at a boundary.
+    tenths = round(max(0, seconds) * 10)
+    minutes, remainder = divmod(tenths, 600)
+    text = f"{remainder / 10:.1f} 秒" if not minutes else f"{minutes}分 {remainder / 10:04.1f}秒"
+    return text, f"生成耗时：{seconds:.3f} 秒\n从调用推理到音频校验完成，包含首次加载，不包含排队。重试显示本次尝试的耗时。"
+
+
 class ElidedLabel(QLabel):
     """A single status line that keeps long errors from resizing its layout."""
     def __init__(self, text="", parent=None):
@@ -101,7 +117,8 @@ class ElidedLabel(QLabel):
         self._fit_text()
 
     def _fit_text(self):
-        self.setFixedHeight(self.fontMetrics().height() + 2)
+        margins = self.contentsMargins()
+        self.setFixedHeight(self.fontMetrics().height() + margins.top() + margins.bottom() + 2)
         super().setText(self.fontMetrics().elidedText(
             self.full_text.replace("\n", " "), Qt.TextElideMode.ElideRight, self.contentsRect().width()))
 
@@ -123,6 +140,10 @@ class IgnoreWheel:
             self.lineEdit().installEventFilter(self)
 
     def eventFilter(self, watched, event):
+        from PyQt6 import sip
+        # Child teardown events can arrive after the owning spin box is deleted.
+        if sip.isdeleted(self):
+            return False
         if (event.type() == QEvent.Type.Wheel and isinstance(self, QAbstractSpinBox)
                 and watched is self.lineEdit()):
             self.wheelEvent(event)
@@ -470,6 +491,10 @@ QHeaderView::section { background:white; border-color:#eeeeee; }
 QTableWidget#modelTable::item { padding:4px 10px; }
 QHeaderView#modelSectionHeader::section { padding:4px 10px; }
 QTableWidget#modelTable QPushButton { padding:4px 10px; }
+QWidget#engineManagement { border-bottom:1px solid #eeeeee; }
+QWidget#engineManagement QProgressBar { min-height:3px; max-height:3px; border-radius:1px; }
+QWidget#engineManagement QProgressBar::chunk { background:#85877f; border-radius:1px; }
+QLabel#engineError { color:#a2462e; }
 QSplitter::handle { background:#eeeeee; }
 QSplitter::handle:vertical { height:1px; }
 QStatusBar { background:white; }
