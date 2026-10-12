@@ -124,7 +124,7 @@ class RecordButton(QAbstractButton):
 class Ticket(QFrame):
     def __init__(self, owner, item, reference=False):
         super().__init__()
-        from .gui_layout import model_label
+        from .desktop.model_labels import model_label
         self.item, self.owner, self.reference, self.hovered = item, owner, reference, False
         self.setFixedHeight(86)
         self.setMouseTracking(True)
@@ -366,7 +366,7 @@ class PaperDialog(QDialog):
 
 class PresetDialog(PaperDialog):
     def __init__(self, owner, voice=None):
-        from .gui_layout import model_key, model_label
+        from .desktop.model_labels import model_key, model_label
         super().__init__(owner, "编辑声音预设" if voice else "新建声音预设", 580)
         self.resize(580, 700 if self.base_requires_reference(voice or owner.current_voice()) else 560)
         self.owner, self.original = owner, voice
@@ -464,7 +464,7 @@ class ReferenceDialog(PaperDialog):
                 self.name.setText(Path(path).stem[:100])
 
     def save(self):
-        from .gui import checked
+        from .desktop.api_client import checked
         try:
             if not self.name.text().strip():
                 raise ValueError("请填写声音名称")

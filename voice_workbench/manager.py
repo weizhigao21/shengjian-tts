@@ -1,57 +1,21 @@
 from __future__ import annotations
-
 import hashlib
-import json
 import os
-from pathlib import Path
-import shutil
-import secrets
 import re
 import threading
 import time
-from time import perf_counter
 import traceback
+from pathlib import Path
+from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor
-
 from .config import ConfigStore, atomic_json, file_digest, voice_fingerprint
 from .errors import VoiceError, describe_error
 from .runner import check_voice, validate_wave
 from .audio_cpp import UnifiedRunner
 from .store import Store, WORKFLOW_TITLES
-from .model_info import MODES, model_ui, selected_mode
-
-
-class ServiceLock:
-    """同一数据目录只允许一个推理服务，避免双重恢复和重复抢占任务。"""
-    def __init__(self, root: Path):
-        root.mkdir(parents=True, exist_ok=True)
-        self.file = (root / "service.lock").open("a+b")
-        self.file.seek(0)
-        if os.name == "nt":
-            import msvcrt
-            if os.fstat(self.file.fileno()).st_size == 0:
-                self.file.write(b"0")
-                self.file.flush()
-            self.file.seek(0)
-            try:
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                self.file.close()
-                raise RuntimeError("此数据目录已有语音服务运行。请连接现有服务，或先停止它。")
-        else:
-            import fcntl
-            try:
-                fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                self.file.close()
-                raise RuntimeError("此数据目录已有语音服务运行")
-
-    def close(self):
-        if os.name == "nt":
-            import msvcrt
-            self.file.seek(0)
-            msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, 1)
-        self.file.close()
+from .model_info import MODES
+from .services.service_lock import ServiceLock
+from .services.generation import prepare_generation
 
 
 class Manager:
@@ -102,41 +66,9 @@ class Manager:
                 use_preset=True, record_only=False, delivery_ack=False):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
-        voice, _ = self.config.resolve(model_name, allow_missing_reference=overrides is not None and "reference_audio" in overrides)
-        if overrides and "request_options" in overrides:
-            changed_model = any(name in overrides and overrides[name] != voice.get(name) for name in ("family", "model_dir", "engine_executable"))
-            previous = {} if changed_model else voice.get("request_options", {})
-            overrides = {**overrides, "request_options": {**previous, **overrides["request_options"]}}
-        base = voice
-        voice = dict(voice, **(overrides or {}))
-        info = model_ui(voice)
-        from .generation_options import compatible_options
-        voice["request_options"], _ = compatible_options(voice, info)
-        check_voice(voice)
-        # Capture the source preset before seed materialization; snapshots never follow later edits.
-        from .schemas import VoiceConfig
-        before, after = VoiceConfig(**base).model_dump(), VoiceConfig(**voice).model_dump()
-        specs = info.get("generation_options", [])
-        defaults = {s["name"]: s.get("default") for s in specs}
-        for value in (before, after):
-            options, _ = compatible_options(value, info)
-            value["request_options"] = {**defaults, **options}
-            value["voice_mode"] = selected_mode(value, info)
-        changed_model = self.config.model_identity(base) != self.config.model_identity(voice)
-        changed_mode = selected_mode(base, model_ui(base)) != selected_mode(voice, info)
-        preset_used = use_preset and not base.get("is_template", False) and not changed_model and not changed_mode
-        provenance = {"preset_used": preset_used, "preset_id": base["id"] if preset_used else None,
-                      "preset_name": base["name"] if preset_used else None,
-                      "preset_modified": preset_used and before != after,
-                      "mode": selected_mode(voice, info)}
-        if voice.get("request_options", {}).get("seed") == -1:
-            # Persist the actual random seed so retry reuses it and a new take gets a new cache key.
-            voice["request_options"] = {**voice["request_options"], "seed": secrets.randbelow(2147483648)}
-        if provenance["mode"] in ("clone", "continuation") and voice.get("reference_audio"):
-            # A queued job must remain runnable after the caller moves its original audio.
-            target, _ = self.config.copy_reference_audio(voice["reference_audio"])
-            voice["reference_audio"] = str(target)
-        fingerprint = voice_fingerprint(voice)
+        prepared = prepare_generation(self.config, model_name, overrides=overrides,
+                                      use_preset=use_preset, validator=check_voice)
+        voice, fingerprint, provenance = prepared.voice, prepared.fingerprint, prepared.provenance
         with self.lock:
             if job_id:
                 existing = self.store.get(job_id)

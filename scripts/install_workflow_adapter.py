@@ -1,5 +1,6 @@
 """将兼容适配器接入指定工作流。精确替换、先备份，重复运行不会重复修改。"""
 import argparse
+import ast
 from pathlib import Path
 import shutil
 import sys
@@ -14,6 +15,35 @@ def replace_once(source, old, new):
     if source.count(old) != 1:
         raise RuntimeError("工作流源码与适配器预期不一致，未修改任何文件。")
     return source.replace(old, new, 1)
+
+
+def voice_picker_installed(source):
+    """Recognize complete discovery wiring independently of panel layout text."""
+    tree = ast.parse(source)
+    imported = any(isinstance(n, ast.ImportFrom) and n.module == "local_voice_picker"
+                   and any(a.name == "VoicePicker" and not a.asname for a in n.names) for n in tree.body)
+    if not imported:
+        return False
+    for cls in (n for n in tree.body if isinstance(n, ast.ClassDef)):
+        methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+        initialized = any(isinstance(n, ast.Assign)
+                          and any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                                  and t.value.id == "self" and t.attr == "local_voice_picker" for t in n.targets)
+                          and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)
+                          and n.value.func.id == "VoicePicker" for n in ast.walk(cls))
+        synced = set()
+        for name in ("_refresh_api_combo", "_on_api_changed"):
+            if name not in methods:
+                continue
+            for n in ast.walk(methods[name]):
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "sync_from_config" and isinstance(n.func.value, ast.Attribute)
+                        and n.func.value.attr == "local_voice_picker" and isinstance(n.func.value.value, ast.Name)
+                        and n.func.value.value.id == "self"):
+                    synced.add(name)
+        if initialized and synced == {"_refresh_api_combo", "_on_api_changed"}:
+            return True
+    return False
 
 
 def prepare(target):
@@ -97,15 +127,16 @@ def prepare(target):
     worker = worker.replace('cancel_check=lambda: self.stop_flag,\n                            )', 'cancel_check=lambda: self.stop_flag,\n                                workflow_context=self.workflow_context,\n                            )')
     panel_path = target / "src" / "widgets" / "tts_panel.py"
     panel = panel_path.read_text(encoding="utf-8-sig")
-    panel = replace_once(panel, 'from .common import EDGE_TTS_VOICES, RATE_PRESETS, VOLUME_PRESETS',
-                         'from .common import EDGE_TTS_VOICES, RATE_PRESETS, VOLUME_PRESETS\nfrom .local_voice_picker import VoicePicker')
-    marker = '        # 用 QStackedWidget 切换 edge/api 面板，避免窗口被撑大后不缩小'
-    panel = replace_once(panel, marker, '        self.local_voice_picker = VoicePicker(self)\n        api_layout.addWidget(self.local_voice_picker, 4, 0, 1, 4)\n\n' + marker)
-    marker = '        self.api_combo.blockSignals(False)\n\n    def _on_mode_changed(self):'
-    panel = replace_once(panel, marker,
-                         '        self.api_combo.blockSignals(False)\n        self.local_voice_picker.sync_from_config()\n\n    def _on_mode_changed(self):')
-    marker = '        self.config.tts_cfg["current_api_index"] = max(0, idx)\n        self._save()\n'
-    panel = replace_once(panel, marker, marker + '        self.local_voice_picker.sync_from_config()\n')
+    if not voice_picker_installed(panel):
+        panel = replace_once(panel, 'from .common import EDGE_TTS_VOICES, RATE_PRESETS, VOLUME_PRESETS',
+                             'from .common import EDGE_TTS_VOICES, RATE_PRESETS, VOLUME_PRESETS\nfrom .local_voice_picker import VoicePicker')
+        marker = '        # 用 QStackedWidget 切换 edge/api 面板，避免窗口被撑大后不缩小'
+        panel = replace_once(panel, marker, '        self.local_voice_picker = VoicePicker(self)\n        api_layout.addWidget(self.local_voice_picker, 4, 0, 1, 4)\n\n' + marker)
+        marker = '        self.api_combo.blockSignals(False)\n\n    def _on_mode_changed(self):'
+        panel = replace_once(panel, marker,
+                             '        self.api_combo.blockSignals(False)\n        self.local_voice_picker.sync_from_config()\n\n    def _on_mode_changed(self):')
+        marker = '        self.config.tts_cfg["current_api_index"] = max(0, idx)\n        self._save()\n'
+        panel = replace_once(panel, marker, marker + '        self.local_voice_picker.sync_from_config()\n')
     modifications = [(utils_path, utils), (bridge_path, bridge), (worker_path, worker), (panel_path, panel),
                      (steps / "local_voice_client.py", (ROOT / "integration" / "local_voice_client.py").read_text(encoding="utf-8")),
                      (target / "src" / "widgets" / "local_voice_picker.py", (ROOT / "integration" / "local_voice_picker.py").read_text(encoding="utf-8"))]

@@ -9,12 +9,14 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.19-E87936?style=flat-square" alt="版本 v0.7.19" />
+  <img src="https://img.shields.io/badge/版本-v0.7.20-E87936?style=flat-square" alt="版本 v0.7.20" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
 
 [快速开始](#快速开始) · [界面预览](#界面预览) · [工作流联动](#双语工作流联动) · [代码结构](#代码结构)
+
+[对话模式方案](docs/DIALOGUE_MODE_PLAN.md) · [代码架构](docs/ARCHITECTURE.md)
 
 [接口说明](API.md) · [UI 风格规范](UI_STYLE.md) · [更新记录](CHANGELOG.md) · [第三方许可](THIRD_PARTY_NOTICES.md)
 
@@ -22,7 +24,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.19 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.20 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -198,13 +200,14 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 ## 代码结构
 
-Python / PyQt6 + FastAPI + audio.cpp。界面与服务分进程运行，通过本机 HTTP 通信；任务管理器负责队列、配置快照、缓存与错误记录。
+Python / PyQt6 + FastAPI + audio.cpp。界面与服务分进程运行，通过本机 HTTP 通信。桌面按布局和交互职责拆分，接口按功能分组，生成配置准备与任务调度分别管理。详见[代码架构](docs/ARCHITECTURE.md)。
 
 ```mermaid
 flowchart LR
-    UI["桌面界面 · PyQt6"] -->|本机 HTTP| API["服务接口 · FastAPI"]
+    UI["desktop · 布局与控制"] -->|本机 HTTP| API["http_api · 分组路由"]
     WORKFLOW["双语音声工作流"] -->|读取预设 / 批量生成| API
-    API --> QUEUE["任务队列<br/>配置快照 · 缓存 · 错误记录"]
+    API --> QUEUE["manager · 任务队列<br/>调度 · 缓存 · 错误记录"]
+    QUEUE --> PREPARE["services · 配置准备<br/>音色快照 · 参数 · 种子"]
     QUEUE --> ENGINE["audio.cpp<br/>模型加载与推理"]
     QUEUE --> DATA["SQLite + 本地文件<br/>作品 · 预设 · 音频"]
     API --> DELIVERY["工作流音频交付<br/>确认接收后清理"]
@@ -219,19 +222,55 @@ flowchart LR
 ├─ voice_workbench/                 主程序
 │  ├─ __main__.py                   GUI / 服务命令行入口
 │  ├─ __init__.py                   版本号
-│  ├─ gui.py                       主窗口、异步 API 请求、作品操作与播放
-│  ├─ gui_layout.py                页面布局、侧栏与播放器组件组装
+│  ├─ desktop/                     桌面实现
+│  │  ├─ window.py                主窗口装配与 Qt 生命周期
+│  │  ├─ api_client.py            异步 HTTP 请求与响应解析
+│  │  ├─ constants.py             状态文字
+│  │  ├─ model_labels.py          模型身份及显示名称
+│  │  ├─ controllers/
+│  │  │  ├─ documents.py          作品列表、编辑、保存与导航
+│  │  │  ├─ generation.py         生成提交与模型参数交互
+│  │  │  ├─ playback.py           记录、试听、播放与导出
+│  │  │  ├─ service.py            服务连接、轮询与状态
+│  │  │  └─ voices.py             预设、参考声音与联动配置
+│  │  ├─ layout/
+│  │  │  ├─ workspace.py          主框架、侧栏与导航装配
+│  │  │  ├─ generation.py         文本编辑与参数面板
+│  │  │  ├─ player.py             播放器与记录浮层
+│  │  │  ├─ workflow.py           工作流页面
+│  │  │  └─ common.py             布局辅助组件
+│  │  └─ settings/
+│  │     ├─ panel.py              设置装配与刷新
+│  │     ├─ common.py             分组、表格及格式化
+│  │     ├─ models.py             模型管理
+│  │     ├─ engine.py             引擎与运行库管理
+│  │     ├─ audio.py              生成音频管理
+│  │     └─ preferences.py        常规与批量性能设置
+│  ├─ http_api/                    HTTP 路由
+│  │  ├─ context.py               共享请求上下文与作品查询
+│  │  ├─ system.py                健康、性能与服务控制
+│  │  ├─ models.py                模型与引擎接口
+│  │  ├─ voices.py                预设与参考声音接口
+│  │  ├─ jobs.py                  作品及生成接口
+│  │  ├─ audio.py                 音频与日志接口
+│  │  ├─ workflow.py              发现与临时音频交付
+│  │  └─ legacy.py                旧推理接口
+│  ├─ services/                    可复用应用服务
+│  │  ├─ generation.py            配置快照、参数、种子及来源准备
+│  │  └─ service_lock.py          数据目录服务实例锁
+│  ├─ gui.py                       桌面启动与旧导入的兼容入口
+│  ├─ gui_layout.py                旧布局与模型名称函数的兼容导出
 │  ├─ service_status.py            本地服务启动错误的中文诊断
 │  ├─ ui.py                        通用组件、浮层、波形、图标与样式
 │  ├─ model_controls.py            模型、生成方式、参考声音与运行环境控件
 │  ├─ generation_controls.py       根据参数定义构建高级设置控件
 │  ├─ library.py                   预设、参考声音列表与编辑弹窗
-│  ├─ settings.py                  模型、音频管理与批量性能页面
-│  ├─ api.py                       FastAPI 路由、服务生命周期与错误响应
+│  ├─ settings.py                  旧设置面板的兼容入口
+│  ├─ api.py                       FastAPI 装配、生命周期、错误与访问处理
 │  ├─ workflow.py                  工作流音色发现、可用状态与配置版本
 │  ├─ workflow_audio.py            工作流临时音频、接收确认、到期与历史清理
 │  ├─ schemas.py                   请求与声音配置的数据结构、字段校验
-│  ├─ manager.py                   任务排队、独立推理实例、恢复与缓存
+│  ├─ manager.py                   任务队列、锁、独立推理实例、恢复与缓存
 │  ├─ model_management.py          模型目录、下载续传、校验、导入与删除
 │  ├─ engine_management.py         统一推理引擎下载、解压、安装与切换
 │  ├─ engine_updates.py            官方正式版、Windows 下载包与摘要检查
@@ -262,7 +301,10 @@ flowchart LR
 │  ├─ check_engine_download.py     真实引擎下载、暂停续传、安装与推理检查
 │  ├─ render_readme.py             隔离演示数据，渲染 README 界面截图
 │  └─ check_packaged_app.py        发布包启动、引擎安装、真实配音与退出检查
-├─ docs/images/                    README 项目图标与界面截图
+├─ docs/
+│  ├─ ARCHITECTURE.md               模块职责、目录与依赖规则
+│  ├─ DIALOGUE_MODE_PLAN.md         对话模式方案（尚未实现）
+│  └─ images/                      README 项目图标与界面截图
 ├─ tests/                          服务、模型、任务、界面与资产管理测试
 ├─ data/                           源码默认数据；安装版使用用户目录下的同结构
 │  ├─ config.json                  模型路径、声音预设与参考声音配置
@@ -291,10 +333,10 @@ flowchart LR
 
 | 要修改什么 | 从这里开始 |
 | :--- | :--- |
-| 布局与组件 | `gui_layout.py`、`ui.py`；跨程序复用参考 [UI_STYLE.md](UI_STYLE.md) |
+| 布局与组件 | `desktop/layout/`、`desktop/controllers/`、`ui.py`；跨程序复用参考 [UI_STYLE.md](UI_STYLE.md) |
 | 模型与高级参数 | `model_info.py`、`generation_options.py`、后端适配 |
-| 任务与数据 | `manager.py`、`store.py` |
-| 工作流与接口 | `api.py`、`integration/`；字段说明见 [API.md](API.md) |
+| 任务与数据 | `services/generation.py`、`manager.py`、`store.py` |
+| 工作流与接口 | `http_api/`、`api.py`、`integration/`；字段说明见 [API.md](API.md) |
 
 <details>
 <summary>开发验证与截图更新</summary>

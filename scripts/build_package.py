@@ -12,13 +12,14 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
+DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md")
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
     "app", "workbench", "generation-list", "voice-library", "workflow", "models", "engine-settings", "audio-manager"))
 
 
 def copy_documentation(candidate):
     """Keep relative README images working in the unpacked program folder."""
-    for name in (*DOCUMENTATION, *DOCUMENTATION_ASSETS):
+    for name in (*DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS):
         destination = candidate / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, destination)
@@ -70,7 +71,7 @@ def distribution_archive(candidate, destination):
         with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(candidate.rglob('*')):
                 relative = path.relative_to(candidate)
-                included = relative.parts[0] in allowed or relative.as_posix() in DOCUMENTATION_ASSETS
+                included = relative.parts[0] in allowed or relative.as_posix() in (*DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS)
                 if path.is_file() and not path.is_symlink() and included:
                     archive.write(path, str(Path('声笺') / relative))
         os.replace(temporary, destination)
