@@ -389,6 +389,9 @@ class UiLayout:
         tools = QHBoxLayout()
         tools.addWidget(label("服务日志", "section"), 1)
         from .gui import checked
+        self.reconnect_button = button("重新连接", self.reconnect_service, "retry", "ghost")
+        self.reconnect_button.setToolTip("连接已有服务；服务已退出时在同一端口重新启动，不中断正在运行的服务。")
+        tools.addWidget(self.reconnect_button)
         tools.addWidget(button("释放引擎 / 显存", lambda: self.call(lambda c: checked(c.post("/engine/release")), lambda r: self.statusBar().showMessage(r["msg"], 8000)), "cpu"))
         tools.addWidget(button("打开日志目录", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.data_dir / "logs"))), "folder"))
         log_layout.addLayout(tools)

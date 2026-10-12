@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.16-E87936?style=flat-square" alt="版本 v0.7.16" />
+  <img src="https://img.shields.io/badge/版本-v0.7.17-E87936?style=flat-square" alt="版本 v0.7.17" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -22,7 +22,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.16 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.17 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -177,6 +177,8 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 失败片段显示阶段、原因与建议，修复后可只重试失败片段。错误日志位于 `logs/<任务ID>-<序号>.json`，引擎日志位于 `logs/audio-cpp.log`。默认服务地址为 `127.0.0.1:8765`，同一数据目录只允许一个服务实例。
 
+本地服务启动失败会显示端口或目录访问原因，悬停状态可看详情；在「工作流联动 → 服务日志」点击「重新连接」可重试。端口被限制时，从程序目录正常启动或使用 `--port <可用端口>`，并同步修改双语工作流链接；无需删除数据库或音色。
+
 </details>
 
 <details>
@@ -215,6 +217,7 @@ flowchart LR
 │  ├─ __init__.py                   版本号
 │  ├─ gui.py                       主窗口、异步 API 请求、作品操作与播放
 │  ├─ gui_layout.py                页面布局、侧栏与播放器组件组装
+│  ├─ service_status.py            本地服务启动错误的中文诊断
 │  ├─ ui.py                        通用组件、浮层、波形、图标与样式
 │  ├─ model_controls.py            模型、生成方式、参考声音与运行环境控件
 │  ├─ generation_controls.py       根据参数定义构建高级设置控件

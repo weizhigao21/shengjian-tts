@@ -22,6 +22,7 @@ from .ui import application_icon, generation_elapsed
 from .subtitles import parse_text, normalize_timestamp
 from .runner import validate_wave
 from .runtime import service_command
+from .service_status import startup_failure
 from .gui_layout import UiLayout
 
 STATES = {"draft": "草稿", "queued": "排队中", "running": "生成中", "done": "已完成", "failed": "失败", "cancelled": "已取消"}
@@ -66,6 +67,9 @@ class Window(UiLayout, QMainWindow):
         self.process = None
         self.process_log = None
         self.log_offset = 0
+        self.service_output_text = ""
+        self.connecting_service = False
+        self.service_launch_error = None
         self.owns_service = False
         self.voices = []
         self.references = []
@@ -105,7 +109,7 @@ class Window(UiLayout, QMainWindow):
         self.timer.timeout.connect(self.poll)
         self.timer.start(1800)
         if autostart:
-            self.call(lambda c: checked(c.get("/health")), self._existing_service, self._start_service)
+            self.reconnect_service()
 
     def call(self, action, success=None, failure=None):
         worker = ApiWorker(self.url, action)
@@ -127,6 +131,8 @@ class Window(UiLayout, QMainWindow):
         QMessageBox.warning(self, "操作未完成", str(message))
 
     def _existing_service(self, value):
+        self.connecting_service = False
+        self.reconnect_button.setEnabled(True)
         if value.get("service") != "local-voice-workbench":
             self.show_error(f"端口 {self.port} 被其他程序占用，请换一个端口启动。")
             return
@@ -139,11 +145,35 @@ class Window(UiLayout, QMainWindow):
         self.ready = True
         self.poll()
 
+    def reconnect_service(self):
+        if self.connecting_service or self.closing:
+            return
+        if self.owns_service and self.process and self.process.poll() is None:
+            self.poll()  # A running service must not be duplicated or interrupted.
+            return
+        if self.process and self.process.poll() is not None:
+            self.process = None
+            self.owns_service = False
+        self.connecting_service = True
+        self.service_launch_error = None
+        self.reconnect_button.setEnabled(False)
+        self.set_service_state("正在连接本地服务…", "connecting")
+        self.call(lambda c: checked(c.get("/health")), self._existing_service, self._start_service)
+
     def _start_service(self, message):
         try:
+            if self.process and self.process.poll() is None:
+                return
+            self.process = None
+            self.owns_service = False
             self.data_dir.mkdir(parents=True, exist_ok=True)
             (self.data_dir / "logs").mkdir(exist_ok=True)
+            if self.process_log:
+                self.process_log.close()
             self.process_log = (self.data_dir / "logs" / "service.log").open("ab")
+            self.process_log.seek(0, os.SEEK_END)
+            self.log_offset = self.process_log.tell()
+            self.service_output_text = ""
             environment = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYINSTALLER_RESET_ENVIRONMENT="1")
             self.process = subprocess.Popen(service_command(self.port, self.data_dir),
                 cwd=PROJECT_ROOT, stdout=self.process_log, stderr=subprocess.STDOUT, env=environment,
@@ -152,26 +182,43 @@ class Window(UiLayout, QMainWindow):
             self.set_service_state("服务启动中…", "connecting")
             QTimer.singleShot(200, self.poll)
         except Exception as exc:
+            self.service_launch_error = str(exc)
             self.service_log.append("启动进程失败：" + str(exc))
             self.set_service_state("启动失败 · 查看服务日志", "failed")
+            self.banner.setToolTip(str(exc))
             if self.process_log:
                 self.process_log.close()
+        finally:
+            self.connecting_service = False
+            self.reconnect_button.setEnabled(True)
 
     def _service_output(self):
         path = self.data_dir / "logs" / "service.log"
         if self.owns_service and path.is_file():
             with path.open("rb") as stream:
                 stream.seek(self.log_offset)
-                content = stream.read()
+                content = stream.read(65536)
                 self.log_offset = stream.tell()
             if content:
-                self.service_log.append(content.decode("utf-8", errors="replace").strip())
+                output = content.decode("utf-8", errors="replace")
+                self.service_output_text = (self.service_output_text + output)[-32768:]
+                self.service_log.append(output.strip())
+
+    def _service_failed(self):
+        self.ready = False
+        text, detail = startup_failure(self.service_output_text, self.port, self.process.returncode)
+        self.set_service_state(text, "failed")
+        self.banner.setToolTip(f"{text}\n{detail}\n{self.url}\n工作流联动 → 服务日志")
 
     def poll(self):
         self._service_output()
-        if self.owns_service and self.process and self.process.poll() is not None:
+        if self.service_launch_error and not self.connecting_service:
             self.ready = False
-            self.set_service_state(f"服务停止 · 退出码 {self.process.returncode}", "failed")
+            self.set_service_state("启动失败 · 查看服务日志", "failed")
+            self.banner.setToolTip(self.service_launch_error)
+            return
+        if self.owns_service and self.process and self.process.poll() is not None:
+            self._service_failed()
             return
         if self.polling:
             return
@@ -188,6 +235,10 @@ class Window(UiLayout, QMainWindow):
             return health, checked(client.get("/voices")), checked(client.get("/jobs")), job, checked(client.get("/references"))
         def failed(message):
             self.polling = False
+            if self.owns_service and self.process and self.process.poll() is not None:
+                self._service_output()
+                self._service_failed()
+                return
             self.ready = False
             self.set_service_state("未连接 · 查看服务日志", "failed")
             self.banner.setToolTip(str(message))
