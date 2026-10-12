@@ -109,15 +109,18 @@ class Manager:
             overrides = {**overrides, "request_options": {**previous, **overrides["request_options"]}}
         base = voice
         voice = dict(voice, **(overrides or {}))
-        check_voice(voice)
         info = model_ui(voice)
+        from .generation_options import compatible_options
+        voice["request_options"], _ = compatible_options(voice, info)
+        check_voice(voice)
         # Capture the source preset before seed materialization; snapshots never follow later edits.
         from .schemas import VoiceConfig
         before, after = VoiceConfig(**base).model_dump(), VoiceConfig(**voice).model_dump()
         specs = info.get("generation_options", [])
         defaults = {s["name"]: s.get("default") for s in specs}
         for value in (before, after):
-            value["request_options"] = {**defaults, **value.get("request_options", {})}
+            options, _ = compatible_options(value, info)
+            value["request_options"] = {**defaults, **options}
             value["voice_mode"] = selected_mode(value, info)
         changed_model = self.config.model_identity(base) != self.config.model_identity(voice)
         changed_mode = selected_mode(base, model_ui(base)) != selected_mode(voice, info)

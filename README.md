@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.18-E87936?style=flat-square" alt="版本 v0.7.18" />
+  <img src="https://img.shields.io/badge/版本-v0.7.19-E87936?style=flat-square" alt="版本 v0.7.19" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -22,7 +22,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.18 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.19 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -110,7 +110,7 @@ python -m voice_workbench serve --port 8765
 
 高级设置支持固定随机种子，鼠标滚轮只滚动页面。切换到与预设不同的模型或生成方式时，自动转为「无预设」；修改参数后重新保存，工作流才会使用新配置。
 
-展开高级设置可查看当前模型支持的参数；模型不支持高级参数时显示说明。模型列表使用较大的名称和较小的功能说明，方便浏览。
+展开高级设置可查看当前模型支持的参数，侧栏宽度保持固定。升级引擎后，已知旧参数会在生成时兼容转换，原预设保留；高级设置显示转换说明。模型列表使用较大的名称和较小的功能说明，方便浏览。
 
 ## 双语工作流联动
 

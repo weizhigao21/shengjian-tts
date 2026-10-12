@@ -159,9 +159,14 @@ class GenerationControls(QWidget):
         row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        # Each row sizes independently: the widest label and widest field may
+        # belong to different rows and must not combine into a larger form.
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
         layout.addStretch()
         layout.addWidget(field)
-        self.form.addRow(caption, row)
+        self.form.addRow(row)
 
     def values(self):
         values = dict(self.extra)

@@ -67,7 +67,8 @@ def test_seed_can_be_typed_randomized_and_keeps_its_value_on_refresh(tmp_path, q
     controls.advanced_toggle.setChecked(True)
     controls.show()
     seed = controls.generation_controls.fields["seed"]
-    assert controls.generation_controls.form.itemAt(0).widget().text() == "随机种子"
+    from PyQt6.QtWidgets import QLabel
+    assert controls.generation_controls.form.itemAt(0).widget().findChild(QLabel).text() == "随机种子"
     assert seed.random.isChecked() and not seed.number.isEnabled() and seed.value() == -1
     qtbot.mouseClick(seed.random, Qt.MouseButton.LeftButton)
     seed.number.lineEdit().selectAll()

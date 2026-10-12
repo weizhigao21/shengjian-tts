@@ -734,7 +734,9 @@ class UiLayout:
             expected = VoiceConfig(**preset).model_dump()
             expected["voice_mode"] = selected_mode(preset)
             defaults = {s["name"]: s["default"] for s in self.model_controls.generation_controls.specs}
-            expected["request_options"] = {**defaults, **expected["request_options"]}
+            from .generation_options import compatible_options
+            options, _ = compatible_options(expected, self.model_controls.info)
+            expected["request_options"] = {**defaults, **options}
             adjusted = any(expected.get(k) != v for k, v in self.model_controls.overrides().items())
             caption = friendly_name(preset) + (" · 已调整" if adjusted else "")
             self.voice_combo.setItemText(self.voice_combo.currentIndex(), caption)

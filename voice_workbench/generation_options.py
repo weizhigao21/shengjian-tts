@@ -73,12 +73,17 @@ def option_specs(family, declared=None, config=None):
             name = entry.get("name")
             if not name or name in RESERVED:
                 continue
-            base = fallback.get(name, {})
+            base = fallback.get(name, fallback.get("voxcpm2.chunk_strategy", {}) if name == "chunk_strategy" else {})
             spec = {**base, **entry}
             spec["label"] = base.get("label", entry.get("label", name))
             if spec.get("type") in ("string", "enum") and (spec.get("values") or spec.get("enum")):
                 spec["type"] = "enum"
-                spec["values"] = spec.get("values") or spec["enum"]
+                spec["values"] = entry.get("values") or entry.get("enum") or base.get("values")
+                translations = base.get("values", {})
+                if isinstance(translations, dict) and translations:
+                    choices = spec["values"]
+                    spec["values"] = {value: translations.get(value, choices.get(value, value) if isinstance(choices, dict) else value)
+                                      for value in choices}
             if spec.get("type") not in ("int", "float", "bool", "enum"):
                 continue
             if name == "seed":
@@ -100,9 +105,28 @@ def option_specs(family, declared=None, config=None):
     return result
 
 
+def compatible_options(voice, info):
+    """Translate known old contracts on a copy; keep unknown/invalid inputs strict."""
+    options = dict(voice.get("request_options", {}))
+    notes = []
+    if voice.get("backend") != "audio_cpp":
+        return options, notes
+    names = {s["name"] for s in info.get("generation_options", [])}
+    if (info.get("family") == "qwen3_tts" and info.get("generation_options_source") != "audio.cpp-v0.7.4-adapter"
+            and "text_chunk_mode" not in names and options.get("text_chunk_mode") == "default"):
+        options.pop("text_chunk_mode")
+        notes.append("旧预设的自动分段已交由当前引擎处理，其他参数保留。")
+    if info.get("family") == "voxcpm2":
+        for old, current in (("voxcpm2.chunk_strategy", "chunk_strategy"), ("chunk_strategy", "voxcpm2.chunk_strategy")):
+            if old in options and old not in names and current in names:
+                options.setdefault(current, options.pop(old))
+                notes.append("长文生成策略已适配当前引擎的参数名称。")
+    return options, notes
+
+
 def validate_options(voice, info):
     specs = {s["name"]: s for s in info.get("generation_options", [])}
-    options = voice.get("request_options", {})
+    options, _ = compatible_options(voice, info)
     for name, value in options.items():
         if name not in specs:
             raise VoiceError("UNSUPPORTED_GENERATION_OPTION", f"当前模型不支持生成参数：{name}", "切换模型后使用该模型的高级设置。", "参数检查")

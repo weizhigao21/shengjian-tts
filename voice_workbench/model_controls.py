@@ -4,11 +4,12 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-                            QButtonGroup, QHBoxLayout, QLineEdit, QPlainTextEdit, QSlider, QSpinBox, QVBoxLayout, QWidget)
+                            QButtonGroup, QHBoxLayout, QLineEdit, QPlainTextEdit, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from .model_info import KOKORO_LANGUAGES, LANGUAGES, MODES, model_ui, selected_mode
 from .ui import NoWheelComboBox, NoWheelSpinBox, button, icon, label
 from .generation_controls import GenerationControls
+from .generation_options import compatible_options
 
 
 class DescriptionInput(QPlainTextEdit):
@@ -66,8 +67,10 @@ class ModelControls(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.form = QFormLayout()
-        layout.addLayout(self.form)
+        self.form_body = QWidget()
+        self.form_body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.form = QFormLayout(self.form_body)
+        layout.addWidget(self.form_body)
         self.form.setContentsMargins(0, 0, 0, 0)
         self.form.setSpacing(8)
         self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
@@ -147,6 +150,10 @@ class ModelControls(QWidget):
         self.generation_controls = GenerationControls()
         self.generation_controls.changed.connect(self.changed)
         advanced_layout.addWidget(self.generation_controls)
+        self.compatibility_hint = label("", "hint")
+        self.compatibility_hint.setWordWrap(True)
+        self.compatibility_hint.hide()
+        advanced_layout.addWidget(self.compatibility_hint)
         self.runtime_toggle = button("模型与运行环境", lambda: None, "chevron", "disclosure")
         self.runtime_toggle.setCheckable(True)
         advanced_layout.addWidget(self.runtime_toggle)
@@ -247,7 +254,7 @@ class ModelControls(QWidget):
         self.reference_path = voice.get("reference_audio", "")
         self.refresh_references()
         self.reference_text.setPlainText(voice.get("reference_text", ""))
-        self.generation_controls.bind(info.get("generation_options", []), voice.get("request_options", {}))
+        self.bind_generation_options(voice, info)
         self.device.setCurrentIndex(max(0, self.device.findData(voice.get("device", "cuda"))))
         self.timeout.setValue(voice.get("timeout", 600))
         for name, field in self.assets.items():
@@ -284,6 +291,13 @@ class ModelControls(QWidget):
             visible = (name == "model_dir" and backend != "windows_sapi") or (name == "engine_executable" and backend == "audio_cpp") or (name in ("python", "repo_dir") and backend == "index_tts")
             self.advanced_form.setRowVisible(row, visible)
         self.asset_hint.setVisible(backend != "windows_sapi")
+
+    def bind_generation_options(self, voice, info):
+        options, notes = compatible_options(voice, info)
+        self.generation_controls.bind(info.get("generation_options", []), options)
+        self.compatibility_hint.setText("\n".join(notes))
+        self.compatibility_hint.setVisible(bool(notes))
+        self.advanced_toggle.setToolTip("\n".join(notes))
 
     def description_changed(self):
         if len(self.description.text()) > 500:
@@ -437,7 +451,7 @@ class ModelControls(QWidget):
             self.description.clear()
             self.emotion.clear()
             self.speed.setValue(1)
-        self.generation_controls.bind(info.get("generation_options", []), voice.get("request_options", {}) if old_family == info["family"] else {})
+        self.bind_generation_options(voice if old_family == info["family"] else {**voice, "request_options": {}}, info)
         self.apply_visibility()
         self.blockSignals(False)
         self.changed.emit()

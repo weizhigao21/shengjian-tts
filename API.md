@@ -57,6 +57,8 @@
 
 固定种子只适用于支持该参数的模型；`-1` 表示随机。提交返回 `job_id`、`generation`、`segment_indices` 和 `status_url`。查询时可使用 `GET /jobs/{id}?generation=<编号>`，只看当前批次。`use_preset:false` 表示未使用预设，默认值为 `true`。
 
+v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 `text_chunk_mode:default` 在新版不再提供此参数时省略；VoxCPM2 的 `voxcpm2.chunk_strategy` / `chunk_strategy` 按引擎契约转换。原预设及版本标签保留，新生成记录保存实际使用的参数；未知参数、非默认的旧分段方式及无效值仍报错。
+
 片段与生成音频列表中的 `generation_seconds` 为本次推理调用至 WAV 校验完成的耗时（秒），含首次模型加载，不含排队；`duration` 为音频时长。缓存复用时 `cached:1`、`generation_seconds:0`，旧记录或尚未推理时耗时为 `null`。失败重试记录本次尝试的耗时。
 
 双语工作流另加 `record_only:true`、`delivery_ack:true` 和同一次运行共用的 `workflow_key`。生成记录保存模型、文本、预设、参数、时间和错误，侧栏不创建作品。工作流适配器要求声笺 v0.7.11+。

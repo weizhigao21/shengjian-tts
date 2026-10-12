@@ -19,18 +19,20 @@ from .config import atomic_json
 from .errors import VoiceError
 from .runner import ProcessRunner, check_voice
 from .model_info import KOKORO_LANGUAGES, model_ui, selected_mode
+from .generation_options import compatible_options
 from .native_paths import NativePaths
 
 
 def build_native_request(voice, text):
-    options = dict(voice.get("request_options", {}))
+    info = model_ui({**voice, "backend": "audio_cpp"})
+    options, _ = compatible_options(voice, info)
     # The UI's 0/-1 sentinel values mean "use the model default / random".
     if options.get("text_chunk_size") == 0:
         options.pop("text_chunk_size")
     if options.get("seed") == -1:
         options.pop("seed")
     request = {"text": text, "options": options}
-    mode = selected_mode({**voice, "backend": "audio_cpp"})
+    mode = selected_mode({**voice, "backend": "audio_cpp"}, info)
     if voice.get("reference_audio") and mode in ("clone", "continuation"):
         request["voice_ref"] = voice["reference_audio"]
     family = voice["family"]
