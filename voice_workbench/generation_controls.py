@@ -78,7 +78,12 @@ class GenerationControls(QWidget):
     def bind(self, specs, values):
         self.blockSignals(True)
         while self.form.rowCount():
-            self.form.removeRow(0)
+            row = self.form.takeRow(0)
+            for item in (row.labelItem, row.fieldItem):
+                if item and item.widget():
+                    # Finish queued layout/focus events before destroying controls.
+                    item.widget().hide()
+                    item.widget().deleteLater()
         self.fields, self.specs = {}, specs
         self.extra = {k: v for k, v in values.items() if k not in {s['name'] for s in specs}}
         # Put the seed first so it is visible as soon as advanced settings open.

@@ -25,10 +25,22 @@
 | `PUT /models/runtime` | 设置本地统一引擎路径 |
 | `POST /models/runtime/download`、`POST /models/runtime/pause`、`POST /models/runtime/use` | 下载、暂停、启用引擎 |
 | `POST /models/runtime/verify` | 验证引擎、计算后端和 DLL 依赖 |
+| `POST /models/runtime/check-updates` | 检查 audio.cpp 官方正式版，不下载程序 |
+| `POST /models/runtime/upgrade`、`POST /models/runtime/rollback` | 升级或回退引擎，使用 `backend` 字段 |
+| `POST /models/check-updates` | 检查已知 GGUF 文件更新，使用 `source` 字段 |
+| `POST /models/{id}/update`、`POST /models/{id}/rollback` | 更新或回退已安装模型；`id` 来自 `installed`，更新请求携带 `source` |
 | `GET /settings/performance`、`PUT /settings/performance` | 读取、设置 `workflow_workers` 与 `cpu_threads` |
 | `POST /engine/release` | 释放空闲推理引擎 |
 
 引擎操作使用 `{"backend":"cuda"}` 或 `{"backend":"cpu"}`。`GET /models` 中的 `engine.options` 提供分项下载与验证状态。
+
+## 引擎与模型版本
+
+更新检查由用户触发，启动和轮询不访问上游。检查失败不移除当前引擎、模型或已知的更新信息；下载继续使用固定文件大小和 SHA-256 校验。
+
+`engine.options` 包含 `installed_version`、`recommended_version`、`update_available`、`can_rollback`，安装状态包含 `target_version` 与 `upgrade`。升级下载、校验和启动检查完成后显示 `waiting`，当前生成结束才切换；暂停等待启用后，可继续安装，重启后也可启用已安装的新引擎。
+
+`installed` 的模型记录提供 `catalog_id`、`revision`、`new_revision`、`update_available`、`update_status`、`can_rollback`。新版保存在 `models/versions/<摘要前缀>/`，校验包内模型能力后更新预设路径；旧文件保留，历史任务的旧路径仍可使用。回退需要旧文件仍存在，生成或下载期间拒绝回退。
 
 ## 生成与工作流
 

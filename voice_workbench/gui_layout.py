@@ -9,7 +9,7 @@ from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDoubleSpinBox,
     QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QProgressBar,
-    QScrollArea, QSlider, QSpinBox, QStackedWidget, QTableWidget,
+    QScrollArea, QSlider, QSpinBox, QStackedWidget, QTableWidget, QSizePolicy,
     QTextEdit, QVBoxLayout, QWidget)
 
 from . import __version__
@@ -308,6 +308,7 @@ class UiLayout:
         self.voice_combo.currentIndexChanged.connect(self.update_voice_summary)
         side.addWidget(self.voice_combo)
         self.model_controls = ModelControls()
+        self.model_controls.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.model_controls.changed.connect(self.refresh_main_settings)
         self.model_controls.preview_requested.connect(self.preview_reference)
         self.model_controls.choose_requested.connect(lambda: self.choose_reference(self.model_controls))

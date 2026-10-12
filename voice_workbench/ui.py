@@ -6,7 +6,7 @@ import sys
 import wave
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QCoreApplication, QPointF, QSize, Qt, QEvent, pyqtSignal
+from PyQt6.QtCore import QByteArray, QCoreApplication, QObject, QPointF, QSize, Qt, QEvent, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDoubleSpinBox, QFrame, QLabel,
@@ -132,23 +132,31 @@ class ElidedLabel(QLabel):
             self._fit_text()
 
 
+class SpinWheelFilter(QObject):
+    """Intercept only wheels, leaving Qt's native spin-box event filter intact."""
+    def __init__(self, spin):
+        super().__init__(spin)
+        import weakref
+        self.spin = weakref.ref(spin)
+
+    def eventFilter(self, watched, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        from PyQt6 import sip
+        spin = self.spin()
+        if spin is None or sip.isdeleted(spin) or sip.isdeleted(watched):
+            return False
+        spin.wheelEvent(event)
+        return True
+
+
 class IgnoreWheel:
     """Leave wheel events to the containing page, even when the control has focus."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if isinstance(self, QAbstractSpinBox):
-            self.lineEdit().installEventFilter(self)
-
-    def eventFilter(self, watched, event):
-        from PyQt6 import sip
-        # Child teardown events can arrive after the owning spin box is deleted.
-        if sip.isdeleted(self):
-            return False
-        if (event.type() == QEvent.Type.Wheel and isinstance(self, QAbstractSpinBox)
-                and watched is self.lineEdit()):
-            self.wheelEvent(event)
-            return True
-        return super().eventFilter(watched, event)
+            self._wheel_filter = SpinWheelFilter(self)
+            self.lineEdit().installEventFilter(self._wheel_filter)
 
     def wheelEvent(self, event):
         parent = self.parentWidget()
@@ -483,7 +491,7 @@ QPushButton[kind="nav"] { padding:8px 10px; }
 QPushButton[kind="nav"]:checked { background:#f0f0f0; border-color:transparent; font-weight:500; }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { padding:6px 8px; min-height:18px; border-radius:6px; }
 QPlainTextEdit { background:white; border:1px solid #e5e5e7; border-radius:6px; padding:8px; }
-QPushButton[kind="disclosure"] { text-align:left; border:0; border-top:1px solid #eeeeee; border-radius:0; padding:10px 0 5px; background:white; color:#444448; }
+QPushButton[kind="disclosure"] { text-align:left; border:0; border-top:1px solid #eeeeee; border-radius:0; padding:10px 0 5px; min-height:20px; max-height:20px; background:white; color:#444448; }
 QPushButton[kind="disclosure"]:hover { color:#18181a; }
 QWidget#segmented { background:#fafafa; border-color:#eeeeee; }
 QTableWidget::item:selected { background:#f1f1f1; }
@@ -491,7 +499,18 @@ QHeaderView::section { background:white; border-color:#eeeeee; }
 QTableWidget#modelTable::item { padding:4px 10px; }
 QHeaderView#modelSectionHeader::section { padding:4px 10px; }
 QTableWidget#modelTable QPushButton { padding:4px 10px; }
-QWidget#engineManagement { border-bottom:1px solid #eeeeee; }
+QLabel[role="settingsTitle"] { font-size:22px; font-weight:600; color:#18181a; }
+QLabel[role="settingLabel"] { font-weight:600; color:#18181a; }
+QPushButton[kind="settingsTab"] { border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 12px; background:white; color:#727277; }
+QPushButton[kind="settingsTab"]:checked { border-bottom:2px solid #18181a; color:#18181a; font-weight:600; }
+QPushButton[kind="settingsTab"]:hover { color:#18181a; }
+QFrame#settingsGroup { border:1px solid #eeeeee; border-radius:13px; background:white; }
+QFrame#settingsDivider { border:0; background:#eeeeee; }
+QWidget#engineManagement { background:white; }
+QWidget#engineSettingsContent, QWidget#generalSettings { background:white; }
+QWidget#settingsRow { background:transparent; }
+QTableWidget#modelTable { border:1px solid #eeeeee; border-radius:12px; }
+QWidget#inspectorBody QComboBox { min-height:22px; max-height:22px; }
 QWidget#engineManagement QProgressBar { min-height:3px; max-height:3px; border-radius:1px; }
 QWidget#engineManagement QProgressBar::chunk { background:#85877f; border-radius:1px; }
 QLabel#engineError { color:#a2462e; }

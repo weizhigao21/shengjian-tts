@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import shutil
 import stat
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -17,6 +18,7 @@ from .config import atomic_json, file_digest
 from .downloads import DownloadPaused, download_file
 from .errors import VoiceError
 from .engine_validation import CUDA_DLLS, clear_binary_cache, inspect_engine
+from .engine_updates import fetch_release, version_key
 
 
 class EngineManager:
@@ -28,12 +30,50 @@ class EngineManager:
         self.download_dir.mkdir(exist_ok=True)
         self.catalog = catalog or json.loads((Path(__file__).parent / "assets" / "engine_catalog.json").read_text(encoding="utf-8"))
         self.entries = {e["id"]: e for e in self.catalog["backends"]}
+        self.recommended = self.catalog.get("recommended", self.catalog)
+        self.update_error = ""
+        self.checking_updates = False
         self.client_factory = client_factory or (lambda: httpx.Client(follow_redirects=True, trust_env=False,
                                                  timeout=httpx.Timeout(15, connect=10, read=10)))
         self.lock = threading.RLock()
         self.states, self.threads, self.cancel = {}, {}, {}
         self.validation_cache = {}
         self.closed = False
+
+    def check_updates(self):
+        with self.lock:
+            if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
+                raise VoiceError("DOWNLOAD_BUSY", "请等待引擎安装结束后检查更新", stage="引擎更新")
+            self.checking_updates = True
+        try:
+            candidate = fetch_release(self.client_factory)
+            with self.lock:
+                if version_key(candidate["version"]) >= version_key(self.recommended["version"]):
+                    self.recommended = candidate
+                self.update_error = ""
+        except VoiceError as exc:
+            self.update_error = str(exc)
+            raise
+        finally:
+            self.checking_updates = False
+        return self.listing()
+
+    def rollback(self, backend):
+        with self.manager.lock, self.lock, self.config.lock:
+            if any(t.is_alive() for t in self.threads.values()):
+                raise VoiceError("DOWNLOAD_BUSY", "引擎安装结束后才能回退", stage="引擎回退")
+            value = self.config.read()
+            previous = value.get("native_engine_previous", {}).get(backend)
+            if not previous or not self._inspect(previous["path"], backend)["valid"]:
+                raise VoiceError("ENGINE_ROLLBACK_MISSING", "旧引擎不存在或验证失败", stage="引擎回退")
+            current = value.get("native_engines", {}).get(backend, {})
+            self.models.set_runtime(previous["path"], backend, previous.get("version"))
+            value = self.config.read()
+            value.setdefault("native_engines", {})[backend] = previous
+            value.setdefault("native_engine_previous", {})[backend] = current
+            atomic_json(self.config.path, value)
+            self.states.pop(backend, None)
+        return self.listing()
 
     def _inspect(self, path, backend):
         try:
@@ -77,6 +117,8 @@ class EngineManager:
         with self.lock:
             for backend, entry in self.entries.items():
                 installed = saved.get(backend, {})
+                if installed.get("version") == self.recommended["version"]:
+                    entry = next(e for e in self.recommended["backends"] if e["id"] == backend)
                 validation = self._find(backend)
                 path = validation["path"] if validation["valid"] or any(c["valid"] for c in validation["components"]) else installed.get("path", "")
                 exists = validation["valid"]
@@ -107,14 +149,31 @@ class EngineManager:
                         status = "paused" if amount else "available"
                     archives.append({"name": archive["name"], "size": archive["size"],
                                      "received": amount, "status": status, "verified": owned, "issues": component["issues"]})
+                actual_version = installed.get("version") or (self.config.read().get("native_engine_version") if path == runtime else None)
+                previous = self.config.read().get("native_engine_previous", {}).get(backend, {})
+                target = self.recommended
+                update_available = exists and version_key(target["version"]) > version_key(actual_version)
+                if state.get("upgrade"):
+                    target_entry = next((e for e in target["backends"] if e["id"] == backend), entry)
+                    total = sum(a["size"] for a in target_entry["archives"])
+                    archives = [{**a, "received": a["size"] if a["name"] in state.get("reused_archives", []) else self._received(a),
+                                 "verified": a["name"] in state.get("reused_archives", []),
+                                 "status": "done" if a["name"] in state.get("reused_archives", []) else state["status"] if state.get("archive") == a["name"] else "downloaded" if (self.download_dir / a["name"]).is_file() else "available"}
+                                for a in target_entry["archives"]]
                 options.append({"backend": backend, "name": entry["name"], "description": entry["description"],
-                                "version": self.catalog["version"], "size": total, "installed": exists,
-                                "path": path, "archives": archives, "verification": validation, **state})
+                                "version": actual_version or self.catalog["version"], "size": total, "installed": exists,
+                                "path": path, "archives": archives, "verification": validation,
+                                "installed_version": actual_version, "recommended_version": target["version"],
+                                "update_available": update_available,
+                                "rollback_version": previous.get("version"), "can_rollback": bool(previous.get("path") and Path(previous["path"]).is_file()
+                                    and (not previous.get("version") or version_key(previous["version"]) < version_key(actual_version))), **state})
         value = self.config.read()
         active_backend = value.get("native_engine_backend") or next((v.get("device", "cuda") for v in self.config.voices() if v.get("engine_executable") == runtime), "cuda")
         return {"ready": bool(runtime and self._inspect(runtime, active_backend)["valid"]), "path": runtime,
                 "directory": str(self.root), "supported": platform.system() == "Windows" and platform.machine().lower() in ("amd64", "x86_64"),
-                "options": options}
+                "options": options, "version": value.get("native_engine_version"),
+                "release": self.recommended.get("release"), "update_error": self.update_error,
+                "checking_updates": self.checking_updates}
 
     def _received(self, archive):
         try:
@@ -122,7 +181,7 @@ class EngineManager:
         except FileNotFoundError:
             return archive["size"] if (self.download_dir / archive["name"]).is_file() else 0
 
-    def start(self, backend):
+    def start(self, backend, upgrade=False):
         if backend not in self.entries:
             raise VoiceError("ENGINE_BACKEND_UNSUPPORTED", "请选择 NVIDIA CUDA 或 CPU 引擎", stage="引擎下载")
         if not self.listing()["supported"]:
@@ -130,12 +189,13 @@ class EngineManager:
         with self.lock:
             if self.closed or self.manager.stopping.is_set():
                 raise VoiceError("SERVICE_STOPPING", "服务正在停止", stage="引擎下载")
-            if any(t.is_alive() for t in self.threads.values()):
+            if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
                 raise VoiceError("DOWNLOAD_BUSY", "已有推理引擎正在下载或安装，请等待或暂停", stage="引擎下载")
             event = threading.Event()
             self.cancel[backend] = event
-            self.states[backend] = {"status": "downloading", "received": 0, "error": ""}
-            thread = threading.Thread(target=self._install, args=(backend, event), name="engine-download", daemon=True)
+            release = self.recommended if upgrade else self.catalog
+            self.states[backend] = {"status": "downloading", "received": 0, "error": "", "upgrade": upgrade, "target_version": release["version"]}
+            thread = threading.Thread(target=self._install, args=(backend, event, release, upgrade), name="engine-download", daemon=True)
             self.threads[backend] = thread
             thread.start()
             return dict(self.states[backend])
@@ -179,17 +239,32 @@ class EngineManager:
                             raise DownloadPaused()
                         output.write(chunk)
 
-    def _install(self, backend, event):
+    def _install(self, backend, event, release=None, upgrade=False):
         staging = None
         try:
             installed = self.config.read().get("native_engines", {}).get(backend, {})
             previous = self._find(backend)
-            if previous["valid"]:
+            release = release or self.catalog
+            entry = next(e for e in release["backends"] if e["id"] == backend)
+            history = self.config.read().get("native_engine_previous", {}).get(backend, {})
+            if upgrade and history.get("version") == release["version"] and self._inspect(history.get("path"), backend)["valid"]:
+                self._probe(Path(history["path"]))
+                with self.config.lock:
+                    value = self.config.read()
+                    current = value.get("native_engines", {}).get(backend, {})
+                    value.setdefault("native_engines", {})[backend] = history
+                    value.setdefault("native_engine_previous", {})[backend] = current
+                    atomic_json(self.config.path, value)
+                self._activate(backend, event, entry)
+                return
+            if previous["valid"] and (not upgrade or installed.get("version") == release["version"]):
                 self._activate(backend, event)
                 return
-            entry = self.entries[backend]
             staging = Path(tempfile.mkdtemp(prefix=".install-", dir=self.root))
-            owned = previous["components"]
+            owned = [dict(c) for c in previous["components"]]
+            if upgrade:
+                owned[0]["valid"] = False
+            self._state(backend, reused_archives=[a["name"] for i,a in enumerate(entry["archives"]) if owned[min(i,len(owned)-1)]["valid"]])
             # Reuse validated local components. Never write into the original installation.
             source = Path(previous["path"]).parent
             if any(c["valid"] for c in owned):
@@ -214,7 +289,7 @@ class EngineManager:
                     if "received" in changes:
                         changes["received"] += completed
                     self._state(backend, archive=archive["name"], **changes)
-                url = f"https://github.com/0xShug0/audio.cpp/releases/download/{self.catalog['version']}/{archive['name']}"
+                url = f"https://github.com/0xShug0/audio.cpp/releases/download/{release['version']}/{archive['name']}"
                 cached = self.download_dir / archive["name"]
                 try:
                     download_file(cached, archive, url, event, self.client_factory, progress)
@@ -246,15 +321,22 @@ class EngineManager:
                 raise ValueError("引擎验证未通过：" + "；".join(validation["issues"]))
             if event.is_set():
                 raise DownloadPaused()
-            directory = self.root / f"{self.catalog['version']}-{backend}-{uuid.uuid4().hex[:8]}"
+            if upgrade:
+                self._probe(executable)
+            directory = self.root / f"{release['version']}-{backend}-{uuid.uuid4().hex[:8]}"
             relative = executable.relative_to(staging)
             staging.rename(directory)
             staging = None
-            installed = {"path": str(directory / relative), "version": self.catalog["version"], "backend": backend}
+            installed = {"path": str(directory / relative), "version": release["version"], "backend": backend}
             with self.config.lock:
                 value = self.config.read()
+                old = value.get("native_engines", {}).get(backend)
+                if not old and previous["valid"]:
+                    old = {"path": previous["path"], "version": value.get("native_engine_version"), "backend": backend}
+                if old and old["path"] != installed["path"]:
+                    value.setdefault("native_engine_previous", {})[backend] = old
                 atomic_json(self.config.path, {**value, "native_engines": {**value.get("native_engines", {}), backend: installed}})
-            self._activate(backend, event)
+            self._activate(backend, event, entry)
         except DownloadPaused:
             self._state(backend, status="paused")
         except Exception as exc:
@@ -263,7 +345,15 @@ class EngineManager:
             if staging and staging.resolve() != self.root.resolve() and staging.resolve().is_relative_to(self.root.resolve()) and staging.name.startswith(".install-"):
                 shutil.rmtree(staging)
 
-    def _activate(self, backend, event):
+    def _probe(self, executable):
+        from .runtime import external_environment
+        with external_environment() as environment:
+            result = subprocess.run([str(executable), "--help"], capture_output=True, timeout=30, env=environment,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode:
+            raise ValueError("新引擎启动验证失败：" + (result.stderr or result.stdout).decode("utf-8", errors="replace")[-500:])
+
+    def _activate(self, backend, event, entry=None):
         self._state(backend, status="waiting")
         while not event.is_set():
             with self.manager.lock:
@@ -271,9 +361,9 @@ class EngineManager:
                     raise DownloadPaused()
                 if not self.manager.current:
                     self.use(backend)
-                    self._state(backend, status="done", error="")
+                    self._state(backend, status="done", error="", upgrade=False)
                     # Installed files are retained; complete ZIPs no longer need disk space.
-                    for archive in self.entries[backend]["archives"]:
+                    for archive in (entry or self.entries[backend])["archives"]:
                         try:
                             (self.download_dir / archive["name"]).unlink(missing_ok=True)
                         except OSError:

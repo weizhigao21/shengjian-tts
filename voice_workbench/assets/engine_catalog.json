@@ -1,6 +1,19 @@
 {
   "version": "v0.7.4",
   "release": "https://github.com/0xShug0/audio.cpp/releases/tag/v0.7.4",
+  "recommended": {
+    "version": "v0.9.1",
+    "release": "https://github.com/0xShug0/audio.cpp/releases/tag/v0.9.1",
+    "backends": [
+      {"id": "cuda", "name": "NVIDIA CUDA 12.4", "description": "保留旧引擎，可升级到 audio.cpp v0.9.1；复用验证通过的 CUDA 12.4 运行库。", "archives": [
+        {"name": "audio-v0.9.1-bin-windows-x64-cuda12.4.zip", "size": 462376707, "sha256": "f32a40f8fb14ac4772c9c25525f97715db228979178e51654da73aa65005c0ef"},
+        {"name": "audio-v0.9.1-cudart-windows-x64-cuda12.4.zip", "size": 607273675, "sha256": "8bfdce7cb00b5a51560b5ab0d444344d86a2f0d7e2727bb7f18c15ef4734451b"}
+      ]},
+      {"id": "cpu", "name": "CPU 便携版", "description": "保留旧引擎，可升级到 audio.cpp v0.9.1。", "archives": [
+        {"name": "audio-v0.9.1-bin-windows-x64-cpu-portable.zip", "size": 26951312, "sha256": "2fccc73dc97af84da1e81c3af545fa619348a46d023ea7d927ba80bc8680d2a0"}
+      ]}
+    ]
+  },
   "backends": [
     {
       "id": "cuda",

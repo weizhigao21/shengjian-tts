@@ -62,6 +62,7 @@ class Window(UiLayout, QMainWindow):
         self.port, self.data_dir = port, Path(data_dir).resolve()
         self.url = f"http://127.0.0.1:{port}"
         self.workers = set()
+        self.closing = False
         self.process = None
         self.process_log = None
         self.log_offset = 0
@@ -109,9 +110,15 @@ class Window(UiLayout, QMainWindow):
     def call(self, action, success=None, failure=None):
         worker = ApiWorker(self.url, action)
         self.workers.add(worker)
+        def guarded(callback):
+            def deliver(value):
+                from PyQt6 import sip
+                if not sip.isdeleted(self) and not self.closing:
+                    callback(value)
+            return deliver
         if success:
-            worker.result.connect(success)
-        worker.error.connect(failure or self.show_error)
+            worker.result.connect(guarded(success))
+        worker.error.connect(guarded(failure or self.show_error))
         worker.finished.connect(lambda: self.workers.discard(worker))
         worker.finished.connect(worker.deleteLater)
         worker.start()
@@ -126,7 +133,7 @@ class Window(UiLayout, QMainWindow):
         if Path(value["data_dir"]).resolve() != self.data_dir:
             self.show_error("该端口上的服务使用另一个数据目录。请用对应 --data-dir 启动界面。")
             return
-        if not {"reference_library", "generation_options", "work_generations", "asset_management", "voice_discovery", "engine_verification", "workflow_record_only"}.issubset(value.get("capabilities", [])):
+        if not {"reference_library", "generation_options", "work_generations", "asset_management", "voice_discovery", "engine_verification", "workflow_record_only", "engine_updates", "model_updates"}.issubset(value.get("capabilities", [])):
             self.show_error("本地服务仍是旧版本。请关闭旧程序及独立运行的语音服务，再重新启动。")
             return
         self.ready = True
@@ -759,6 +766,7 @@ class Window(UiLayout, QMainWindow):
             "model": voice["model_name"], "model_tag": voice["model_tag"], "status": "unknown"}, ensure_ascii=False, indent=2))
 
     def closeEvent(self, event):
+        self.closing = True
         self.timer.stop()
         self.document_timer.stop()
         self.clip_list.hide()

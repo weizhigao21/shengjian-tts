@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import sys
 import threading
+import time
 
 import httpx
 
@@ -15,6 +17,7 @@ from .config import atomic_json
 from .errors import VoiceError
 from .downloads import DownloadPaused, download_file, verify_file
 from .model_info import model_ui
+from .model_updates import fetch_model_updates
 from .schemas import VoiceConfig
 
 REVISION = "6d5436fc85f7a20c2e9f4e472b7f3a532f686444"
@@ -61,6 +64,21 @@ class ModelManager:
         self.root.mkdir(exist_ok=True)
         entries = catalog if catalog is not None else json.loads((Path(__file__).parent / "assets" / "model_catalog.json").read_text(encoding="utf-8"))
         self.catalog = {v["id"]: v for v in entries if v.get("family") in FAMILIES}
+        self.updates = {}
+        self.update_checked = None
+        self.update_error = ""
+        self.checking_updates = False
+        self.update_path = self.root / "updates.json"
+        try:
+            cached = json.loads(self.update_path.read_text(encoding="utf-8"))
+            for identity, entry in cached.get("entries", {}).items():
+                original = self.catalog.get(identity, {})
+                if original and all(entry.get(k) == original.get(k) for k in ("id", "family", "remotePath", "repo")):
+                    if re.fullmatch(r"[a-f0-9]{64}", entry.get("sha256", "")) and re.fullmatch(r"[a-f0-9]{40}", entry.get("revision", "")) and 0 < entry.get("size", 0) < 32 * 1024**3:
+                        self.updates[identity] = entry
+            self.update_checked = cached.get("checked")
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         self.lock = threading.RLock()
         self.downloads = {}
         self.threads = {}
@@ -69,6 +87,25 @@ class ModelManager:
         self.client_factory = client_factory or (lambda: httpx.Client(follow_redirects=True, timeout=httpx.Timeout(10, connect=5, read=5)))
         from .engine_management import EngineManager
         self.engines = EngineManager(self)
+
+    def check_updates(self, source="mirror"):
+        with self.lock:
+            if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
+                raise VoiceError("DOWNLOAD_BUSY", "请先完成或暂停模型下载再检查更新", stage="模型更新")
+            self.checking_updates = True
+        try:
+            candidates = fetch_model_updates(self.catalog, self.client_factory, source)
+            with self.lock:
+                self.updates = candidates
+                self.update_checked = time.time()
+                self.update_error = ""
+                atomic_json(self.update_path, {"checked": self.update_checked, "entries": candidates})
+        except VoiceError as exc:
+            self.update_error = str(exc)
+            raise
+        finally:
+            self.checking_updates = False
+        return self.listing()
 
     def runtime(self):
         value = self.config.read()
@@ -112,6 +149,10 @@ class ModelManager:
                     models[identity]["preset_count"] += 1
                 continue
             entry = next((e for e in self.catalog.values() if Path(e.get("remotePath", "")).name == path.name and e.get("remotePath") and e["family"] == voice.get("family")), {})
+            file_version = value.get("model_file_versions", {}).get(identity, {})
+            update = self.updates.get(entry.get("id"), {})
+            update_available = bool(update and update["sha256"] != file_version.get("sha256", entry.get("sha256")))
+            state = self.downloads.get(entry.get("id"), {}) if self.downloads.get(entry.get("id"), {}).get("update") else {}
             try:
                 size = path.stat().st_size if path.is_file() else 0
             except OSError:
@@ -119,10 +160,14 @@ class ModelManager:
             models[identity] = {"id": hashlib.sha256(identity.encode()).hexdigest()[:24],
                 "name": entry.get("name", path.stem), "precision": entry.get("precision", ""), "family": voice.get("family"),
                 "path": str(path), "size": size, "is_directory": path.is_dir(),
-                "exists": path.exists(), "managed": path.parent == self.root.resolve(),
+                "exists": path.exists(), "managed": path.is_relative_to(self.root.resolve()),
                 "can_delete_file": voice["backend"] == "audio_cpp" and path.suffix.lower() == ".gguf",
                 "preset_count": int(not template), "catalog_id": entry.get("id"),
-                "description": model_description(entry or voice)}
+                "description": model_description(entry or voice), "update_available": update_available,
+                "update_status": state.get("status"), "update_received": state.get("received", 0),
+                "update_error": state.get("error", ""), "update_size": update.get("size", 0),
+                "revision": file_version.get("revision", entry.get("revision") or REVISION) if entry else "",
+                "new_revision": update.get("revision", ""), "can_rollback": bool(file_version.get("previous_path") and Path(file_version["previous_path"]).is_file())}
         return list(models.values())
 
     def listing(self):
@@ -135,9 +180,11 @@ class ModelManager:
                 state = self.downloads.get(identity, {"status": "paused" if part.exists() else "available", "received": part.stat().st_size if part.exists() else 0})
                 if state["status"] == "done" and identity not in present:
                     state = {"status": "available", "received": 0}
-                available.append({**entry, "description": model_description(entry), **state,
+                available.append({**self.updates.get(identity, entry), "description": model_description(entry), **state,
                                   "installed": identity in present, "downloadable": bool(entry.get("remotePath"))})
-        return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing()}
+        return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing(),
+                "update_checked": self.update_checked, "update_error": self.update_error,
+                "checking_updates": self.checking_updates}
 
     def register(self, path, family=None):
         path = Path(path).resolve()
@@ -200,14 +247,14 @@ class ModelManager:
             return {"removed": identity, "file_deleted": delete_file}
 
     def start_download(self, identity, source="mirror"):
-        entry = self.catalog.get(identity)
+        entry = self.updates.get(identity) or self.catalog.get(identity)
         if entry is None:
             raise VoiceError("MODEL_NOT_FOUND", "模型不在下载目录中", stage="模型下载")
         url = download_url(entry, source)
         with self.lock:
             if self.closed:
                 raise VoiceError("SERVICE_STOPPING", "服务正在停止", stage="模型下载")
-            if any(t.is_alive() for t in self.threads.values()):
+            if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
                 raise VoiceError("DOWNLOAD_BUSY", "已有模型正在下载，请等待或暂停后再下载其他模型", stage="模型下载")
             event = threading.Event()
             self.cancel[identity] = event
@@ -235,14 +282,105 @@ class ModelManager:
     def _download(self, entry, url, event):
         identity = entry["id"]
         target = self.root / Path(entry["remotePath"]).name
+        if entry["sha256"] != self.catalog[identity]["sha256"]:
+            target = self.root / "versions" / entry["sha256"][:16] / target.name
+            target.parent.mkdir(parents=True, exist_ok=True)
         try:
             download_file(target, entry, url, event, self.client_factory, lambda **changes: self._state(identity, **changes))
             self.register(target, entry["family"])
+            self._remember_version(target, entry)
             self._state(identity, status="done", received=entry["size"], error="")
         except DownloadPaused:
             self._state(identity, status="paused")
         except Exception as exc:
             self._state(identity, status="paused" if event.is_set() else "failed", error="" if event.is_set() else str(exc))
+
+    def _remember_version(self, path, entry, previous=None):
+        with self.config.lock:
+            value = self.config.read()
+            value.setdefault("model_file_versions", {})[path_identity(path)] = {
+                "catalog_id": entry["id"], "sha256": entry["sha256"], "revision": entry.get("revision") or REVISION,
+                "previous_path": previous or ""}
+            atomic_json(self.config.path, value)
+
+    def start_update(self, identity, source="mirror"):
+        model = next((m for m in self.installed() if m["id"] == identity), None)
+        if not model or not model.get("catalog_id") or not model.get("update_available"):
+            raise VoiceError("MODEL_UPDATE_UNAVAILABLE", "请先检查更新；此模型没有可用的新版本", stage="模型更新")
+        entry = dict(self.updates[model["catalog_id"]])
+        url = download_url(entry, source)
+        with self.lock:
+            if self.closed or self.manager.stopping.is_set():
+                raise VoiceError("SERVICE_STOPPING", "服务正在停止", stage="模型更新")
+            if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
+                raise VoiceError("DOWNLOAD_BUSY", "已有模型正在下载，请等待或暂停", stage="模型更新")
+            event = threading.Event()
+            self.cancel[entry["id"]] = event
+            self.downloads[entry["id"]] = {"status": "downloading", "received": 0, "source": source, "error": "", "update": True}
+            thread = threading.Thread(target=self._update, args=(model, entry, url, event), name="model-update", daemon=True)
+            self.threads[entry["id"]] = thread
+            thread.start()
+            return dict(self.downloads[entry["id"]])
+
+    def _update(self, model, entry, url, event):
+        identity = entry["id"]
+        target = self.root / "versions" / entry["sha256"][:16] / Path(entry["remotePath"]).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            download_file(target, entry, url, event, self.client_factory, lambda **changes: self._state(identity, **changes))
+            from .model_info import _read_package, validate_capabilities
+            stat = target.stat()
+            actual = _read_package(str(target), stat.st_size, stat.st_mtime_ns).get("family")
+            if actual != model["family"]:
+                raise ValueError("新版模型的家族与原模型不一致，原模型已保留")
+            self._state(identity, status="waiting")
+            while not event.is_set():
+                with self.manager.lock, self.config.lock:
+                    if self.manager.stopping.is_set():
+                        raise DownloadPaused()
+                    if not self.manager.current:
+                        value = self.config.read()
+                        for group in ("voices", "model_templates"):
+                            for voice in value.get(group, []):
+                                if path_identity(voice.get("model_dir") or ".") == path_identity(model["path"]):
+                                    candidate = {**voice, "model_dir": str(target)}
+                                    validate_capabilities(candidate)
+                                    voice["model_dir"] = str(target)
+                                    voice["revision"] = entry["revision"][:12]
+                        self.manager.release_runners()
+                        value.setdefault("model_file_versions", {})[path_identity(target)] = {
+                            "catalog_id": identity, "sha256": entry["sha256"], "revision": entry["revision"], "previous_path": model["path"]}
+                        atomic_json(self.config.path, value)
+                        self._state(identity, status="done", received=entry["size"], error="", update=False)
+                        return
+                event.wait(.25)
+            raise DownloadPaused()
+        except DownloadPaused:
+            self._state(identity, status="paused")
+        except Exception as exc:
+            self._state(identity, status="paused" if event.is_set() else "failed", error="" if event.is_set() else str(exc))
+
+    def rollback(self, identity):
+        with self.manager.lock, self.config.lock:
+            if self.manager.current or any(t.is_alive() for t in self.threads.values()):
+                raise VoiceError("ENGINE_BUSY", "请先完成生成或模型下载再回退", stage="模型回退")
+            model = next((m for m in self.installed() if m["id"] == identity), None)
+            value = self.config.read()
+            metadata = value.get("model_file_versions", {}).get(path_identity(model["path"]), {}) if model else {}
+            previous = metadata.get("previous_path")
+            if not previous or not Path(previous).is_file():
+                raise VoiceError("MODEL_ROLLBACK_MISSING", "没有可用的旧模型文件", stage="模型回退")
+            from .model_info import validate_capabilities
+            for group in ("voices", "model_templates"):
+                for voice in value.get(group, []):
+                    if path_identity(voice.get("model_dir") or ".") == path_identity(model["path"]):
+                        candidate = {**voice, "model_dir": previous}
+                        validate_capabilities(candidate)
+                        voice["model_dir"] = previous
+                        voice["revision"] = value.get("model_file_versions", {}).get(path_identity(previous), {}).get("revision", REVISION)[:12]
+            self.manager.release_runners()
+            atomic_json(self.config.path, value)
+        return self.listing()
 
     def close(self):
         self.engines.close()

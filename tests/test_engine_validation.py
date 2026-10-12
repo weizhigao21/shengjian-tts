@@ -147,7 +147,8 @@ def test_verify_api_and_ui_show_owned_and_report_missing_component(tmp_path, qtb
         panel = window.settings
         panel.model_data = client.get("/models").json()
         panel.render_engine()
-        assert panel.engine_download.text() == "已拥有" and not panel.engine_download.isEnabled()
+        assert "已拥有" in panel.engine_status.text()
+        assert panel.engine_download.text() == "升级到 v0.9.1" and panel.engine_download.isEnabled()
         assert [row[-1].text() for row in panel.engine_asset_rows] == ["已拥有", "已拥有"]
         def immediate(action, success=None, failure=None):
             value = action(client)

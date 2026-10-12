@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.15-E87936?style=flat-square" alt="版本 v0.7.15" />
+  <img src="https://img.shields.io/badge/版本-v0.7.16-E87936?style=flat-square" alt="版本 v0.7.16" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -22,7 +22,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.15 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.16 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -47,7 +47,7 @@
     </td>
     <td width="50%" align="center">
       <a href="docs/images/models.png"><img src="docs/images/models.png" width="100%" alt="模型管理：验证引擎、查看和下载模型" /></a>
-      <br /><b>模型管理</b><br /><sub>引擎验证与模型下载放在同一页</sub>
+      <br /><b>模型管理</b><br /><sub>下载、导入与检查模型更新</sub>
     </td>
   </tr>
   <tr>
@@ -75,7 +75,7 @@
 
 **Windows 安装版**：解压程序包，双击 `声笺.exe`。保留同目录的 `声笺服务.exe` 和完整 `_internal/`。
 
-1. **准备模型**：进入「设置 → 模型管理」，下载或导入兼容 GGUF，安装推理引擎。已有引擎验证通过后显示「已拥有」。
+1. **准备模型**：进入「设置 → 模型」，下载或导入兼容 GGUF，安装推理引擎。已有引擎验证通过后显示「已拥有」。
 2. **生成声音**：在「语音创作」输入文本，选择模型和生成方式，填写参考声音或声音描述，点击「开始生成」。
 3. **保存预设**：保存常用声音，下次创作或双语工作流可以直接选用。导入的参考音频会复制到数据目录。
 
@@ -99,7 +99,7 @@ python -m voice_workbench serve --port 8765
 
 ### 模型能力
 
-界面读取实际模型包的配置，按能力显示可用功能。统一推理引擎为 audio.cpp v0.7.4，模型需使用兼容包。
+界面读取实际模型包的配置，按能力显示可用功能。统一推理引擎为 [audio.cpp](https://github.com/0xShug0/audio.cpp)，支持 v0.7.4，并可在「设置 → 推理引擎」升级到 v0.9.1。模型需使用兼容包。
 
 | 模型 | 生成方式 |
 | :--- | :--- |
@@ -141,6 +141,16 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 </details>
 
+<details>
+<summary>推理引擎升级与模型更新</summary>
+
+![推理引擎设置：计算设备、版本检查、升级与回退](docs/images/engine-settings.png)
+
+- **引擎**：点击「检查更新」读取官方正式版；新版下载、校验和启动验证通过后，等待当前生成结束再启用。已有 CUDA 12.4 运行库可复用，旧引擎保留，可点击「回退」。检查失败时仍可使用已内置的正式版本。
+- **模型**：点击「检查模型更新」，比较固定仓库提交、文件大小和 SHA-256。有更新时单独下载新版，校验模型和预设能力后切换；保留声音预设和旧文件，模型详情菜单提供回退。未匹配下载目录的本地模型继续手动导入。
+
+</details>
+
 ## 常用说明
 
 <details>
@@ -148,7 +158,7 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 - 未命名作品自动使用「创建时间 · 文本开头 5 个字」，可重命名、删除和撤销。
 - 两处音频列表都显示生成耗时：包含推理时的模型加载，不含排队；重试显示本次耗时，缓存显示「缓存」，旧记录显示「未记录」。
-- 在「设置 → 生成音频管理」右键选择「添加为参考音频」，自动带入音频与文本。参考音频需为 1–60 秒 WAV，保存独立副本，删除原生成音频后仍可使用。
+- 在「设置 → 生成音频」右键选择「添加为参考音频」，自动带入音频与文本。参考音频需为 1–60 秒 WAV，保存独立副本，删除原生成音频后仍可使用。
 
 </details>
 
@@ -217,6 +227,8 @@ flowchart LR
 │  ├─ manager.py                   任务排队、独立推理实例、恢复与缓存
 │  ├─ model_management.py          模型目录、下载续传、校验、导入与删除
 │  ├─ engine_management.py         统一推理引擎下载、解压、安装与切换
+│  ├─ engine_updates.py            官方正式版、Windows 下载包与摘要检查
+│  ├─ model_updates.py             固定模型提交、文件大小与 SHA-256 发现
 │  ├─ engine_validation.py         Windows x64 文件头、计算后端与 DLL 依赖验证
 │  ├─ downloads.py                 模型和引擎共用的续传与文件校验
 │  ├─ audio_cpp.py                 统一后端选择、原生引擎进程与请求适配

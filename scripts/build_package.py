@@ -13,7 +13,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
-    "app", "workbench", "generation-list", "voice-library", "workflow", "models", "audio-manager"))
+    "app", "workbench", "generation-list", "voice-library", "workflow", "models", "engine-settings", "audio-manager"))
 
 
 def copy_documentation(candidate):

@@ -68,7 +68,7 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     @app.get("/")
     @app.get("/health")
     def health(request: Request):
-        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "workflow_record_only", "engine_download", "engine_verification"],
+        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "workflow_record_only", "engine_download", "engine_verification", "engine_updates", "model_updates"],
                 "status": "running", "data_dir": str(manager(request).root), "engine": manager(request).models.engines.listing(), **manager(request).status()}
 
     @app.get("/workflow")
@@ -107,6 +107,14 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     def import_model(body: ModelImport, request: Request):
         return manager(request).models.register(body.path)
 
+    @app.post("/models/check-updates")
+    def check_model_updates(body: ModelDownload, request: Request):
+        return manager(request).models.check_updates(body.source)
+
+    @app.post("/models/{model_id}/update", status_code=202)
+    def update_model(model_id: str, body: ModelDownload, request: Request):
+        return manager(request).models.start_update(model_id, body.source)
+
     @app.put("/models/runtime")
     def runtime(body: ModelImport, request: Request):
         return manager(request).models.set_runtime(body.path)
@@ -127,6 +135,18 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     def verify_runtime(body: EngineDownload, request: Request):
         return manager(request).models.engines.verify(body.backend)
 
+    @app.post("/models/runtime/check-updates")
+    def check_runtime_updates(request: Request):
+        return manager(request).models.engines.check_updates()
+
+    @app.post("/models/runtime/upgrade", status_code=202)
+    def upgrade_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.start(body.backend, upgrade=True)
+
+    @app.post("/models/runtime/rollback")
+    def rollback_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.rollback(body.backend)
+
     @app.post("/models/{model_id}/download", status_code=202)
     def download_model(model_id: str, body: ModelDownload, request: Request):
         return manager(request).models.start_download(model_id, body.source)
@@ -134,6 +154,10 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     @app.post("/models/{model_id}/pause")
     def pause_download(model_id: str, request: Request):
         return manager(request).models.pause(model_id)
+
+    @app.post("/models/{model_id}/rollback")
+    def rollback_model(model_id: str, request: Request):
+        return manager(request).models.rollback(model_id)
 
     @app.post("/models/{model_id}/remove")
     def remove_model(model_id: str, body: ModelRemoval, request: Request):

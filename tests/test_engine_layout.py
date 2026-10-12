@@ -19,6 +19,8 @@ def test_engine_asset_labels_stay_inside_scroll_view_with_full_right_gutter(tmp_
     panel.timer.stop()
     window.resize(width,height)
     window.set_page(3)
+    panel.set_section(4)
+    panel.engine_details_toggle.setChecked(True)
     window.show()
     qtbot.wait(20)
     rects = []
@@ -30,7 +32,7 @@ def test_engine_asset_labels_stay_inside_scroll_view_with_full_right_gutter(tmp_
                 {**a,'received':a['size'],'status':status} for a in entry['archives']]}]}}
         panel.render_engine()
         qtbot.wait(20)
-        viewport = panel.models_scroll.viewport()
+        viewport = panel.engine_scroll.viewport()
         for row in panel.engine_asset_rows:
             for control in row:
                 point = viewport.mapFromGlobal(control.mapToGlobal(QPoint()))
