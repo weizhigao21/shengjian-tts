@@ -25,7 +25,15 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     fixture = Path(__file__).parent/'fixtures/http_contract.json'
     expected = json.loads(fixture.read_text(encoding='utf-8'))
     data = tmp_path/'unused-data'
-    assert without_unstable_metadata(create_app(data).openapi()) == without_unstable_metadata(expected)
+    actual = create_app(data).openapi()
+    # v0.7.21 adds optional mention metadata and per-segment presets. Keep the
+    # v0.7.20 fixture frozen to protect every previously published field/route.
+    schemas = actual['components']['schemas']
+    schemas.pop('ScriptMention')
+    for name, field in [('SegmentInput', 'voice_id'), ('JobInput', 'script_mentions'),
+                        ('DocumentInput', 'script_mentions')]:
+        schemas[name]['properties'].pop(field)
+    assert without_unstable_metadata(actual) == without_unstable_metadata(expected)
     assert not data.exists()  # Creating an app does not start inference or create user data.
 
 

@@ -6,6 +6,7 @@ from ..runner import check_voice
 from ..model_info import model_ui, selected_mode
 from ..generation_options import compatible_options
 from ..schemas import VoiceConfig
+from ..errors import VoiceError
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,24 @@ class PreparedGeneration:
     voice: dict
     fingerprint: str
     provenance: dict
+
+
+def prepare_segments(config, model_name, segments, overrides=None, use_preset=True, validator=None):
+    """Validate all paragraph voices before creating one atomic generation batch.
+
+    Explicit mentions use the saved preset, without the inspector's unrelated
+    overrides. Each segment retains its own immutable-at-submission snapshot.
+    """
+    explicit = {s["voice_id"] for s in segments if s.get("voice_id")}
+    presets = {v["id"] for v in config.voices() if not v.get("is_template")}
+    if missing := explicit - presets:
+        raise VoiceError("VOICE_NOT_FOUND", "@ 指定的声音预设不存在：" + ", ".join(sorted(missing)),
+                         "请重新输入 @ 选择声音预设。", "提交")
+    snapshots = {identity: prepare_generation(config, identity, validator=validator) for identity in sorted(explicit)}
+    default = (prepare_generation(config, model_name, overrides=overrides, use_preset=use_preset, validator=validator)
+               if any(not s.get("voice_id") for s in segments) else snapshots[segments[0]["voice_id"]])
+    result = [{**s, "prepared_voice": snapshots[s["voice_id"]] if s.get("voice_id") else default} for s in segments]
+    return default, result
 
 
 def prepare_generation(config: ConfigStore, model_name: str, overrides=None, use_preset=True, validator=None):

@@ -36,7 +36,7 @@ flowchart TD
 5. 提取生成配置准备和服务实例锁，供现有提交与后续对白提交复用。
 6. 更新代码目录说明和分发文档，验证源码与文件夹包入口。
 
-本轮不新增对话界面，不变更数据库、声音预设格式、HTTP 路径或播放规则。配置兼容、工作流音频清理和更新备份逻辑继续执行现有规则。
+v0.7.20 的结构整理保持原行为。v0.7.21 新增独立 `@` 编辑组件及纯文本解析服务，生成准备支持逐片段声音；作品增加可选 `script_mentions` 列，迁移前自动备份。HTTP 路径、声音预设及播放规则继续保留，旧客户端可沿用原请求字段。
 
 ## 验证
 
@@ -51,6 +51,8 @@ voice_workbench/
 │  ├─ api_client.py            异步 HTTP 请求与响应解析
 │  ├─ constants.py             界面状态文字
 │  ├─ model_labels.py          模型身份与显示名称
+│  ├─ components/              可复用编辑组件
+│  │  └─ voice_mentions.py     @ 预设列表、标签身份及保存恢复
 │  ├─ controllers/             按职责组织的交互控制
 │  │  ├─ documents.py          作品列表、文稿、保存及导航
 │  │  ├─ generation.py         生成提交、模型与预设参数交互
@@ -81,6 +83,7 @@ voice_workbench/
 │  └─ legacy.py                旧 infer_single / infer_bulk 接口
 ├─ services/                   可复用应用服务
 │  ├─ generation.py            PreparedGeneration 与生成配置准备
+│  ├─ script_voices.py         行首音色解析、UTF-16 位置与逐段配置
 │  └─ service_lock.py          同一数据目录的服务实例锁
 ├─ api.py                      应用工厂、生命周期、错误与访问处理
 ├─ manager.py                  队列、锁、推理调度、缓存及恢复

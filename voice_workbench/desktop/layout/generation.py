@@ -4,8 +4,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QWidget,
 )
-from ...ui import ElidedLabel, ScriptEditor, button, label
+from ...ui import ElidedLabel, button, label
 from ...model_controls import ModelControls
+from ..components.voice_mentions import PresetScriptEditor
 
 
 class GenerationLayout:
@@ -33,10 +34,10 @@ class GenerationLayout:
         import_control.setToolTip("导入字幕或文本")
         overline.addWidget(import_control)
         editor.addLayout(overline)
-        self.text_edit = ScriptEditor()
+        self.text_edit = PresetScriptEditor()
         self.text_edit.setObjectName("scriptEditor")
         self.text_edit.setAcceptRichText(False)
-        self.text_edit.setPlaceholderText("从第一句话开始…")
+        self.text_edit.setPlaceholderText("从第一句话开始…\n在行首输入 @ 选择声音预设，空格后输入正文")
         self.text_edit.textChanged.connect(self.update_script_stats)
         self.text_edit.textChanged.connect(self.document_changed)
         editor.addWidget(self.text_edit, 1)

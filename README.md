@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.20-E87936?style=flat-square" alt="版本 v0.7.20" />
+  <img src="https://img.shields.io/badge/版本-v0.7.21-E87936?style=flat-square" alt="版本 v0.7.21" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -24,7 +24,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.20 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.21 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -32,6 +32,7 @@
 | :--- | :--- |
 | **语音创作** | 输入文本或导入 TXT / LRC / SRT / VTT，按片段生成，结果追加到当前作品。 |
 | **按模型配置** | 根据模型实际能力显示音色、克隆、声音设计和高级参数，支持固定随机种子。 |
+| **多音色文本** | 每行开头输入 `@`，选择预设后输入正文；未标记的行沿用右侧设置，整批生成保存在同一作品。 |
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |
 | **音频管理** | 生成列表默认最新在前，可切换排序；手动试听单条后停止，支持查看详情和批量删除。 |
 | **模型与引擎** | 下载、导入和删除 GGUF，安装并验证推理引擎与运行库。 |
@@ -227,6 +228,8 @@ flowchart LR
 │  │  ├─ api_client.py            异步 HTTP 请求与响应解析
 │  │  ├─ constants.py             状态文字
 │  │  ├─ model_labels.py          模型身份及显示名称
+│  │  ├─ components/
+│  │  │  └─ voice_mentions.py     @ 预设选择、标签身份与恢复
 │  │  ├─ controllers/
 │  │  │  ├─ documents.py          作品列表、编辑、保存与导航
 │  │  │  ├─ generation.py         生成提交与模型参数交互
@@ -257,6 +260,7 @@ flowchart LR
 │  │  └─ legacy.py                旧推理接口
 │  ├─ services/                    可复用应用服务
 │  │  ├─ generation.py            配置快照、参数、种子及来源准备
+│  │  ├─ script_voices.py         行首音色解析与逐段生成配置
 │  │  └─ service_lock.py          数据目录服务实例锁
 │  ├─ gui.py                       桌面启动与旧导入的兼容入口
 │  ├─ gui_layout.py                旧布局与模型名称函数的兼容导出

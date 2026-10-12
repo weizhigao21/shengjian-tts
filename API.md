@@ -57,6 +57,10 @@
 
 固定种子只适用于支持该参数的模型；`-1` 表示随机。提交返回 `job_id`、`generation`、`segment_indices` 和 `status_url`。查询时可使用 `GET /jobs/{id}?generation=<编号>`，只看当前批次。`use_preset:false` 表示未使用预设，默认值为 `true`。
 
+v0.7.21 起，片段可选填 `voice_id` 指定已有声音预设：`{"text":"这句话使用另一个音色","voice_id":"speaker-id"}`。该片段使用预设保存的完整配置，不叠加整批 `overrides`；未指定的片段沿用原整批配置。不同音色仍按原文顺序在一个作品、一个批次中生成，片段 `voice` / `provenance` 记录实际配置。客户端需先检查 `/health` 中的 `script_voice_mentions` 能力。
+
+作品创建、保存及生成请求支持可选 `script_mentions`：`[{"start":0,"end":3,"preset_id":"speaker-id","label":"御姐"}]`，用于重开编辑器时恢复 `@御姐` 的身份，偏移按 Qt UTF-16 单位计算。此字段仅保存编辑标签；推理以片段 `voice_id` 为准。旧客户端无需新增字段，普通文稿更新未携带标签时会清空旧标签，避免误用声音。
+
 v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 `text_chunk_mode:default` 在新版不再提供此参数时省略；VoxCPM2 的 `voxcpm2.chunk_strategy` / `chunk_strategy` 按引擎契约转换。原预设及版本标签保留，新生成记录保存实际使用的参数；未知参数、非默认的旧分段方式及无效值仍报错。
 
 片段与生成音频列表中的 `generation_seconds` 为本次推理调用至 WAV 校验完成的耗时（秒），含首次模型加载，不含排队；`duration` 为音频时长。缓存复用时 `cached:1`、`generation_seconds:0`，旧记录或尚未推理时耗时为 `null`。失败重试记录本次尝试的耗时。

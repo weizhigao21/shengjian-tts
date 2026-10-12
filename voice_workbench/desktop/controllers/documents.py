@@ -85,6 +85,7 @@ class DocumentController:
         self.title_edit.setText(job["title"])
         self.text_edit.setPlainText(job.get("script") if job.get("script") is not None else
             "\n".join((f"[{s['timestamp']}]" if s["timestamp"] else "") + s["text"] for s in job["segments"]))
+        self.text_edit.restore_mentions(job.get("script_mentions"))
         self.loading_document = False
         self.document_dirty = False
         base = next((v for v in self.voices if v["id"] == job["voice"].get("id") and model_key(v) == model_key(job["voice"])), None)
@@ -189,7 +190,8 @@ class DocumentController:
         if not self.document_dirty or not self.selected_job or not self.ready or self.document_save_running or self.submitting:
             return
         target = self.selected_job
-        body = {"title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText()}
+        body = {"title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText(),
+                "script_mentions": self.text_edit.mentions()}
         self.document_dirty = False
         self.document_save_running = True
         def finished(_=None):
@@ -269,8 +271,11 @@ class DocumentController:
         from ...subtitles import parse_text
         text = self.text_edit.toPlainText()
         try:
-            count = len(parse_text(text)) if text.strip() else 0
+            segments = self.text_edit.segments() if text.strip() else []
+            count = len(segments)
             self.script_stats.setText(f"{len(text.strip())} 字  ·  {count} 个片段")
-        except ValueError:
-            self.script_stats.setText(f"{len(text.strip())} 字  ·  请检查字幕格式")
+            self.script_stats.setToolTip("")
+        except ValueError as exc:
+            self.script_stats.setText(f"{len(text.strip())} 字  ·  请检查音色或文本")
+            self.script_stats.setToolTip(str(exc))
         self.update_generation_actions()

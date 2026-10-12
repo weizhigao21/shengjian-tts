@@ -126,6 +126,7 @@ class Window(DocumentController, GenerationController, PlaybackController, Voice
         self.document_timer.stop()
         self.clip_list.hide()
         self.settings.close_management()
+        self.text_edit.completer.popup().hide()
         self.player.stop()
         self.player.setSource(QUrl())
         self.reference_player.stop()
@@ -139,7 +140,8 @@ class Window(DocumentController, GenerationController, PlaybackController, Voice
             try:
                 with httpx.Client(base_url=self.url, trust_env=False, timeout=2) as client:
                     checked(client.patch(f"/jobs/{self.selected_job}/document", json={
-                        "title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText()}))
+                        "title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText(),
+                        "script_mentions": self.text_edit.mentions()}))
             except Exception as exc:
                 self.service_log.append("退出时草稿保存失败：" + str(exc))
         if self.owns_service and self.process and self.process.poll() is None:

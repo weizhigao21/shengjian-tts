@@ -35,6 +35,14 @@ class VoiceConfig(BaseModel):
 class SegmentInput(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     timestamp: str = Field(default="", max_length=50)
+    voice_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+
+
+class ScriptMention(BaseModel):
+    start: int = Field(ge=0, le=4000000)
+    end: int = Field(ge=1, le=4000000)
+    preset_id: str = Field(pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    label: str = Field(min_length=1, max_length=100)
 
 
 class GenerationOverrides(BaseModel):
@@ -64,6 +72,7 @@ class JobInput(BaseModel):
     segments: list[SegmentInput] = Field(min_length=1, max_length=10000)
     overrides: GenerationOverrides | None = None
     script: str | None = Field(default=None, max_length=2000000)
+    script_mentions: list[ScriptMention] | None = Field(default=None, max_length=10000)
     workflow_key: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.:-]{1,160}$")
     record_only: bool = False
     delivery_ack: bool = False
@@ -78,6 +87,7 @@ class PerformanceSettings(BaseModel):
 class DocumentInput(BaseModel):
     title: str = Field(default="未命名配音", max_length=200)
     script: str = Field(default="", max_length=2000000)
+    script_mentions: list[ScriptMention] | None = Field(default=None, max_length=10000)
 
 
 class AudioDeletion(BaseModel):

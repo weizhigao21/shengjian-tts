@@ -42,12 +42,22 @@ class Store:
             jobs = [dict(row) for row in rows]
             for job in jobs:
                 job["voice"] = json.loads(job["voice"])
+                job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
             return jobs
 
     def __init__(self, root: Path):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        path = self.root / "tasks.sqlite3"
+        if path.is_file():
+            with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as existing:
+                columns = {r[1] for r in existing.execute("PRAGMA table_info(jobs)")}
+            if columns and "script_mentions" not in columns:
+                from .data_paths import snapshot_database
+                backup = self.root / "backups" / ("before-voice-mentions-" + str(time.time_ns()) + ".sqlite3")
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                snapshot_database(path.resolve(), backup)
         self.db = sqlite3.connect(self.root / "tasks.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -62,7 +72,7 @@ class Store:
           CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, path TEXT, checksum TEXT);
         """)
         for table, fields in {
-            "jobs": {"deleted": "INTEGER NOT NULL DEFAULT 0", "script": "TEXT", "auto_named": "INTEGER NOT NULL DEFAULT 0", "workflow_key": "TEXT", "workflow_closed": "INTEGER NOT NULL DEFAULT 0", "record_only": "INTEGER NOT NULL DEFAULT 0"},
+            "jobs": {"deleted": "INTEGER NOT NULL DEFAULT 0", "script": "TEXT", "script_mentions": "TEXT", "auto_named": "INTEGER NOT NULL DEFAULT 0", "workflow_key": "TEXT", "workflow_closed": "INTEGER NOT NULL DEFAULT 0", "record_only": "INTEGER NOT NULL DEFAULT 0"},
             "segments": {"voice": "TEXT", "fingerprint": "TEXT", "batch_title": "TEXT",
                          "created": "REAL", "generation": "INTEGER NOT NULL DEFAULT 1",
                          "provenance": "TEXT", "duration": "REAL", "generation_seconds": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0",
@@ -95,17 +105,18 @@ class Store:
             self.db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
 
     def create(self, title, voice, fingerprint, segments, script=None, provenance=None, workflow_key=None,
-               record_only=False, delivery_ack=False):
+               record_only=False, delivery_ack=False, script_mentions=None):
         job_id = uuid.uuid4().hex
         now = time.time()
         automatic = int(title.strip() in UNNAMED)
         title = work_title(title, script, now, segments)
         with self.lock, self.db:
-            self.db.execute("INSERT INTO jobs(id,title,voice,fingerprint,status,created,updated,script,auto_named,workflow_key,record_only) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                            (job_id, title, json.dumps(voice, ensure_ascii=False), fingerprint, "draft", now, now, script, automatic, workflow_key, int(record_only or bool(workflow_key))))
+            self.db.execute("INSERT INTO jobs(id,title,voice,fingerprint,status,created,updated,script,script_mentions,auto_named,workflow_key,record_only) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (job_id, title, json.dumps(voice, ensure_ascii=False), fingerprint, "draft", now, now, script,
+                             json.dumps(script_mentions or [], ensure_ascii=False), automatic, workflow_key, int(record_only or bool(workflow_key))))
             if segments:
                 self.append(job_id, title, voice, fingerprint, segments, script, provenance,
-                            workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack)
+                            workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack, script_mentions=script_mentions)
         return job_id
 
     def workflow_job(self, key):
@@ -125,7 +136,7 @@ class Store:
             return {"job_id": job_id, "title": title, "generation": generation, "segment_indices": indices,
                     "status_url": f"/jobs/{job_id}?generation={generation}"}
 
-    def append(self, job_id, title, voice, fingerprint, segments, script=None, provenance=None, workflow=False, delivery_ack=False):
+    def append(self, job_id, title, voice, fingerprint, segments, script=None, provenance=None, workflow=False, delivery_ack=False, script_mentions=None):
         now = time.time()
         snapshot = json.dumps(voice, ensure_ascii=False)
         with self.lock, self.db:
@@ -135,11 +146,13 @@ class Store:
             self.db.executemany("""INSERT INTO segments
                 (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
-                "queued", snapshot, fingerprint, title, now, generation+1,
-                json.dumps(provenance, ensure_ascii=False) if provenance is not None else None, int(workflow),
+                "queued", json.dumps(s["prepared_voice"].voice, ensure_ascii=False) if s.get("prepared_voice") else snapshot,
+                s["prepared_voice"].fingerprint if s.get("prepared_voice") else fingerprint, title, now, generation+1,
+                (json.dumps(s["prepared_voice"].provenance if s.get("prepared_voice") else provenance, ensure_ascii=False)
+                 if s.get("prepared_voice") or provenance is not None else None), int(workflow),
                 "temporary" if record_only else "permanent", int(delivery_ack and record_only)) for i, s in enumerate(segments, 1)])
-            self.db.execute("UPDATE jobs SET title=?,voice=?,fingerprint=?,script=?,updated=?,auto_named=? WHERE id=?",
-                            (title, snapshot, fingerprint, script, now, automatic, job_id))
+            self.db.execute("UPDATE jobs SET title=?,voice=?,fingerprint=?,script=?,script_mentions=?,updated=?,auto_named=? WHERE id=?",
+                            (title, snapshot, fingerprint, script, json.dumps(script_mentions or [], ensure_ascii=False), now, automatic, job_id))
             self._refresh(job_id)
 
     def document_title(self, job_id, title, script, segments=()):
@@ -150,11 +163,11 @@ class Store:
             result = row["title"]
         return result, int(automatic)
 
-    def save_document(self, job_id, title, script):
+    def save_document(self, job_id, title, script, script_mentions=None):
         with self.lock, self.db:
             title, automatic = self.document_title(job_id, title, script)
-            self.db.execute("UPDATE jobs SET title=?,script=?,updated=?,auto_named=? WHERE id=? AND deleted=0",
-                            (title, script, time.time(), automatic, job_id))
+            self.db.execute("UPDATE jobs SET title=?,script=?,script_mentions=?,updated=?,auto_named=? WHERE id=? AND deleted=0",
+                            (title, script, json.dumps(script_mentions or [], ensure_ascii=False), time.time(), automatic, job_id))
         return title
 
     def get(self, job_id, include_deleted=False, generation=None):
@@ -164,6 +177,7 @@ class Store:
                 return None
             job = dict(row)
             job["voice"] = json.loads(job["voice"])
+            job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
             items = [dict(s) for s in self.db.execute("SELECT * FROM segments WHERE job_id=? AND audio_deleted=0 AND (? IS NULL OR generation=?) ORDER BY idx", (job_id, generation, generation))]
             for item in items:
                 item["error"] = json.loads(item["error"]) if item["error"] else None
@@ -189,6 +203,7 @@ class Store:
                 ORDER BY j.created DESC LIMIT ?""", (int(include_workflow), limit))]
             for job in jobs:
                 job["voice"] = json.loads(job["voice"])
+                job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
             return jobs
 
     def next(self, job_id=None, admitted=None):

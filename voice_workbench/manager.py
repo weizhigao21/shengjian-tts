@@ -15,7 +15,7 @@ from .audio_cpp import UnifiedRunner
 from .store import Store, WORKFLOW_TITLES
 from .model_info import MODES
 from .services.service_lock import ServiceLock
-from .services.generation import prepare_generation
+from .services.generation import prepare_segments
 
 
 class Manager:
@@ -48,7 +48,7 @@ class Manager:
         self.thread.start()
 
     def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-               use_preset=True, record_only=False, delivery_ack=False):
+               use_preset=True, record_only=False, delivery_ack=False, script_mentions=None):
         # Validation and enqueue must be atomic with model deletion/reconfiguration.
         with self.lock:
             if self.stopping.is_set():
@@ -60,14 +60,14 @@ class Manager:
                     raise VoiceError("JOB_NOT_FOUND", str(exc), stage="工作流提交") from exc
             record_only = record_only or bool(workflow_key) or title in WORKFLOW_TITLES
             return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key,
-                                use_preset, record_only, delivery_ack)
+                                use_preset, record_only, delivery_ack, script_mentions)
 
     def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-                use_preset=True, record_only=False, delivery_ack=False):
+                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
-        prepared = prepare_generation(self.config, model_name, overrides=overrides,
-                                      use_preset=use_preset, validator=check_voice)
+        prepared, segments = prepare_segments(self.config, model_name, segments, overrides=overrides,
+                                              use_preset=use_preset, validator=check_voice)
         voice, fingerprint, provenance = prepared.voice, prepared.fingerprint, prepared.provenance
         with self.lock:
             if job_id:
@@ -76,13 +76,16 @@ class Manager:
                     raise VoiceError("JOB_NOT_FOUND", "当前作品不存在", stage="提交")
                 if script is None:
                     script = existing.get("script")
+                    if script_mentions is None:
+                        script_mentions = existing.get("script_mentions")
                 if record_only and not existing["record_only"]:
                     raise VoiceError("WORKFLOW_TARGET_MISMATCH", "工作流记录不能追加到创作作品", stage="工作流提交")
                 self.store.append(job_id, title, voice, fingerprint, segments, script, provenance,
-                                  workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack)
+                                  workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack,
+                                  script_mentions=script_mentions)
             else:
                 job_id = self.store.create(title, voice, fingerprint, segments, script, provenance, workflow_key,
-                                           record_only, delivery_ack)
+                                           record_only, delivery_ack, script_mentions)
             self.wake.set()
         return job_id
 
