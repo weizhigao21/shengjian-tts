@@ -72,6 +72,9 @@ class Window(UiLayout, QMainWindow):
         self.dialogs = set()
         self.deleted_job_ids = set()
         self.active_voice_snapshot = None
+        self.generation_base_id = None
+        self.pending_autoplay = None
+        self.autoplay_indices = None
         self.selected_job = None
         self.job_data = None
         self.polling = False
@@ -209,6 +212,7 @@ class Window(UiLayout, QMainWindow):
             self.refresh_generation_models(preferred)
             self.update_link_config()
         self.model_controls.set_references(self.references)
+        self.model_controls.update_engine_download(health.get("engine", {}))
         self.library.bind()
         self.update_voice_summary()
         if job and job["id"] == self.selected_job:
@@ -270,6 +274,7 @@ class Window(UiLayout, QMainWindow):
             selected = self.jobs_table.item(row, 0).data(256)
             if selected != self.selected_job:
                 self.save_document()
+                self.clear_autoplay()
                 self.job_data = None
                 self.segments_table.setRowCount(0)
                 self.segments_table.setCurrentCell(-1, -1)
@@ -295,7 +300,12 @@ class Window(UiLayout, QMainWindow):
         if base:
             self.refresh_generation_models(base["id"])
             self.active_voice_snapshot = {**job["voice"], "model_name": "job:" + job["id"]}
-            self.update_voice_summary()
+            provenance = (job["segments"][-1].get("provenance") or {}) if job["segments"] else {}
+            if base["id"] != job["voice"].get("id") or provenance.get("preset_used") is False:
+                self.voice_combo.blockSignals(True)
+                self.voice_combo.setCurrentIndex(0)
+                self.voice_combo.blockSignals(False)
+            self.update_voice_summary(reapply=True)
         self.render_job(job)
 
     def job_menu(self, row):
@@ -329,6 +339,7 @@ class Window(UiLayout, QMainWindow):
     def job_deleted(self, job_id):
         self.deleted_job_ids.add(job_id)
         if self.selected_job == job_id:
+            self.clear_autoplay()
             self.selected_job = self.job_data = None
             self.active_voice_snapshot = None
             self.segments_table.setRowCount(0)
@@ -382,6 +393,7 @@ class Window(UiLayout, QMainWindow):
                 self.segments_table.selectRow(self.playable_rows()[0])
                 self.auto_select_audio = False
             self.preview_segment()
+            self.maybe_autoplay(job)
             return
         selected_idx = (self.current_segment() or {}).get("idx")
         self.job_data = job
@@ -413,6 +425,7 @@ class Window(UiLayout, QMainWindow):
         self.decorate_job(job)
         self.segments_table.setUpdatesEnabled(True)
         self.preview_segment()
+        self.maybe_autoplay(job)
 
     def import_text(self):
         filename, _ = QFileDialog.getOpenFileName(self, "导入字幕或文本", "", "字幕与文本 (*.txt *.lrc *.srt *.vtt);;所有文件 (*)")
@@ -433,13 +446,15 @@ class Window(UiLayout, QMainWindow):
     def submit(self, segments, title):
         if self.submitting:
             return
-        voice = next((v for v in self.voices if v["id"] == self.voice_combo.currentData()), None)
+        voice = self.current_voice()
         if voice is None:
             self.show_error("请等待服务连接并选择声音。")
             return
         self.document_timer.stop()
         self.document_dirty = False
-        body = {"voice_id": voice["model_name"], "title": title, "segments": segments,
+        use_preset = self.selected_preset() is not None
+        body = {"voice_id": voice["model_name"] if use_preset else voice["id"], "use_preset": use_preset,
+                "title": title, "segments": segments,
                 "script": self.text_edit.toPlainText(),
                 "overrides": self.model_controls.overrides()}
         self.submission_title = title
@@ -462,6 +477,8 @@ class Window(UiLayout, QMainWindow):
             self.auto_select_audio = True
             self.preview_segment()
         self.selected_job = result["job_id"]
+        indices = result.get("segment_indices", [])
+        self.pending_autoplay = {"job_id": result["job_id"], "indices": set(indices)} if indices else None
         if result.get("title") and self.title_edit.text() == getattr(self, "submission_title", None):
             self.title_edit.blockSignals(True)
             self.title_edit.setText(result["title"])
@@ -469,7 +486,7 @@ class Window(UiLayout, QMainWindow):
         self.update_generation_actions()
         if self.document_dirty:
             self.document_changed()
-        self.statusBar().showMessage("已加入当前作品的生成列表，完成后自动保存。", 5000)
+        self.statusBar().showMessage("已加入当前作品的生成列表，完成后自动保存并播放本次音频。", 5000)
         self.poll()
 
     def submission_failed(self, message):
@@ -625,22 +642,7 @@ class Window(UiLayout, QMainWindow):
         self.poll()
 
     def save_preset(self, voice, success, failure=None):
-        import uuid
         def save(client):
-            if voice.get("reference_audio"):
-                from .config import file_digest
-                source = Path(voice["reference_audio"])
-                folder = self.data_dir / "voices"
-                folder.mkdir(parents=True, exist_ok=True)
-                if source.resolve().parent != folder.resolve():
-                    destination = folder / (file_digest(str(source)) + ".wav")
-                    temporary = destination.with_suffix("." + uuid.uuid4().hex + ".tmp")
-                    try:
-                        shutil.copyfile(source, temporary)
-                        os.replace(temporary, destination)
-                    finally:
-                        temporary.unlink(missing_ok=True)
-                    voice["reference_audio"] = str(destination)
             checked(client.put(f"/voices/{voice['id']}", json=voice))
             return next(v for v in checked(client.get("/voices")) if v["id"] == voice["id"])
         self.call(save, success, failure)
@@ -742,9 +744,12 @@ class Window(UiLayout, QMainWindow):
     def update_link_config(self):
         if not hasattr(self, "link_config"):
             return
-        voice = next((v for v in self.voices if v["id"] == self.voice_combo.currentData()), None)
+        voice = self.selected_preset()
         if voice:
             self.update_link_config_for(voice)
+        else:
+            self.link_config.clear()
+            self.link_config.setPlaceholderText("当前未使用预设；保存声音预设后可复制联动配置。")
 
     def update_link_config_for(self, voice):
         self.link_config.setPlainText(json.dumps({"name": voice["name"], "url": self.url,

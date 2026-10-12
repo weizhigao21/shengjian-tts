@@ -115,6 +115,10 @@ class ConfigStore:
     def save_voice(self, voice: dict):
         from .schemas import VoiceConfig
         parsed = VoiceConfig(**voice).model_dump()
+        # Keep incomplete configurations editable; readable imports belong to our data directory.
+        if parsed.get("reference_audio") and Path(parsed["reference_audio"]).is_file():
+            target, _ = self.copy_reference_audio(parsed["reference_audio"])
+            parsed["reference_audio"] = str(target)
         with self.lock:
             value = self.read()
             previous = next((v for v in value["voices"] if v["id"] == parsed["id"]), None)
@@ -184,24 +188,40 @@ class ConfigStore:
                 result.append({**item, "duration": 0, "sample_rate": 0, "error": exc.as_dict()})
         return result
 
-    def import_reference(self, item):
+    def copy_reference_audio(self, path):
+        """Retain a validated WAV beside config.json, using its content as the file name."""
         from .runner import validate_wave
-        source = Path(item["reference_audio"])
+        source = Path(path).resolve()
+        folder = self.data_dir / "voices"
+        staged = None
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if source.parent == folder:
+                target = source
+            else:
+                if not source.is_file():
+                    raise VoiceError("FILE_MISSING", f"参考音频不存在：{source}", "重新选择参考 WAV。", "声音导入")
+                with tempfile.NamedTemporaryFile(dir=folder, delete=False) as temporary:
+                    staged = Path(temporary.name)
+                shutil.copyfile(source, staged)
+                target = folder / (file_digest(str(staged)) + ".wav")
+            data = validate_wave(staged or target)
+            if not 1 <= data["duration"] <= 60:
+                raise VoiceError("REFERENCE_DURATION", "参考声音需要 1–60 秒的 WAV", stage="声音导入")
+            if staged:
+                os.replace(staged, target)
+            return target, data
+        except OSError as exc:
+            raise VoiceError("REFERENCE_COPY_FAILED", f"参考音频保存失败：{exc}",
+                             f"检查程序数据目录的写入权限和剩余空间：{folder}", "声音导入") from exc
+        finally:
+            if staged:
+                staged.unlink(missing_ok=True)
+
+    def import_reference(self, item):
         if not item["name"].strip():
             raise VoiceError("EMPTY_NAME", "声音名称不能为空", stage="声音导入")
-        data = validate_wave(source)
-        if not 1 <= data["duration"] <= 60:
-            raise VoiceError("REFERENCE_DURATION", "参考声音需要 1–60 秒的 WAV", stage="声音导入")
-        target = self.data_dir / "voices" / (file_digest(str(source)) + ".wav")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.resolve() != target.resolve():
-            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temporary:
-                staged = Path(temporary.name)
-            try:
-                shutil.copyfile(source, staged)
-                os.replace(staged, target)
-            finally:
-                staged.unlink(missing_ok=True)
+        target, data = self.copy_reference_audio(item["reference_audio"])
         ref_id = self.reference_id(target)
         parsed = {"id": ref_id, "name": item["name"].strip(), "reference_audio": str(target),
                   "reference_text": item.get("reference_text", "").strip()}

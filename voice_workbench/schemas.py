@@ -59,6 +59,7 @@ class GenerationOverrides(BaseModel):
 
 class JobInput(BaseModel):
     voice_id: str = "default"
+    use_preset: bool = True
     title: str = Field(default="配音任务", max_length=200)
     segments: list[SegmentInput] = Field(min_length=1, max_length=10000)
     overrides: GenerationOverrides | None = None
@@ -84,6 +85,10 @@ class AudioDeletion(BaseModel):
 
 class ModelDownload(BaseModel):
     source: Literal["huggingface", "mirror", "modelscope"] = "mirror"
+
+
+class EngineDownload(BaseModel):
+    backend: Literal["cuda", "cpu"] = "cuda"
 
 
 class ModelRemoval(BaseModel):

@@ -12,6 +12,8 @@
 
 目录中的 GGUF 来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。下载的权重各自遵循其模型许可，目录的 Apache-2.0 许可不替代权重许可。本项目没有打包这些权重。yovoice 的完整 Apache-2.0 许可保存在 `voice_workbench/assets/YOVOICE_LICENSE.txt`。
 
+`voice_workbench/assets/engine_catalog.json` 记录 [audio.cpp v0.7.4 官方发布](https://github.com/0xShug0/audio.cpp/releases/tag/v0.7.4) 的 Windows CPU 及 CUDA 12.4 ZIP 包、文件大小和 SHA-256；CUDA 程序包与运行库的组合方式参考 yovoice 的 `internal/catalog/catalog.go`、`internal/workbench/runtime_install.go`。下载、续传、解压及配置由 Python 独立实现，下载后的完整目录保留上游包中的许可文件。运行时依赖仍遵循其上游许可；本仓库与声笺 EXE 包不内置这些下载资产。
+
 - [yovoice](https://github.com/leemysw/yovoice)：Apache-2.0；原项目作者 leemysw。
 - [audio.cpp](https://github.com/0xShug0/audio.cpp)：Apache-2.0；Copyright ShugoAI LLC；原生统一推理引擎。
 - [IndexTTS](https://github.com/index-tts/index-tts)：模型与官方实现遵循其上游许可。

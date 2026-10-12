@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import pytest
 
 from fastapi.testclient import TestClient
 from PyQt6.QtCore import Qt
@@ -15,6 +16,11 @@ from voice_workbench.store import Store
 from test_inline_generation import index_voice, make_audio, Runner
 
 
+@pytest.fixture
+def no_legacy_imports(monkeypatch):
+    monkeypatch.setattr("voice_workbench.discovery.discover_yovoice", lambda _: [])
+
+
 def wait_job(client, job_id):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -23,6 +29,99 @@ def wait_job(client, job_id):
             return job
         time.sleep(.01)
     raise AssertionError("Task did not settle")
+
+
+@pytest.mark.parametrize("size", [80, 56])
+def test_record_artwork_keeps_square_geometry_with_application_button_styles(qapp, qtbot, size):
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout
+    from voice_workbench.library import RecordButton
+    from voice_workbench.ui import STYLE
+    container = QWidget()
+    container.setStyleSheet(STYLE)
+    layout = QVBoxLayout(container)
+    cover = RecordButton("empty-library", lambda: None, ring=True)
+    cover.setFixedSize(size, size)
+    layout.addWidget(cover, alignment=Qt.AlignmentFlag.AlignCenter)
+    qtbot.addWidget(container)
+    container.resize(360, 220)
+    container.show()
+    qapp.processEvents()
+    assert cover.width() == cover.height() == size
+    container.setStyleSheet(STYLE)
+    qapp.processEvents()
+    assert cover.width() == cover.height() == size
+
+
+def test_api_preset_import_retains_audio_and_reuses_identical_files(tmp_path, no_legacy_imports):
+    voice = index_voice(tmp_path)
+    source = Path(voice["reference_audio"])
+    original = source.read_bytes()
+    data = tmp_path / "data"
+    with TestClient(create_app(data, runner=Runner())) as client:
+        response = client.put(f"/voices/{voice['id']}", json=voice)
+        assert response.status_code == 200
+        saved = response.json()
+        retained = Path(saved["reference_audio"])
+        assert retained.parent == data / "voices" and retained.read_bytes() == original
+        reference = client.post("/references", json={"name": "参考原声", "reference_audio": str(source)}).json()
+        assert reference["reference_audio"] == str(retained)
+        again = client.put("/voices/another", json={**voice, "id": "another"}).json()
+        assert again["reference_audio"] == str(retained)
+        assert len(list((data / "voices").glob("*.wav"))) == 1
+        source.unlink()
+        assert client.get("/references").json()[0]["error"] is None
+        submission = client.post("/jobs", json={"voice_id": voice["id"], "segments": [{"text": "原文件已删除"}]})
+        assert submission.status_code == 202
+        job = wait_job(client, submission.json()["job_id"])
+        assert job["status"] == "done" and job["voice"]["reference_audio"] == str(retained)
+        assert next(v for v in ConfigStore(data).voices() if v["id"] == voice["id"])["reference_audio"] == str(retained)
+
+
+def test_inline_audio_is_retained_before_queued_inference(tmp_path, no_legacy_imports):
+    voice = index_voice(tmp_path)
+    source = Path(voice["reference_audio"])
+    original = source.read_bytes()
+    class WaitingRunner(Runner):
+        def __init__(self):
+            self.entered, self.release = threading.Event(), threading.Event()
+        def generate(self, request, cancelled):
+            self.entered.set()
+            assert self.release.wait(5)
+            assert Path(request["voice"]["reference_audio"]).read_bytes() == original
+            super().generate(request, cancelled)
+        def interrupt(self):
+            self.release.set()
+    data = tmp_path / "data"
+    saved = ConfigStore(data).save_voice({**voice, "reference_audio": ""})
+    runner = WaitingRunner()
+    with TestClient(create_app(data, runner=runner)) as client:
+        submission = client.post("/jobs", json={"voice_id": saved["id"], "segments": [{"text": "排队生成"}],
+                                                "overrides": {"reference_audio": str(source)}})
+        assert submission.status_code == 202
+        assert runner.entered.wait(5)
+        source.unlink()
+        runner.release.set()
+        job = wait_job(client, submission.json()["job_id"])
+        assert job["status"] == "done"
+        assert Path(job["voice"]["reference_audio"]).parent == data / "voices"
+        assert not next(v for v in ConfigStore(data).voices() if v["id"] == saved["id"])["reference_audio"]
+
+
+def test_failed_reference_copy_leaves_configuration_and_library_unchanged(tmp_path, monkeypatch, no_legacy_imports):
+    from voice_workbench.errors import VoiceError
+    import voice_workbench.config as config
+    source = tmp_path / "original.wav"
+    make_audio(source)
+    store = ConfigStore(tmp_path / "data")
+    previous = store.read()
+    def fail_copy(*args):
+        raise OSError("磁盘无法写入")
+    monkeypatch.setattr(config.shutil, "copyfile", fail_copy)
+    with pytest.raises(VoiceError) as error:
+        store.import_reference({"name": "导入失败", "reference_audio": str(source)})
+    assert error.value.code == "REFERENCE_COPY_FAILED"
+    assert store.read() == previous and source.is_file()
+    assert not list((store.data_dir / "voices").iterdir())
 
 
 def test_delete_restore_preserves_shared_audio_and_does_not_reappear_after_restart(tmp_path):

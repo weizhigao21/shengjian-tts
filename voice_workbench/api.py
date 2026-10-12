@@ -15,7 +15,7 @@ from .config import DEFAULT_DATA
 from .errors import VoiceError
 from .manager import Manager
 from .schemas import JobInput, DocumentInput, LegacyInput, VoiceConfig, RenameJob, ReferenceInput, ReferenceEdit
-from .schemas import AudioDeletion, ModelDownload, ModelRemoval, ModelImport
+from .schemas import AudioDeletion, ModelDownload, ModelRemoval, ModelImport, EngineDownload
 from .schemas import PerformanceSettings
 from .workflow import voice_records, workflow_manifest
 
@@ -66,8 +66,8 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     @app.get("/")
     @app.get("/health")
     def health(request: Request):
-        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel"],
-                "status": "running", "data_dir": str(manager(request).root), **manager(request).status()}
+        return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "engine_download"],
+                "status": "running", "data_dir": str(manager(request).root), "engine": manager(request).models.engines.listing(), **manager(request).status()}
 
     @app.get("/workflow")
     def workflow(request: Request):
@@ -84,6 +84,18 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
     @app.put("/models/runtime")
     def runtime(body: ModelImport, request: Request):
         return manager(request).models.set_runtime(body.path)
+
+    @app.post("/models/runtime/download", status_code=202)
+    def download_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.start(body.backend)
+
+    @app.post("/models/runtime/pause")
+    def pause_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.pause(body.backend)
+
+    @app.post("/models/runtime/use")
+    def use_runtime(body: EngineDownload, request: Request):
+        return manager(request).models.engines.use(body.backend)
 
     @app.post("/models/{model_id}/download", status_code=202)
     def download_model(model_id: str, body: ModelDownload, request: Request):
@@ -159,7 +171,7 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
         with m.lock:
             job_id = m.submit(body.title, body.voice_id, [s.model_dump() for s in body.segments],
                               overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
-                              script=body.script, workflow_key=body.workflow_key)
+                              script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset)
             return submitted(m, job_id)
 
     def submitted(m, job_id):
@@ -178,7 +190,7 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
             title = body.title if "title" in body.model_fields_set else existing["title"]
             m.submit(title, body.voice_id, [s.model_dump() for s in body.segments],
                      overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
-                     job_id=job_id, script=body.script)
+                     job_id=job_id, script=body.script, use_preset=body.use_preset)
             return submitted(m, job_id)
 
     @app.patch("/jobs/{job_id}/document")

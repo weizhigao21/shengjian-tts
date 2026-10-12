@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDouble
     QTextEdit, QVBoxLayout, QWidget)
 
 from . import __version__
-from .ui import STYLE, ORANGE, AnchoredPopover, RecentTasks, ScriptEditor, Waveform, application_icon, button, icon, label
+from .ui import STYLE, ORANGE, AnchoredPopover, ElidedLabel, RecentTasks, ScriptEditor, Waveform, application_icon, button, icon, label
 
 from .model_info import KOKORO_LANGUAGES, LANGUAGES, MODES, model_ui, selected_mode
 from .model_controls import ModelControls, populate, populate_voices
@@ -192,6 +192,7 @@ class UiLayout:
         if getattr(self, "submitting", False):
             return
         self.save_document()
+        self.clear_autoplay()
         self.set_page(0)
         self.selected_job = self.job_data = None
         self.active_voice_snapshot = None
@@ -273,6 +274,9 @@ class UiLayout:
         self.inspector_scroll = inspector_scroll
         inspector_scroll.setWidgetResizable(True)
         inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inspector_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        inspector_scroll.verticalScrollBar().setStyleSheet(
+            "QScrollBar::handle:vertical:disabled { background: transparent; }")
         inspector_body = QWidget()
         inspector_body.setObjectName("inspectorBody")
         side = QVBoxLayout(inspector_body)
@@ -301,6 +305,7 @@ class UiLayout:
         self.model_controls.preview_requested.connect(self.preview_reference)
         self.model_controls.choose_requested.connect(lambda: self.choose_reference(self.model_controls))
         self.model_controls.audio_changed.connect(self.stop_reference)
+        self.model_controls.engine_download_requested.connect(lambda backend: self.settings.download_engine(backend=backend))
         side.addWidget(self.model_controls)
         self.voice_summary = QLabel()
         self.voice_summary.setWordWrap(True)
@@ -309,8 +314,8 @@ class UiLayout:
         self.voice_summary.hide()
         self.save_generation_button = button("保存声音预设", self.save_generation_voice, "check", "ghost")
         self.save_generation_button.setEnabled(False)
-        self.voice_health = label("等待服务连接", "hint")
-        self.voice_health.setWordWrap(True)
+        self.voice_health = ElidedLabel("等待服务连接")
+        self.voice_health.setProperty("role", "hint")
         side.addStretch()
         inspector_scroll.setWidget(inspector_body)
         inspector_layout.addWidget(inspector_scroll, 1)
@@ -514,6 +519,7 @@ class UiLayout:
 
     def choose_clip(self, *_):
         self.auto_select_audio = False
+        self.autoplay_indices = None
         item = self.current_segment()
         if item and item["status"] == "done" and self.play_button.isEnabled():
             self.player.setPosition(0)
@@ -528,13 +534,16 @@ class UiLayout:
         return [row for row, item in enumerate((self.job_data or {}).get("segments", []))
                 if item["status"] == "done" and item.get("audio") and (self.data_dir / "audio" / item["audio"]).is_file()]
 
-    def adjacent_row(self, direction):
+    def adjacent_row(self, direction, indices=None):
         row = self.segments_table.currentRow()
-        rows = [i for i in self.playable_rows() if i < row] if direction < 0 else [i for i in self.playable_rows() if i > row]
+        playable = [i for i in self.playable_rows() if indices is None or self.job_data["segments"][i]["idx"] in indices]
+        rows = [i for i in playable if i < row] if direction < 0 else [i for i in playable if i > row]
         return (rows[-1] if direction < 0 else rows[0]) if rows else None
 
-    def play_adjacent(self, direction):
-        row = self.adjacent_row(direction)
+    def play_adjacent(self, direction, automatic=False):
+        if not automatic:
+            self.autoplay_indices = None
+        row = self.adjacent_row(direction, self.autoplay_indices if automatic else None)
         if row is not None:
             self.segments_table.selectRow(row)
             self.player.setPosition(0)
@@ -542,7 +551,28 @@ class UiLayout:
 
     def playback_finished(self, status):
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.play_adjacent(1)
+            self.play_adjacent(1, automatic=True)
+
+    def clear_autoplay(self):
+        self.pending_autoplay = None
+        self.autoplay_indices = None
+
+    def maybe_autoplay(self, job):
+        pending = self.pending_autoplay
+        if not pending or pending["job_id"] != job["id"]:
+            return
+        items = [s for s in job["segments"] if s["idx"] in pending["indices"]]
+        if len(items) != len(pending["indices"]) or any(s["status"] in ("queued", "running") for s in items):
+            return
+        self.pending_autoplay = None
+        rows = [row for row in self.playable_rows() if job["segments"][row]["idx"] in pending["indices"]]
+        if rows:
+            self.autoplay_indices = pending["indices"]
+            self.auto_select_audio = False
+            self.segments_table.selectRow(rows[0])
+            self.segments_table.scrollToItem(self.segments_table.item(rows[0], 0))
+            self.player.setPosition(0)
+            self.play()
 
     def show_toast(self, message):
         self.toast_text.setText(message)
@@ -563,12 +593,20 @@ class UiLayout:
             self.script_stats.setText(f"{len(text.strip())} 字  ·  请检查字幕格式")
         self.update_generation_actions()
 
+    def selected_preset(self):
+        return next((v for v in self.voices if v["id"] == self.voice_combo.currentData() and not v.get("is_template")), None)
+
     def current_voice(self):
-        return next((v for v in self.voices if v["id"] == self.voice_combo.currentData()), None)
+        selected = self.voice_combo.currentData() or self.generation_base_id
+        return next((v for v in self.voices if v["id"] == selected), None)
 
     def refresh_generation_models(self, preferred=None):
-        preferred = preferred or self.voice_combo.currentData()
+        custom = preferred is None and self.voice_combo.count() > 0 and self.voice_combo.currentData() is None
+        reapply = preferred is not None
+        preferred = preferred or (self.current_voice() or {}).get("id")
         voice = next((v for v in self.voices if v["id"] == preferred), None)
+        if not voice and custom:
+            voice = next((v for v in self.voices if model_key(v) == self.model_combo.currentData()), None)
         voice = voice or next((v for v in self.voices if v["backend"] == "audio_cpp"), self.voices[0] if self.voices else None)
         entries, seen = [], set()
         for value in self.voices:
@@ -578,19 +616,23 @@ class UiLayout:
                 seen.add(key)
         populate(self.model_combo, entries, model_key(voice) if voice else None)
         self.model_controls.set_references(self.references)
-        self.populate_generation_presets(voice["id"] if voice else None)
+        self.populate_generation_presets(voice["id"] if voice else None, custom=custom, reapply=reapply)
 
-    def populate_generation_presets(self, preferred=None):
+    def populate_generation_presets(self, preferred=None, custom=False, reapply=False):
         from .library import friendly_name
         voices = [v for v in self.voices if model_key(v) == self.model_combo.currentData()]
-        populate(self.voice_combo, [(v["id"], friendly_name(v)) for v in voices], preferred)
-        self.update_voice_summary()
+        base = next((v for v in voices if v["id"] == preferred), voices[0] if voices else None)
+        self.generation_base_id = base["id"] if base else None
+        presets = [(v["id"], friendly_name(v)) for v in voices if not v.get("is_template")]
+        choice = None if custom or (base and base.get("is_template")) else self.generation_base_id
+        populate(self.voice_combo, [(None, "无预设（当前参数）")] + presets, choice)
+        self.update_voice_summary(reapply=reapply)
         self.update_link_config()
 
     def select_generation_model(self):
         self.stop_reference()
         self.active_voice_snapshot = None
-        self.populate_generation_presets()
+        self.populate_generation_presets(reapply=True)
 
     def generation_voice(self):
         voice = self.current_voice()
@@ -604,15 +646,16 @@ class UiLayout:
         from .runner import check_voice
         voice = self.generation_voice()
         usable = self.ready and bool(voice)
+        message = "路径检查通过 · 可短句试音" if usable else "请选择模型"
         if usable:
             try:
                 check_voice(voice)
             except Exception as exc:
                 usable = False
-                self.voice_health.setText(str(exc))
+                message = str(exc)
         elif not self.ready:
-            self.voice_health.setText("等待本地服务连接")
-        self.voice_health.setVisible(not usable)
+            message = "等待本地服务连接"
+        self.voice_health.setText(message)
         self.new_document_button.setEnabled(not getattr(self, "submitting", False))
         self.jobs_table.setEnabled(not getattr(self, "submitting", False))
         self.warmup_button.setEnabled(usable and not getattr(self, "submitting", False))
@@ -620,20 +663,56 @@ class UiLayout:
         self.save_generation_button.setEnabled(usable)
         self.model_controls.advanced_toggle.setEnabled(bool(voice))
 
-    def update_voice_summary(self, *args):
+    def update_voice_summary(self, *args, reapply=False):
         if args:
             self.active_voice_snapshot = None
+            if self.voice_combo.currentData() is not None:
+                self.generation_base_id = self.voice_combo.currentData()
         voice = getattr(self, "active_voice_snapshot", None) or self.current_voice()
         if voice:
-            changed = self.model_controls.key is None or self.model_controls.key[0] != voice.get("model_name", voice["id"])
-            if changed:
-                self.stop_reference()
-            self.model_controls.bind(voice)
-            if changed:
-                self.inspector_scroll.verticalScrollBar().setValue(0)
+            custom = self.voice_combo.currentData() is None
+            previous = self.model_controls.voice
+            keep_custom = (custom and not reapply and previous and previous["id"] == voice["id"]
+                           and all(previous.get(k) == voice.get(k) for k in ("model_dir", "engine_executable", "device")))
+            if not keep_custom:
+                changed = self.model_controls.key is None or self.model_controls.key[0] != voice.get("model_name", voice["id"])
+                if changed:
+                    self.stop_reference()
+                self.model_controls.bind(voice, preserve_edits=not (reapply or (args and self.selected_preset())), custom=custom)
+                if changed:
+                    self.inspector_scroll.verticalScrollBar().setValue(0)
         self.refresh_main_settings()
 
     def refresh_main_settings(self):
+        preset = self.selected_preset()
+        if preset and self.model_controls.info:
+            current = self.generation_voice()
+            if (self.model_controls.mode.currentData() != selected_mode(preset)
+                    or model_key(current) != model_key(preset)):
+                self.voice_combo.blockSignals(True)
+                self.voice_combo.setCurrentIndex(0)
+                self.voice_combo.blockSignals(False)
+                self.stop_reference()
+                self.update_link_config()
+                preset = None
+                self.statusBar().showMessage("已切换为无预设，当前模型与编辑参数保留。", 5000)
+        from .library import friendly_name
+        for index in range(1, self.voice_combo.count()):
+            source = next((v for v in self.voices if v["id"] == self.voice_combo.itemData(index)), None)
+            if source and (not preset or source["id"] != preset["id"]):
+                self.voice_combo.setItemText(index, friendly_name(source))
+        if preset:
+            from .schemas import VoiceConfig
+            expected = VoiceConfig(**preset).model_dump()
+            expected["voice_mode"] = selected_mode(preset)
+            defaults = {s["name"]: s["default"] for s in self.model_controls.generation_controls.specs}
+            expected["request_options"] = {**defaults, **expected["request_options"]}
+            adjusted = any(expected.get(k) != v for k, v in self.model_controls.overrides().items())
+            caption = friendly_name(preset) + (" · 已调整" if adjusted else "")
+            self.voice_combo.setItemText(self.voice_combo.currentIndex(), caption)
+            self.voice_combo.setToolTip("当前参数已调整；保存声音预设后可用于联动。" if adjusted else "使用已保存的声音预设。")
+        else:
+            self.voice_combo.setToolTip("无预设：使用当前模型与参数；选择已保存的预设会重新应用其配置。")
         voice = self.generation_voice()
         if voice:
             info = self.model_controls.info
@@ -651,8 +730,6 @@ class UiLayout:
                 summary += "\n自动识别文本语言"
             summary += "\n当前设置可直接生成；保存预设后可用于双语工作流。"
             self.voice_summary.setText(summary)
-            self.voice_health.setText("路径检查通过 · 可短句试音")
-            self.voice_health.setToolTip(voice.get("reference_audio") or "")
         self.update_generation_actions()
 
     def set_service_state(self, text, state):

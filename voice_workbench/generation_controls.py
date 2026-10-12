@@ -1,8 +1,9 @@
 """Compact controls rendered from the selected model's request-option definitions."""
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QAbstractSpinBox, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QSizePolicy, QSlider, QSpinBox, QWidget
+from PyQt6.QtWidgets import QAbstractSpinBox, QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QSizePolicy, QWidget
 
-from .ui import button, label
+from .ui import (NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSlider,
+                 NoWheelSpinBox, button, label)
 
 
 class GenerationControls(QWidget):
@@ -32,7 +33,7 @@ class GenerationControls(QWidget):
             caption = label(spec["label"], "muted")
             caption.setToolTip(spec.get("help") or spec.get("description", ""))
             if type_ == "enum":
-                field = QComboBox()
+                field = NoWheelComboBox()
                 choices = spec["values"]
                 for choice in choices:
                     field.addItem(choices[choice] if isinstance(choices, dict) else choice, choice)
@@ -46,7 +47,7 @@ class GenerationControls(QWidget):
                 field.stateChanged.connect(self.changed)
                 self.add_compact_row(caption, field)
             else:
-                field = QSpinBox() if type_ == "int" else QDoubleSpinBox()
+                field = NoWheelSpinBox() if type_ == "int" else NoWheelDoubleSpinBox()
                 field.setRange(spec["min"], spec["max"])
                 field.setSingleStep(spec["step"])
                 field.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -62,7 +63,7 @@ class GenerationControls(QWidget):
                     row = QWidget()
                     line = QHBoxLayout(row)
                     line.setContentsMargins(0, 0, 0, 0)
-                    slider = QSlider(Qt.Orientation.Horizontal)
+                    slider = NoWheelSlider(Qt.Orientation.Horizontal)
                     scale = round(1 / spec["step"])
                     slider.setRange(round(spec["min"] * scale), round(spec["max"] * scale))
                     slider.setValue(round(value * scale))

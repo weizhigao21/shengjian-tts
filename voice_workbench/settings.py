@@ -7,12 +7,13 @@ from PyQt6.QtGui import QDesktopServices, QWheelEvent
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog,
     QHBoxLayout, QHeaderView, QLineEdit, QMessageBox, QScrollArea, QStackedWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox, QFormLayout)
+    QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox, QFormLayout, QProgressBar)
 
 from .ui import button, icon, label
 
 DOWNLOAD_STATES = {"available": "可下载", "downloading": "下载中", "verifying": "校验中",
-                   "pausing": "正在暂停", "paused": "已暂停", "failed": "下载失败", "done": "已下载"}
+                   "pausing": "正在暂停", "paused": "已暂停", "failed": "下载失败", "done": "已下载",
+                   "extracting": "正在安装", "waiting": "已安装，等待当前生成结束后启用"}
 
 
 def size_text(size):
@@ -33,9 +34,13 @@ class ModelTable(QTableWidget):
     def __init__(self, rows, columns, scroll_area):
         super().__init__(rows, columns)
         self.scroll_area = scroll_area
+        self.setObjectName("modelTable")
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setFixedHeight(70)
+        self.horizontalHeader().setObjectName("modelSectionHeader")
+        self.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.horizontalHeader().setFixedHeight(28)
+        self.setFixedHeight(28)
         self.horizontalHeader().viewport().installEventFilter(self)
 
     def wheelEvent(self, event):
@@ -53,8 +58,9 @@ class ModelTable(QTableWidget):
         return super().eventFilter(watched, event)
 
     def fit_rows(self):
-        self.setFixedHeight(max(70, self.horizontalHeader().sizeHint().height()
-                                + self.verticalHeader().length() + 2 * self.frameWidth()))
+        self.setFixedHeight(self.horizontalHeader().height()
+                            + self.verticalHeader().length() + 2 * self.frameWidth())
+        self.setVisible(self.rowCount() > 0)
 
 
 class SettingsPanel(QWidget):
@@ -134,7 +140,7 @@ class SettingsPanel(QWidget):
         page.setObjectName("modelManagementContent")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
         tools = QHBoxLayout()
         self.model_search = QLineEdit()
         self.model_search.setPlaceholderText("搜索模型名称、能力或精度…")
@@ -146,19 +152,44 @@ class SettingsPanel(QWidget):
         self.source_combo.setToolTip("下载源；更换源后可继续未完成的下载")
         tools.addWidget(self.source_combo)
         tools.addWidget(button("导入模型", self.import_model, "import"))
-        tools.addWidget(button("推理引擎", self.choose_runtime, "cpu", "ghost"))
+        tools.addWidget(button("本地引擎", self.choose_runtime, "cpu", "ghost"))
         layout.addLayout(tools)
         self.runtime_label = label("", "muted")
+        self.runtime_label.setWordWrap(True)
         layout.addWidget(self.runtime_label)
-        self.installed_label = label("已添加的模型", "hint")
+        engine_tools = QHBoxLayout()
+        self.engine_backend = QComboBox()
+        self.engine_backend.addItem("NVIDIA CUDA 12.4 · 约 1 GB", "cuda")
+        self.engine_backend.addItem("CPU 便携版 · 21.3 MB", "cpu")
+        self.engine_backend.currentIndexChanged.connect(self.render_engine)
+        engine_tools.addWidget(self.engine_backend)
+        self.engine_status = label("未找到推理引擎，下载完成后自动配置。", "muted")
+        engine_tools.addWidget(self.engine_status, 1)
+        self.engine_download = button("下载引擎", self.download_engine, "import")
+        engine_tools.addWidget(self.engine_download)
+        self.engine_pause = button("暂停", self.pause_engine, "pause", "ghost")
+        self.engine_pause.hide()
+        engine_tools.addWidget(self.engine_pause)
+        layout.addLayout(engine_tools)
+        self.engine_progress = QProgressBar()
+        self.engine_progress.setTextVisible(False)
+        self.engine_progress.hide()
+        layout.addWidget(self.engine_progress)
+        self.engine_error = label("", "error")
+        self.engine_error.setWordWrap(True)
+        self.engine_error.hide()
+        layout.addWidget(self.engine_error)
+        self.installed_label = label("正在读取已添加的模型…", "hint")
         layout.addWidget(self.installed_label)
-        self.installed_table = self.table(("模型 / 功能", "文件大小", "位置", "操作"), whole_page=True)
+        self.installed_table = self.table(("已添加的模型", "文件大小", "位置", "操作"), whole_page=True)
+        self.installed_table.hide()
         for col, width in ((1, 100), (2, 90), (3, 90)):
             self.installed_table.setColumnWidth(col, width)
         layout.addWidget(self.installed_table)
-        self.catalog_label = label("下载其他模型", "hint")
+        self.catalog_label = label("正在读取模型目录…", "hint")
         layout.addWidget(self.catalog_label)
-        self.catalog_table = self.table(("模型 / 功能", "精度", "文件大小", "状态", "操作"), whole_page=True)
+        self.catalog_table = self.table(("下载其他模型", "精度", "文件大小", "状态", "操作"), whole_page=True)
+        self.catalog_table.hide()
         for col, width in ((1, 65), (2, 100), (3, 175), (4, 90)):
             self.catalog_table.setColumnWidth(col, width)
         self.catalog_table.cellDoubleClicked.connect(self.download_details)
@@ -337,11 +368,13 @@ class SettingsPanel(QWidget):
         matches = lambda m: not text or text in " ".join(str(m.get(k, "")) for k in ("name", "description", "precision", "family")).casefold()
         installed = [m for m in self.model_data["installed"] if matches(m)]
         catalog = [m for m in self.model_data["catalog"] if matches(m) and not m["installed"]]
-        runtime = self.model_data.get("runtime")
-        self.runtime_label.setText("推理引擎：" + (Path(runtime).name if runtime else "尚未设置，下载后请选择 audiocpp_server.exe"))
-        self.runtime_label.setToolTip(runtime or "")
-        self.installed_label.setText(f"已添加的模型 · {len(installed)}")
-        self.catalog_label.setText(f"下载其他模型 · {len(catalog)}")
+        self.render_engine()
+        self.installed_table.horizontalHeaderItem(0).setText(f"已添加的模型 · {len(installed)}")
+        self.catalog_table.horizontalHeaderItem(0).setText(f"下载其他模型 · {len(catalog)}")
+        self.installed_label.setText("已添加的模型 · 0  · " + ("没有匹配的模型" if text else "可从下方下载，或点击「导入模型」"))
+        self.catalog_label.setText("下载其他模型 · 0  · " + ("没有匹配的模型" if text else "暂无可下载的模型"))
+        self.installed_label.setVisible(not installed)
+        self.catalog_label.setVisible(not catalog)
         table = self.installed_table
         table.setUpdatesEnabled(False)
         self.table_rows(table, [m["id"] for m in installed])
@@ -351,7 +384,7 @@ class SettingsPanel(QWidget):
             self.cell(table, row, 1, "目录模型" if m.get("is_directory") else size_text(m["size"]) if m["exists"] else "文件缺失")
             self.cell(table, row, 2, "程序目录" if m["managed"] else "外部文件", m["path"])
             self.action_cell(table, row, 3, m["id"], lambda v=m: button("删除", lambda: self.remove_model(v), "trash", "ghost"))
-            table.setRowHeight(row, 64)
+            table.setRowHeight(row, 50)
         table.fit_rows()
         table.setUpdatesEnabled(True)
         table = self.catalog_table
@@ -377,9 +410,54 @@ class SettingsPanel(QWidget):
                 action = self.action_cell(table, row, 4, m["id"] + "-download", lambda v=m: button("下载", lambda: self.download_model(v), "import", "ghost"))
                 action.setText(caption)
                 action.setEnabled(m["downloadable"])
-            table.setRowHeight(row, 66)
+            table.setRowHeight(row, 50)
         table.fit_rows()
         table.setUpdatesEnabled(True)
+
+    def render_engine(self, *_):
+        if self.model_data is None:
+            return
+        engine = self.model_data.get("engine", {})
+        runtime = engine.get("path") or self.model_data.get("runtime")
+        ready = engine.get("ready", bool(runtime and Path(runtime).is_file()))
+        self.runtime_label.setText("推理引擎：" + ("已配置 · " + Path(runtime).name if ready else "未找到，下载后自动配置到程序数据目录"))
+        self.runtime_label.setToolTip(runtime or engine.get("directory", ""))
+        backend = self.engine_backend.currentData()
+        option = next((e for e in engine.get("options", []) if e["backend"] == backend), {})
+        status = option.get("status", "available")
+        busy = status in ("downloading", "verifying", "extracting", "waiting", "pausing")
+        any_busy = any(e.get("status") in ("downloading", "verifying", "extracting", "waiting", "pausing") for e in engine.get("options", []))
+        active = bool(ready and option.get("path") == runtime)
+        caption = "已启用" if active else "使用引擎" if option.get("installed") else "继续下载" if status == "paused" else "重试下载" if status == "failed" else "下载引擎"
+        self.engine_download.setText(caption)
+        self.engine_download.setEnabled(engine.get("supported", True) and not any_busy and not active)
+        self.engine_download.setToolTip(option.get("description", "下载到程序的 data/runtime/，完成后自动更新模型的引擎路径。"))
+        self.engine_pause.setVisible(busy)
+        self.engine_pause.setEnabled(status != "pausing")
+        self.engine_status.setText(("已启用" if active else DOWNLOAD_STATES.get(status, status)) +
+                                  (f" · {size_text(option.get('received', 0))} / {size_text(option['size'])}" if option.get("size") and status in ("downloading", "paused", "pausing", "verifying") else ""))
+        self.engine_status.setToolTip(option.get("archive", "") + "\n" + option.get("description", ""))
+        self.engine_progress.setVisible(busy or status == "paused")
+        if status in ("extracting", "waiting"):
+            self.engine_progress.setRange(0, 0)
+        else:
+            self.engine_progress.setRange(0, 1000)
+            self.engine_progress.setValue(min(1000, int(option.get("received", 0) * 1000 / (option.get("size") or 1))))
+        self.engine_error.setText(option.get("error", ""))
+        self.engine_error.setVisible(bool(option.get("error")))
+
+    def download_engine(self, _checked=False, *, backend=None):
+        backend = backend or self.engine_backend.currentData()
+        self.engine_backend.setCurrentIndex(self.engine_backend.findData(backend))
+        engine = (self.model_data or {}).get("engine", {})
+        option = next((e for e in engine.get("options", []) if e["backend"] == backend), {})
+        action = "use" if option.get("installed") else "download"
+        self.mutate(lambda c: c.post(f"/models/runtime/{action}", json={"backend": backend}),
+                    "已启用推理引擎。" if action == "use" else "引擎开始下载，完成后自动配置；设置中可查看进度。")
+
+    def pause_engine(self):
+        backend = self.engine_backend.currentData()
+        self.mutate(lambda c: c.post("/models/runtime/pause", json={"backend": backend}))
 
     def mutate(self, action, message=""):
         from .gui import checked

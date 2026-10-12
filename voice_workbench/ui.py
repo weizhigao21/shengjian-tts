@@ -6,10 +6,12 @@ import sys
 import wave
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor
+from PyQt6.QtCore import QByteArray, QCoreApplication, QPointF, QSize, Qt, QEvent, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor, QWheelEvent
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QStyledItemDelegate, QStyle, QTableWidget, QTextEdit, QWidget
+from PyQt6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDoubleSpinBox, QFrame, QLabel,
+                            QPushButton, QSizePolicy, QSlider, QSpinBox, QStyledItemDelegate, QStyle,
+                            QTableWidget, QTextEdit, QWidget)
 
 
 INK = "#18181a"
@@ -78,6 +80,84 @@ def label(text, role=None):
     if role:
         control.setProperty("role", role)
     return control
+
+
+class ElidedLabel(QLabel):
+    """A single status line that keeps long errors from resizing its layout."""
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.full_text = ""
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setText(text)
+
+    def text(self):
+        return self.full_text
+
+    def setText(self, text):
+        self.full_text = text
+        self.setToolTip(text)
+        self.setAccessibleName(text)
+        self._fit_text()
+
+    def _fit_text(self):
+        self.setFixedHeight(self.fontMetrics().height() + 2)
+        super().setText(self.fontMetrics().elidedText(
+            self.full_text.replace("\n", " "), Qt.TextElideMode.ElideRight, self.contentsRect().width()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_text()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if hasattr(self, "full_text") and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._fit_text()
+
+
+class IgnoreWheel:
+    """Leave wheel events to the containing page, even when the control has focus."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if isinstance(self, QAbstractSpinBox):
+            self.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if (event.type() == QEvent.Type.Wheel and isinstance(self, QAbstractSpinBox)
+                and watched is self.lineEdit()):
+            self.wheelEvent(event)
+            return True
+        return super().eventFilter(watched, event)
+
+    def wheelEvent(self, event):
+        parent = self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QAbstractScrollArea):
+                viewport = parent.viewport()
+                forwarded = QWheelEvent(QPointF(viewport.mapFromGlobal(event.globalPosition().toPoint())),
+                                        event.globalPosition(), event.pixelDelta(), event.angleDelta(),
+                                        event.buttons(), event.modifiers(), event.phase(), event.inverted())
+                QCoreApplication.sendEvent(viewport, forwarded)
+                event.accept()
+                return
+            parent = parent.parentWidget()
+        event.ignore()
+
+
+class NoWheelSpinBox(IgnoreWheel, QSpinBox):
+    pass
+
+
+class NoWheelDoubleSpinBox(IgnoreWheel, QDoubleSpinBox):
+    pass
+
+
+class NoWheelComboBox(IgnoreWheel, QComboBox):
+    pass
+
+
+class NoWheelSlider(IgnoreWheel, QSlider):
+    pass
 
 
 class AnchoredPopover(QFrame):
@@ -344,7 +424,6 @@ QPushButton { border-radius:6px; font-weight:400; }
 QPushButton[kind="small"] { padding:5px 11px; min-height:18px; font-size:12px; background:#f7f7f5; }
 QPushButton[kind="icon"] { border:0; background:transparent; padding:4px; min-width:22px; min-height:22px; }
 QPushButton[kind="icon"]:hover { background:#e8e8e5; }
-QPushButton#recordPlay { border:0; background:transparent; padding:0; }
 QPushButton[kind="referenceChoice"] { text-align:left; background:white; padding:9px 12px; }
 QPushButton[kind="referenceChoice"]:checked { background:#faf4ed; border-color:#d9b38e; }
 QPushButton[kind="libraryTab"] { border:0; border-radius:0; background:transparent; padding:8px 2px 10px; color:#8a8a86; }
@@ -388,6 +467,9 @@ QPushButton[kind="disclosure"]:hover { color:#18181a; }
 QWidget#segmented { background:#fafafa; border-color:#eeeeee; }
 QTableWidget::item:selected { background:#f1f1f1; }
 QHeaderView::section { background:white; border-color:#eeeeee; }
+QTableWidget#modelTable::item { padding:4px 10px; }
+QHeaderView#modelSectionHeader::section { padding:4px 10px; }
+QTableWidget#modelTable QPushButton { padding:4px 10px; }
 QSplitter::handle { background:#eeeeee; }
 QSplitter::handle:vertical { height:1px; }
 QStatusBar { background:white; }

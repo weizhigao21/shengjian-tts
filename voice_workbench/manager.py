@@ -78,7 +78,7 @@ class Manager:
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
 
-    def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None):
+    def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None, use_preset=True):
         # Validation and enqueue must be atomic with model deletion/reconfiguration.
         with self.lock:
             if self.stopping.is_set():
@@ -88,9 +88,9 @@ class Manager:
                     job_id = self.store.workflow_job(workflow_key)
                 except ValueError as exc:
                     raise VoiceError("JOB_NOT_FOUND", str(exc), stage="工作流提交") from exc
-            return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key)
+            return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key, use_preset)
 
-    def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None):
+    def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None, use_preset=True):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
         voice, _ = self.config.resolve(model_name, allow_missing_reference=overrides is not None and "reference_audio" in overrides)
@@ -111,7 +111,8 @@ class Manager:
             value["request_options"] = {**defaults, **value.get("request_options", {})}
             value["voice_mode"] = selected_mode(value, info)
         changed_model = self.config.model_identity(base) != self.config.model_identity(voice)
-        preset_used = not base.get("is_template", False) and not changed_model
+        changed_mode = selected_mode(base, model_ui(base)) != selected_mode(voice, info)
+        preset_used = use_preset and not base.get("is_template", False) and not changed_model and not changed_mode
         provenance = {"preset_used": preset_used, "preset_id": base["id"] if preset_used else None,
                       "preset_name": base["name"] if preset_used else None,
                       "preset_modified": preset_used and before != after,
@@ -119,6 +120,10 @@ class Manager:
         if voice.get("request_options", {}).get("seed") == -1:
             # Persist the actual random seed so retry reuses it and a new take gets a new cache key.
             voice["request_options"] = {**voice["request_options"], "seed": secrets.randbelow(2147483648)}
+        if provenance["mode"] in ("clone", "continuation") and voice.get("reference_audio"):
+            # A queued job must remain runnable after the caller moves its original audio.
+            target, _ = self.config.copy_reference_audio(voice["reference_audio"])
+            voice["reference_audio"] = str(target)
         fingerprint = voice_fingerprint(voice)
         with self.lock:
             if job_id:

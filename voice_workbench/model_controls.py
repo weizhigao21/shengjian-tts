@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout
                             QButtonGroup, QHBoxLayout, QLineEdit, QPlainTextEdit, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from .model_info import KOKORO_LANGUAGES, LANGUAGES, MODES, model_ui, selected_mode
-from .ui import button, icon, label
+from .ui import NoWheelComboBox, NoWheelSpinBox, button, icon, label
 from .generation_controls import GenerationControls
 
 
@@ -48,6 +48,7 @@ class ModelControls(QWidget):
     preview_requested = pyqtSignal(str)
     audio_changed = pyqtSignal()
     choose_requested = pyqtSignal()
+    engine_download_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,9 +151,9 @@ class ModelControls(QWidget):
         self.advanced_form.setContentsMargins(0, 0, 0, 0)
         self.advanced_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.advanced_form.setSpacing(10)
-        self.device = QComboBox()
+        self.device = NoWheelComboBox()
         populate(self.device, [("cuda", "NVIDIA CUDA"), ("cpu", "CPU")], "cuda")
-        self.timeout = QSpinBox()
+        self.timeout = NoWheelSpinBox()
         self.timeout.setRange(10, 3600)
         self.timeout.setSuffix(" 秒")
         self.advanced_form.addRow("计算设备", self.device)
@@ -172,6 +173,11 @@ class ModelControls(QWidget):
             picker.setFixedWidth(34)
             picker.setToolTip("选择" + title)
             row_layout.addWidget(picker)
+            if key == "engine_executable":
+                self.engine_download_button = button("下载", lambda: self.engine_download_requested.emit(self.device.currentData()), "import", "small")
+                self.engine_download_button.setToolTip("未安装引擎时，下载到程序数据目录并自动配置。")
+                row_layout.addWidget(self.engine_download_button)
+                field.textChanged.connect(lambda: self.update_engine_download())
             self.advanced_form.addRow(title, row)
             field.textChanged.connect(self.changed)
             field.editingFinished.connect(self.refresh_capabilities)
@@ -195,15 +201,34 @@ class ModelControls(QWidget):
         self.reference_combo.currentIndexChanged.connect(self.reference_selected)
         self.reference_text.textChanged.connect(self.changed)
         self.device.currentIndexChanged.connect(self.changed)
+        self.device.currentIndexChanged.connect(lambda: self.update_engine_download())
         self.timeout.valueChanged.connect(self.changed)
         self.hide()
 
-    def bind(self, voice):
+    def bind(self, voice, preserve_edits=True, custom=False):
         info = voice.get("model_ui") or model_ui(voice)
         key = (voice.get("model_name", voice["id"]), json.dumps(info, sort_keys=True))
-        if key == self.key:
+        if preserve_edits and key == self.key:
             return
-        self.key, self.voice, self.info = key, voice, info
+        preset = voice
+        keep_editing = False
+        same_model = self.voice and self.voice.get("backend") == voice.get("backend") and self.voice.get("model_dir") == voice.get("model_dir")
+        if preserve_edits and self.voice and (self.voice["id"] == voice["id"] or (custom and same_model)):
+            from .schemas import VoiceConfig
+            exclude = {"engine_executable", "device"}
+            same_preset = VoiceConfig(**self.voice).model_dump(exclude=exclude) == VoiceConfig(**voice).model_dump(exclude=exclude)
+            edits = self.overrides()
+            if custom or (same_preset and edits.get("model_dir") == self.voice.get("model_dir")):
+                # Installing an engine must not discard text/style/reference edits made during download.
+                voice = {**voice, **{k: v for k, v in edits.items() if k not in exclude}}
+                voice.update(reference_audio=self.reference_path, reference_text=self.reference_text.toPlainText(),
+                             voice_description=self.description.text())
+                if custom:
+                    info = model_ui(voice)
+                    key = (preset.get("model_name", preset["id"]), json.dumps(info, sort_keys=True))
+                keep_editing = True
+        advanced_open, runtime_open = self.advanced_toggle.isChecked(), self.runtime_toggle.isChecked()
+        self.key, self.voice, self.info = key, preset, info
         self.blockSignals(True)
         populate(self.mode, [(mode, MODES[mode]) for mode in info["modes"]], selected_mode(voice, info))
         self.rebuild_modes()
@@ -224,8 +249,8 @@ class ModelControls(QWidget):
         for name, field in self.assets.items():
             field.setText(voice.get(name, ""))
             field.setToolTip(voice.get(name, ""))
-        self.advanced_toggle.setChecked(False)
-        self.runtime_toggle.setChecked(False)
+        self.advanced_toggle.setChecked(keep_editing and advanced_open)
+        self.runtime_toggle.setChecked(keep_editing and runtime_open)
         self.apply_visibility()
         self.blockSignals(False)
         self.show()
@@ -264,6 +289,19 @@ class ModelControls(QWidget):
             self.description.setTextCursor(cursor)
             self.description.blockSignals(False)
         self.changed.emit()
+
+    def update_engine_download(self, engine=None):
+        if engine is not None:
+            self.engine_state = engine
+        state = getattr(self, "engine_state", {})
+        path = self.assets["engine_executable"].text()
+        missing = not path or not Path(path).is_file()
+        option = next((e for e in state.get("options", []) if e["backend"] == self.device.currentData()), {})
+        busy = option.get("status") in ("downloading", "verifying", "extracting", "waiting", "pausing")
+        self.engine_download_button.setVisible(missing)
+        self.engine_download_button.setEnabled(not busy and state.get("supported", True))
+        self.engine_download_button.setText("安装中" if busy else "下载")
+        self.engine_download_button.setToolTip(option.get("error") or "下载到程序的 data/runtime/，完成后自动配置。")
 
     def mode_changed(self):
         for b in self.mode_group.buttons():

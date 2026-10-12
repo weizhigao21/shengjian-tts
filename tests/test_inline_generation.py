@@ -64,7 +64,9 @@ def test_inline_reference_repairs_missing_preset_without_mutating_it(tmp_path):
                 break
             time.sleep(.01)
         assert job["status"] == "done"
-        assert job["voice"]["reference_audio"] == reference and job["voice"]["language"] == "en"
+        retained = Path(job["voice"]["reference_audio"])
+        assert retained.parent == data / "voices" and retained.read_bytes() == Path(reference).read_bytes()
+        assert job["voice"]["language"] == "en"
         assert job["voice"]["speed"] == 1.2 and job["voice"]["emotion"] == "平静"
         assert next(v for v in ConfigStore(data).voices() if v["id"] == voice["id"])["reference_audio"].endswith("deleted.wav")
 
@@ -130,7 +132,8 @@ def test_save_from_creation_copies_reference_selects_preset_and_copies_workflow(
         window.render((client.get("/health").json(), client.get("/voices").json(), [], None))
         assert sum(window.model_combo.itemData(i) == model_key(voice) for i in range(window.model_combo.count())) == 1
         window.refresh_generation_models(voice["id"])
-        assert window.voice_combo.count() == 2
+        assert window.voice_combo.count() == 3
+        assert window.voice_combo.itemData(0) is None
         window.model_controls.speed.setValue(1.3)
         window.model_controls.language.setCurrentIndex(window.model_controls.language.findData("en"))
         window.model_controls.emotion.setText("平静")

@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import struct
 import sys
 import threading
@@ -14,6 +13,7 @@ import httpx
 
 from .config import atomic_json
 from .errors import VoiceError
+from .downloads import DownloadPaused, download_file, verify_file
 from .model_info import model_ui
 from .schemas import VoiceConfig
 
@@ -54,10 +54,6 @@ def path_identity(path):
     return os.path.normcase(str(Path(path).resolve()))
 
 
-class DownloadPaused(Exception):
-    pass
-
-
 class ModelManager:
     def __init__(self, manager, catalog=None, client_factory=None):
         self.manager, self.config = manager, manager.config
@@ -71,6 +67,8 @@ class ModelManager:
         self.cancel = {}
         self.closed = False
         self.client_factory = client_factory or (lambda: httpx.Client(follow_redirects=True, timeout=httpx.Timeout(10, connect=5, read=5)))
+        from .engine_management import EngineManager
+        self.engines = EngineManager(self)
 
     def runtime(self):
         value = self.config.read()
@@ -81,7 +79,7 @@ class ModelManager:
                 return path
         return configured
 
-    def set_runtime(self, path):
+    def set_runtime(self, path, backend=None, version=None):
         if not Path(path).is_file():
             raise VoiceError("ENGINE_MISSING", "请选择存在的 audiocpp_server.exe", stage="模型管理")
         with self.manager.lock, self.config.lock:
@@ -93,7 +91,11 @@ class ModelManager:
                 for voice in value.get(group, []):
                     if voice.get("backend") == "audio_cpp":
                         voice["engine_executable"] = str(Path(path).resolve())
+                        if backend:
+                            voice["device"] = backend
             value["native_engine"] = str(Path(path).resolve())
+            value["native_engine_backend"] = backend
+            value["native_engine_version"] = version
             atomic_json(self.config.path, value)
         return {"runtime": self.runtime()}
 
@@ -135,7 +137,7 @@ class ModelManager:
                     state = {"status": "available", "received": 0}
                 available.append({**entry, "description": model_description(entry), **state,
                                   "installed": identity in present, "downloadable": bool(entry.get("remotePath"))})
-        return {"installed": installed, "catalog": available, "runtime": self.runtime()}
+        return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing()}
 
     def register(self, path, family=None):
         path = Path(path).resolve()
@@ -150,7 +152,8 @@ class ModelManager:
         if actual not in FAMILIES or (family and family != actual):
             raise VoiceError("MODEL_FAMILY_MISMATCH", "模型内嵌配置不属于支持的语音模型家族", stage="模型导入")
         voice = VoiceConfig(id="imported-model", name="默认模型设置", backend="audio_cpp", python=sys.executable,
-                            model_dir=str(path), engine_executable=self.runtime(), family=actual).model_dump()
+                            model_dir=str(path), engine_executable=self.runtime(), family=actual,
+                            device=self.config.read().get("native_engine_backend") or "cuda").model_dump()
         info = model_ui(voice)
         voice["voice_mode"] = info["modes"][0]
         if info["builtin_voices"]:
@@ -227,62 +230,13 @@ class ModelManager:
             self.downloads[identity].update(changes)
 
     def _verify(self, path, entry, event):
-        if path.stat().st_size != entry["size"]:
-            raise ValueError(f"下载文件大小不符：应为 {entry['size']} 字节，实际 {path.stat().st_size} 字节")
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                if event.is_set():
-                    raise DownloadPaused()
-                digest.update(chunk)
-        if digest.hexdigest() != entry["sha256"]:
-            if path.suffix == ".part":
-                path.unlink(missing_ok=True)
-            raise ValueError("SHA-256 校验失败，请重新下载或移除不匹配的本地模型文件")
+        verify_file(path, entry, event)
 
     def _download(self, entry, url, event):
         identity = entry["id"]
         target = self.root / Path(entry["remotePath"]).name
-        part = target.with_name(target.name + ".part")
         try:
-            if not target.is_file():
-                offset = part.stat().st_size if part.exists() else 0
-                if offset > entry["size"]:
-                    part.unlink()
-                    offset = 0
-                self._state(identity, received=offset)
-                if offset < entry["size"]:
-                    with self.client_factory() as client:
-                        with client.stream("GET", url, headers={"Range": f"bytes={offset}-"} if offset else {}, follow_redirects=True) as response:
-                            response.raise_for_status()
-                            if response.status_code == 206:
-                                match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("content-range", ""))
-                                if not match or int(match[1]) != offset or int(match[3]) != entry["size"]:
-                                    raise ValueError("下载服务器返回的续传范围不正确，请更换下载源")
-                            elif response.status_code == 200:
-                                offset = 0  # A server may ignore Range; never append its entire response.
-                            else:
-                                raise ValueError(f"下载服务器返回 HTTP {response.status_code}")
-                            if response.headers.get("content-length") and int(response.headers["content-length"]) != entry["size"] - offset:
-                                raise ValueError("下载服务器返回的文件大小与模型目录不一致")
-                            self._state(identity, resumed_from=offset)
-                            with part.open("ab" if offset else "wb") as stream:
-                                for chunk in response.iter_bytes():
-                                    if event.is_set():
-                                        raise DownloadPaused()
-                                    if offset + len(chunk) > entry["size"]:
-                                        raise ValueError("下载数据超过模型文件大小")
-                                    stream.write(chunk)
-                                    offset += len(chunk)
-                                    self._state(identity, received=offset)
-                self._state(identity, status="verifying")
-                self._verify(part, entry, event)
-                if event.is_set():
-                    raise DownloadPaused()
-                os.replace(part, target)
-            else:
-                self._state(identity, status="verifying")
-                self._verify(target, entry, event)
+            download_file(target, entry, url, event, self.client_factory, lambda **changes: self._state(identity, **changes))
             self.register(target, entry["family"])
             self._state(identity, status="done", received=entry["size"], error="")
         except DownloadPaused:
@@ -291,6 +245,7 @@ class ModelManager:
             self._state(identity, status="paused" if event.is_set() else "failed", error="" if event.is_set() else str(exc))
 
     def close(self):
+        self.engines.close()
         with self.lock:
             self.closed = True
             for event in self.cancel.values():

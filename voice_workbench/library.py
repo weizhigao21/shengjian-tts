@@ -7,8 +7,8 @@ import wave
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
-from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
-    QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
+    QLineEdit, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from .model_controls import ModelControls, populate, voice_label
 from .model_info import MODES, selected_mode
@@ -22,11 +22,12 @@ def friendly_name(voice):
     return name.split(" · ")[-1] if " · 声音 " in name else name
 
 
-class RecordButton(QPushButton):
+class RecordButton(QAbstractButton):
     def __init__(self, seed, callback, reference="", ring=False):
         super().__init__()
         self.setObjectName("recordPlay")
         self.setFixedSize(80, 80)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clicked.connect(callback)
         self.seed = int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16)
@@ -72,8 +73,9 @@ class RecordButton(QPushButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if not self.isEnabled():
             p.setOpacity(.4)
-        p.scale(self.width() / 80, self.height() / 80)
-        p.translate(40, 40)
+        p.translate(self.width() / 2, self.height() / 2)
+        scale = min(self.width(), self.height()) / 80
+        p.scale(scale, scale)
         p.rotate(self.angle)
         if self.ring:
             for i in range(64):

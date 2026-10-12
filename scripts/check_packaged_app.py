@@ -66,6 +66,54 @@ def generate(client, voice, label, artifacts):
     raise RuntimeError(label + "生成超时。")
 
 
+def check_reference_retention(client, sample, artifacts, data, voices):
+    source = artifacts / "reference-import-source.wav"
+    original = Path(sample["file"]).read_bytes()
+    source.write_bytes(original)
+    imported = client.post("/references", json={"name": "打包参考音频", "reference_audio": str(source)})
+    imported.raise_for_status()
+    reference = imported.json()
+    retained = Path(reference["reference_audio"])
+    assert retained.parent == data / "voices" and retained.read_bytes() == original
+    clone = next((v for v in voices if not v.get("error") and
+                  set(v.get("model_ui", {}).get("modes", [])) & {"clone", "continuation"}), None)
+    if clone:
+        response = client.put("/voices/package-reference-copy", json={**clone, "id": "package-reference-copy",
+            "name": "打包音频副本验证", "reference_audio": str(source)})
+        response.raise_for_status()
+        assert response.json()["reference_audio"] == str(retained)
+    source.unlink()
+    saved_reference = next(r for r in client.get("/references").json() if r["id"] == reference["id"])
+    assert saved_reference["error"] is None and retained.read_bytes() == original
+    if clone:
+        saved_voice = next(v for v in client.get("/voices").json() if v["id"] == "package-reference-copy")
+        assert saved_voice["error"] is None
+    print("参考音频已复制到 EXE 数据目录，删除原文件后仍可读取；预设复用同一份副本。", flush=True)
+    return {"reference_import": True, "preset_copy": bool(clone), "original_removed": True,
+            "retained": str(retained)}
+
+
+def check_engine_install(client, artifacts, data, kokoro):
+    response = client.post("/models/runtime/download", json={"backend": "cpu"})
+    response.raise_for_status()
+    deadline = time.monotonic() + 150
+    while time.monotonic() < deadline:
+        engine = client.get("/models").json()["engine"]
+        option = next(e for e in engine["options"] if e["backend"] == "cpu")
+        if option["status"] in ("done", "failed", "paused"):
+            break
+        time.sleep(.3)
+    assert option["status"] == "done", option
+    assert Path(engine["path"]).is_relative_to(data / "runtime") and engine["ready"]
+    report = {"backend": "cpu", "version": option["version"], "path": engine["path"], "configured": True}
+    if kokoro:
+        voice = next(v for v in client.get("/voices").json() if v["id"] == kokoro["id"])
+        assert voice["device"] == "cpu" and voice["engine_executable"] == engine["path"]
+        report["native_cpu"] = generate(client, voice, "新下载CPU引擎", artifacts)
+    print("EXE 引擎下载、校验、安装和自动配置通过。", flush=True)
+    return report
+
+
 def check_lifecycle(executable, data):
     # Exercise the normal close handler with real frozen child processes.
     from PyQt6.QtCore import QTimer
@@ -162,10 +210,12 @@ def main():
             print("独立 EXE 已自动启动服务，音色发现与模型目录可用；PATH 不包含 Python。", flush=True)
             voices = client.get("/voices").json()
             report["windows_sapi"] = generate(client, next(v for v in voices if v["id"] == "default"), "Windows系统声音", artifacts)
+            report["reference_retention"] = check_reference_retention(client, report["windows_sapi"], artifacts, data, voices)
             kokoro = next((v for v in voices if v.get("backend") == "audio_cpp" and v.get("family") == "kokoro_tts" and not v.get("error")), None)
             if kokoro:
                 report["kokoro"] = generate(client, kokoro, "Kokoro统一引擎", artifacts)
                 report["workflow_batching"] = check_workflow_batching(client, kokoro)
+            report["engine_install"] = check_engine_install(client, artifacts, data, kokoro)
             client.post("/shutdown").raise_for_status()
     finally:
         try:

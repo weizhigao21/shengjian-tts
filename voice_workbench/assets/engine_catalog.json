@@ -1,0 +1,23 @@
+{
+  "version": "v0.7.4",
+  "release": "https://github.com/0xShug0/audio.cpp/releases/tag/v0.7.4",
+  "backends": [
+    {
+      "id": "cuda",
+      "name": "NVIDIA CUDA 12.4",
+      "description": "适用于 NVIDIA 显卡；包含推理程序及 CUDA 运行库，下载后无需单独安装 CUDA Toolkit。",
+      "archives": [
+        {"name": "audio-v0.7.4-bin-windows-x64-cuda12.4.zip", "size": 441081367, "sha256": "83fdd5b6e7bd4362604c10cc88d7d3564ef82030dc1d21c693a62cdcbe2e5e38"},
+        {"name": "audio-v0.7.4-cudart-windows-x64-cuda12.4.zip", "size": 607273675, "sha256": "88d8943a2a8011f02c2a4efa7dbbe258608362615cce51e7f0e0e3a0c62f5a43"}
+      ]
+    },
+    {
+      "id": "cpu",
+      "name": "CPU 便携版",
+      "description": "无需 NVIDIA 显卡，下载体积较小；大模型生成速度通常较慢。",
+      "archives": [
+        {"name": "audio-v0.7.4-bin-windows-x64-cpu-portable.zip", "size": 22293044, "sha256": "d241c56ba78fd3c1b28bf289792fb8ec258d36586b4e0c8d667080ec248c0d2f"}
+      ]
+    }
+  ]
+}

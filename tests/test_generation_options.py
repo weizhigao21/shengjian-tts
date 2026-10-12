@@ -55,6 +55,80 @@ def test_declared_option_contract_controls_ranges_and_available_fields(tmp_path,
     controls.close()
 
 
+def test_advanced_wheel_scrolls_page_without_editing_focused_controls(tmp_path, qtbot):
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtTest import QSignalSpy
+    from PyQt6.QtWidgets import QApplication, QSlider
+    from voice_workbench.gui import Window
+
+    window = Window(8799, tmp_path / "data", autostart=False)
+    qtbot.addWidget(window)
+    window.timer.stop()
+    window.settings.timer.stop()
+    controls = window.model_controls
+    controls.bind(vox_voice(tmp_path))
+    controls.advanced_toggle.setChecked(True)
+    controls.runtime_toggle.setChecked(True)
+    window.resize(1080, 720)
+    window.show()
+    scroll = window.inspector_scroll
+    qtbot.waitUntil(lambda: scroll.verticalScrollBar().maximum() > 0)
+    fields = controls.generation_controls.fields
+    fields["guidance_scale"].setValue(2.8)
+    fields["num_inference_steps"].setValue(18)
+    combo = fields["voxcpm2.chunk_strategy"]
+    combo.setCurrentIndex(1)
+    controls.device.setCurrentIndex(1)
+    slider = controls.generation_controls.findChild(QSlider)
+    targets = (fields["guidance_scale"], fields["guidance_scale"].lineEdit(),
+               fields["num_inference_steps"], slider, combo,
+               controls.device, controls.timeout, controls.timeout.lineEdit())
+    expected = controls.overrides()
+    changed = QSignalSpy(controls.changed)
+    for target in targets:
+        scroll.ensureWidgetVisible(target, 0, 0)
+        target.setFocus()
+        QApplication.processEvents()
+        assert target.hasFocus()
+        before = scroll.verticalScrollBar().value()
+        delta = -120 if before < scroll.verticalScrollBar().maximum() else 120
+        pos = QPointF(target.rect().center())
+        event = QWheelEvent(pos, QPointF(target.mapToGlobal(pos.toPoint())), QPoint(),
+                            QPoint(0, delta), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(target, event)
+        assert controls.overrides() == expected
+        assert scroll.verticalScrollBar().value() != before, (type(target).__name__, target.objectName())
+    assert len(changed) == 0
+
+    # Explicit editing and mouse interactions still change the chosen parameter.
+    field = fields["num_inference_steps"]
+    scroll.ensureWidgetVisible(field, 0, 0)
+    qtbot.mouseClick(field.lineEdit(), Qt.MouseButton.LeftButton)
+    field.lineEdit().selectAll()
+    qtbot.keyClicks(field.lineEdit(), "20")
+    qtbot.keyClick(field.lineEdit(), Qt.Key.Key_Enter)
+    assert field.value() == 20
+    scroll.ensureWidgetVisible(slider, 0, 0)
+    previous = slider.value()
+    qtbot.mouseClick(slider, Qt.MouseButton.LeftButton,
+                    pos=QPoint(slider.width() - 8, slider.height() // 2))
+    assert slider.value() != previous
+    scroll.ensureWidgetVisible(combo, 0, 0)
+    qtbot.mouseClick(combo, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: combo.view().isVisible())
+    index = combo.model().index(0, 0)
+    combo.view().scrollTo(index)
+    QApplication.processEvents()
+    qtbot.mouseMove(combo.view().viewport(), pos=combo.view().visualRect(index).center())
+    qtbot.mouseClick(combo.view().viewport(), Qt.MouseButton.LeftButton,
+                    pos=combo.view().visualRect(index).center())
+    assert combo.currentIndex() == 0
+    assert len(changed) > 0
+    window.close()
+
+
 class CaptureRunner:
     def __init__(self):
         self.requests = []
