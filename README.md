@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.28-E87936?style=flat-square" alt="版本 v0.7.28" />
+  <img src="https://img.shields.io/badge/源码-v0.7.29-E87936?style=flat-square" alt="源码版本 v0.7.29" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -24,11 +24,13 @@
 
 <p align="center"><sub>v0.7.28 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
-## 首个公开版本
+## 版本与下载
 
-**v0.7.28 · Windows x64 · 解压即用，无需安装 Python。**
+**当前源码：v0.7.29。** 优化草稿保存、生成失败恢复和多实例退出，减少界面轮询与重复校验。331 项回归通过；详见[更新记录](CHANGELOG.md)和[优化记录](docs/OPTIMIZATION.md)。
 
-从 [Releases](https://github.com/weizhigao21/shengjian-tts/releases/latest) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.29 的 Windows 包待构建。
+
+从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
 ## 可以做什么
 
@@ -251,6 +253,8 @@ flowchart LR
 │  ├─ desktop/                     桌面实现
 │  │  ├─ window.py                主窗口装配与 Qt 生命周期
 │  │  ├─ api_client.py            异步 HTTP 请求与响应解析
+│  │  ├─ draft_saves.py           草稿快照、按任务保存与断线恢复
+│  │  ├─ voice_checks.py          界面校验缓存与文件版本检查
 │  │  ├─ constants.py             状态文字
 │  │  ├─ model_labels.py          模型身份及显示名称
 │  │  ├─ components/
@@ -328,6 +332,11 @@ flowchart LR
 ├─ integration/                    双语工作流适配器、配置及安装备份
 │  ├─ local_voice_client.py        音色发现、版本固定、批次下载与保存后确认
 │  └─ local_voice_picker.py        工作流中的链接接入、音色选择与刷新控件
+├─ docs/                           项目文档与界面截图
+│  ├─ ARCHITECTURE.md              分层规则与模块职责
+│  ├─ DIALOGUE_MODE_PLAN.md        对话设计与后续计划
+│  ├─ OPTIMIZATION.md             体检优化、测量与验证记录
+│  └─ images/                     实际界面截图
 ├─ scripts/                        联动安装、快捷方式、图标与验证脚本
 │  ├─ build_package.py             打包、产物验证与程序覆盖发布
 │  ├─ package_files.py             程序文件替换、占用检查与数据保护
@@ -357,7 +366,7 @@ flowchart LR
 ├─ 打包.bat                        Windows 一键打包脚本
 ├─ 声笺.spec                       图标、资源、依赖与双 EXE 打包配置
 ├─ pyproject.toml                  Python 打包、依赖与测试配置
-├─ requirements-release.txt        首个发行版的固定构建环境
+├─ requirements-release.txt        v0.7.28 发行版的固定构建环境
 ├─ LICENSE                        GPLv3 许可证
 ├─ licenses/                      依赖版本、来源与完整许可声明
 ├─ README.md                       使用说明与代码结构
