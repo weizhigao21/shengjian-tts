@@ -86,6 +86,7 @@ class DocumentController:
         self.text_edit.setPlainText(job.get("script") if job.get("script") is not None else
             "\n".join((f"[{s['timestamp']}]" if s["timestamp"] else "") + s["text"] for s in job["segments"]))
         self.text_edit.restore_mentions(job.get("script_mentions"))
+        self.load_editor_state(job)
         self.loading_document = False
         self.document_dirty = False
         base = next((v for v in self.voices if v["id"] == job["voice"].get("id") and model_key(v) == model_key(job["voice"])), None)
@@ -190,8 +191,7 @@ class DocumentController:
         if not self.document_dirty or not self.selected_job or not self.ready or self.document_save_running or self.submitting:
             return
         target = self.selected_job
-        body = {"title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText(),
-                "script_mentions": self.text_edit.mentions()}
+        body = self.document_payload()
         self.document_dirty = False
         self.document_save_running = True
         def finished(_=None):
@@ -254,7 +254,9 @@ class DocumentController:
             control.setEnabled(False)
         self.title_edit.setText("未命名配音")
         self.text_edit.clear()
-        self.text_edit.setFocus()
+        self.dialogue_editor.load([])
+        self.editor_mode = "article"
+        self.open_creation_home()
         if self.ready:
             self.submitting = True
             self.update_generation_actions()
@@ -269,9 +271,9 @@ class DocumentController:
 
     def update_script_stats(self):
         from ...subtitles import parse_text
-        text = self.text_edit.toPlainText()
+        text = self.document_text()
         try:
-            segments = self.text_edit.segments() if text.strip() else []
+            segments = self.document_segments() if text.strip() else []
             count = len(segments)
             self.script_stats.setText(f"{len(text.strip())} 字  ·  {count} 个片段")
             self.script_stats.setToolTip("")

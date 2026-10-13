@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
 DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md")
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
-    "app", "workbench", "generation-list", "voice-library", "workflow", "models", "engine-settings", "audio-manager"))
+    "app", "workbench", "dialogue", "generation-list", "voice-library", "workflow", "models", "engine-settings", "audio-manager"))
 
 
 def copy_documentation(candidate):

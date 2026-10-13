@@ -21,7 +21,8 @@ def submit(body: JobInput, request: Request):
                           overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
                           script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset,
                           record_only=body.record_only, delivery_ack=body.delivery_ack,
-                          script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None)
+                          script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
+                          editor_state=body.editor_state.model_dump() if body.editor_state else None)
         return submitted(m, job_id)
 
 
@@ -32,7 +33,8 @@ def submitted(m, job_id):
 @router.post("/jobs/draft", status_code=201)
 def create_draft(body: DocumentInput, request: Request):
     job_id = manager(request).store.create(body.title, {}, "", [], body.script,
-        script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None)
+        script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
+        editor_state=body.editor_state.model_dump() if body.editor_state else None)
     return get_job(manager(request), job_id)
 
 
@@ -46,7 +48,8 @@ def append_generation(job_id: str, body: JobInput, request: Request):
                  overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
                  job_id=job_id, script=body.script, use_preset=body.use_preset,
                  record_only=body.record_only, delivery_ack=body.delivery_ack,
-                 script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None)
+                 script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
+                 editor_state=body.editor_state.model_dump() if body.editor_state else None)
         return submitted(m, job_id)
 
 
@@ -55,7 +58,8 @@ def save_document(job_id: str, body: DocumentInput, request: Request):
     m = manager(request)
     get_job(m, job_id)
     title = m.store.save_document(job_id, body.title, body.script,
-        [v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None)
+        [v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
+        body.editor_state.model_dump() if body.editor_state else None)
     return {"saved": job_id, "title": title}
 
 

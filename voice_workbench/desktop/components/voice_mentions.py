@@ -1,9 +1,9 @@
 """Paragraph-start @ completion with persistent preset identity."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QModelIndex, Qt, QSize
+from PyQt6.QtCore import QModelIndex, Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QTextCharFormat, QTextCursor, QTextFormat
-from PyQt6.QtWidgets import QCompleter, QStyledItemDelegate, QStyle
+from PyQt6.QtWidgets import QCompleter, QListView, QStyledItemDelegate, QStyle
 
 from ...ui import ScriptEditor
 from ...services.script_voices import parse_script, utf16_length
@@ -12,6 +12,21 @@ from ..model_labels import model_label
 IDENTITY = QTextFormat.Property.UserProperty.value + 41
 CAPTION = IDENTITY + 1
 VOICE_ROLE = Qt.ItemDataRole.UserRole.value + 41
+DETAIL_ROLE = VOICE_ROLE + 1
+
+
+class PresetPopup(QListView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseMoveEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid():
+            self.setCurrentIndex(index)
+        super().mouseMoveEvent(event)
 
 
 class PresetDelegate(QStyledItemDelegate):
@@ -35,7 +50,7 @@ class PresetDelegate(QStyledItemDelegate):
             small.setPointSizeF(max(8, small.pointSizeF() - 1))
         painter.setFont(small)
         painter.setPen(QColor("#888888"))
-        detail = index.data(Qt.ItemDataRole.UserRole.value + 42) if voice else "可先在声音库保存声音预设"
+        detail = index.data(DETAIL_ROLE) if voice else "可先在声音库保存声音预设"
         if voice.get("error"):
             detail += " · 配置需修复"
         painter.drawText(rect.adjusted(0, 22, 0, 0), Qt.AlignmentFlag.AlignVCenter,
@@ -44,17 +59,21 @@ class PresetDelegate(QStyledItemDelegate):
 
 
 class PresetScriptEditor(ScriptEditor):
+    preset_chosen = pyqtSignal(dict)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.voices = []
         self.suppress_completion = False
         self.dismissed_prefix = None
+        self.enable_mentions = True
         self.model = QStandardItemModel(self)
         self.completer = QCompleter(self.model, self)
         self.completer.setWidget(self)
         self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.completer.setPopup(PresetPopup())
         popup = self.completer.popup()
         popup.setObjectName("voiceMentionPopup")
         popup.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -80,8 +99,9 @@ class PresetScriptEditor(ScriptEditor):
                 detail += " · " + voice["id"]
             item = QStandardItem(voice["name"] + "\n" + detail)
             item.setData(voice, VOICE_ROLE)
-            item.setData(detail, Qt.ItemDataRole.UserRole.value + 42)
-            item.setToolTip((voice.get("error") or {}).get("message") or "使用此预设的模型、模式和已保存参数")
+            item.setData(detail, DETAIL_ROLE)
+            item.setToolTip(voice["name"] + "\n" + detail + "\n" + ((voice.get("error") or {}).get("message")
+                or "点击使用此预设的模型、模式和已保存参数"))
             self.model.appendRow(item)
         if not presets:
             item = QStandardItem("还没有声音预设")
@@ -101,6 +121,8 @@ class PresetScriptEditor(ScriptEditor):
         self.dismissed_prefix = None
 
     def mention_prefix(self):
+        if not self.enable_mentions:
+            return None
         cursor = self.textCursor()
         block = cursor.block()
         position = cursor.position() - block.position()
@@ -130,7 +152,7 @@ class PresetScriptEditor(ScriptEditor):
             self.completer.popup().hide()
             return
         rect = self.cursorRect()
-        rect.setWidth(min(420, max(320, self.viewport().width() // 2)))
+        rect.setWidth(min(560, max(360, self.viewport().width() - rect.x() - 12)))
         self.completer.popup().setMinimumHeight(min(270, self.completer.completionCount() * 54 + 8))
         self.completer.complete(rect)
         self.completer.popup().setCurrentIndex(self.completer.completionModel().index(0, 0))
@@ -158,6 +180,7 @@ class PresetScriptEditor(ScriptEditor):
         self.suppress_completion = False
         self.dismissed_prefix = None
         self.textChanged.emit()  # The complete binding, rather than intermediate edits, is now available.
+        self.preset_chosen.emit(voice)
 
     def keyPressEvent(self, event):
         if self.completer.popup().isVisible():
@@ -224,4 +247,7 @@ class PresetScriptEditor(ScriptEditor):
         self.suppress_completion = False
 
     def segments(self):
+        if not self.enable_mentions and not self.mentions():
+            from ...subtitles import parse_text
+            return parse_text(self.toPlainText())
         return parse_script(self.toPlainText(), self.voices, self.mentions())

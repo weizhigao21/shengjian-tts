@@ -61,6 +61,8 @@ v0.7.21 起，片段可选填 `voice_id` 指定已有声音预设：`{"text":"�
 
 作品创建、保存及生成请求支持可选 `script_mentions`：`[{"start":0,"end":3,"preset_id":"speaker-id","label":"御姐"}]`，用于重开编辑器时恢复 `@御姐` 的身份，偏移按 Qt UTF-16 单位计算。此字段仅保存编辑标签；推理以片段 `voice_id` 为准。旧客户端无需新增字段，普通文稿更新未携带标签时会清空旧标签，避免误用声音。
 
+v0.7.22 增加可选 `editor_state`，保存 `mode`（`article` / `dialogue`）、`article_text`、`article_mentions` 和 `dialogue_entries`（每条含 `id`、`text`、`voice_id`、`voice_name`）。对白提交仍使用原生成接口；片段的可选 `source_id`、`source_revision` 关联条目及提交版本，`force_generate: true` 执行新推理并保留旧音频。未更新文稿的追加生成沿用作品当前编辑状态；旧客户端仍可按原字段提交普通文章。
+
 v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 `text_chunk_mode:default` 在新版不再提供此参数时省略；VoxCPM2 的 `voxcpm2.chunk_strategy` / `chunk_strategy` 按引擎契约转换。原预设及版本标签保留，新生成记录保存实际使用的参数；未知参数、非默认的旧分段方式及无效值仍报错。
 
 片段与生成音频列表中的 `generation_seconds` 为本次推理调用至 WAV 校验完成的耗时（秒），含首次模型加载，不含排队；`duration` 为音频时长。缓存复用时 `cached:1`、`generation_seconds:0`，旧记录或尚未推理时耗时为 `null`。失败重试记录本次尝试的耗时。

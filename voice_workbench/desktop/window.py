@@ -19,10 +19,11 @@ from .controllers.generation import GenerationController
 from .controllers.playback import PlaybackController
 from .controllers.service import ServiceController
 from .controllers.voices import VoiceLibraryController
+from .controllers.creation import CreationController
 from .layout.workspace import UiLayout
 
 
-class Window(DocumentController, GenerationController, PlaybackController, VoiceLibraryController, ServiceController, UiLayout, QMainWindow):
+class Window(CreationController, DocumentController, GenerationController, PlaybackController, VoiceLibraryController, ServiceController, UiLayout, QMainWindow):
     def __init__(self, port, data_dir, autostart=True):
         super().__init__()
         self.port, self.data_dir = port, Path(data_dir).resolve()
@@ -52,6 +53,7 @@ class Window(DocumentController, GenerationController, PlaybackController, Voice
         self.ready = False
         self.submitting = False
         self.loading_document = False
+        self.editor_mode = "article"
         self.document_dirty = False
         self.document_save_running = False
         self.after_save = []
@@ -127,6 +129,7 @@ class Window(DocumentController, GenerationController, PlaybackController, Voice
         self.clip_list.hide()
         self.settings.close_management()
         self.text_edit.completer.popup().hide()
+        self.dialogue_editor.close_popups()
         self.player.stop()
         self.player.setSource(QUrl())
         self.reference_player.stop()
@@ -139,9 +142,7 @@ class Window(DocumentController, GenerationController, PlaybackController, Voice
         if self.document_dirty and self.selected_job:
             try:
                 with httpx.Client(base_url=self.url, trust_env=False, timeout=2) as client:
-                    checked(client.patch(f"/jobs/{self.selected_job}/document", json={
-                        "title": self.title_edit.text().strip() or "未命名配音", "script": self.text_edit.toPlainText(),
-                        "script_mentions": self.text_edit.mentions()}))
+                    checked(client.patch(f"/jobs/{self.selected_job}/document", json=self.document_payload()))
             except Exception as exc:
                 self.service_log.append("退出时草稿保存失败：" + str(exc))
         if self.owns_service and self.process and self.process.poll() is None:

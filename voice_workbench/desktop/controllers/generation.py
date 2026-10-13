@@ -36,10 +36,8 @@ class GenerationController:
         self.document_timer.stop()
         self.document_dirty = False
         use_preset = self.selected_preset() is not None
-        body = {"voice_id": voice["model_name"] if use_preset else voice["id"], "use_preset": use_preset,
+        body = {**self.document_payload(), "voice_id": voice["model_name"] if use_preset else voice["id"], "use_preset": use_preset,
                 "title": title, "segments": segments,
-                "script": self.text_edit.toPlainText(),
-                "script_mentions": self.text_edit.mentions(),
                 "overrides": self.model_controls.overrides()}
         self.submission_title = title
         target = self.selected_job
@@ -80,7 +78,7 @@ class GenerationController:
 
     def generate(self):
         try:
-            self.submit(self.text_edit.segments(), self.title_edit.text() or "配音任务")
+            self.submit(self.document_segments(), self.title_edit.text() or "配音任务")
         except Exception as exc:
             self.show_error(str(exc))
 
@@ -162,9 +160,9 @@ class GenerationController:
         self.jobs_table.setEnabled(not getattr(self, "submitting", False))
         self.warmup_button.setEnabled(usable and not getattr(self, "submitting", False))
         generate_usable = usable
-        if self.ready and self.text_edit.toPlainText().strip():
+        if self.ready and self.document_text().strip():
             try:
-                segments = self.text_edit.segments()
+                segments = self.document_segments()
                 tagged = {s.get("voice_id") for s in segments if s.get("voice_id")}
                 if tagged:
                     for identity in tagged:
@@ -172,7 +170,7 @@ class GenerationController:
                         check_voice(preset)
                     generate_usable = usable or all(s.get("voice_id") for s in segments)
                     if generate_usable:
-                        message = f"使用 {len(tagged)} 个 @ 音色预设 · 未指定音色的行沿用右侧设置"
+                        message = f"使用 {len(tagged)} 个音色预设 · 未指定音色的对白沿用右侧设置"
             except (ValueError, StopIteration) as exc:
                 generate_usable = False
                 message = str(exc) or "声音预设已删除，请重新选择"
@@ -180,9 +178,10 @@ class GenerationController:
                 generate_usable = False
                 message = "@ 音色配置不可用：" + str(exc)
         self.voice_health.setText(message)
-        self.generate_button.setEnabled(generate_usable and not getattr(self, "submitting", False) and bool(self.text_edit.toPlainText().strip()))
+        self.generate_button.setEnabled(generate_usable and not getattr(self, "submitting", False) and bool(self.document_text().strip()))
         self.save_generation_button.setEnabled(usable)
         self.model_controls.advanced_toggle.setEnabled(bool(voice))
+        self.update_dialogue_records()
 
     def update_voice_summary(self, *args, reapply=False):
         if args:

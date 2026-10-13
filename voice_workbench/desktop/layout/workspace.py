@@ -41,7 +41,7 @@ class UiLayout(GenerationLayout, PlayerLayout, WorkflowLayout):
         nav.addSpacing(12)
         self.nav_buttons = []
         for index, (text, symbol) in enumerate((("语音创作", "pen"), ("声音库", "voices"), ("工作流联动", "link"), ("设置", "settings"))):
-            control = button(text, lambda _, i=index: self.set_page(i), symbol, "nav")
+            control = button(text, lambda _, i=index: self.navigate(i), symbol, "nav")
             control.setCheckable(True)
             self.nav_buttons.append(control)
             nav.addWidget(control)

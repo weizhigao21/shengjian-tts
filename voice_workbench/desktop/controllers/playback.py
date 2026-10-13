@@ -28,6 +28,7 @@ class PlaybackController:
             return
         selected_idx = (self.current_segment() or {}).get("idx")
         self.job_data = job
+        self.update_dialogue_records()
         self.visible_segments = sorted_audio(job["segments"], self.clip_sort.currentData())
         selected_row = next((row for row, s in enumerate(self.visible_segments) if s["idx"] == selected_idx), -1)
         self.segments_table.blockSignals(True)

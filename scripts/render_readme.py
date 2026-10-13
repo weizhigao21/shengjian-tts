@@ -163,7 +163,9 @@ def main():
             screenshots = []
 
             def capture(name):
-                app.processEvents()
+                # Growing dialogue editors can require another layout pass.
+                for _ in range(4):
+                    app.processEvents()
                 window.clearFocus()
                 assert window.grab().save(str(args.output / (name + ".png")))
                 screenshots.append(name)
@@ -174,6 +176,18 @@ def main():
             window.clip_title.click()
             capture("generation-list")
             window.clip_list.hide()
+            window.choose_creation_mode("dialogue")
+            window.title_edit.setText("山海之间 · 对话")
+            first = window.dialogue_editor.rows[0]
+            first.set_voice(next(v for v in window.voices if v["id"] == narration_id))
+            first.text.setPlainText("清晨，山谷中的第一束光落在窗边。我们沿着街角走向山海，旅途从这里开始。")
+            second = window.dialogue_editor.add_after(first)
+            second.set_voice(next(v for v in window.voices if v["id"] == "demo-reader"))
+            second.text.setPlainText("听见了吗？风从山谷吹来，故事也有了新的声音。")
+            third = window.dialogue_editor.add_after(second)
+            third.set_voice(next(v for v in window.voices if v["id"] == "demo-commentary"))
+            third.text.setPlainText("那就出发吧，一起去看看下一段风景。")
+            capture("dialogue")
             window.set_page(1)
             window.library.set_page("presets")
             capture("voice-library")

@@ -2,11 +2,13 @@
 from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QWidget,
+    QComboBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSizePolicy, QStackedWidget, QWidget,
 )
 from ...ui import ElidedLabel, button, label
 from ...model_controls import ModelControls
 from ..components.voice_mentions import PresetScriptEditor
+from ..components.dialogue import DialogueEditor
+from .creation import creation_home
 
 
 class GenerationLayout:
@@ -30,24 +32,42 @@ class GenerationLayout:
         self.title_edit.setMaxLength(200)
         self.title_edit.textChanged.connect(self.document_changed)
         overline.addWidget(self.title_edit, 1)
-        import_control = button("", self.import_text, "import", "icon")
-        import_control.setToolTip("导入字幕或文本")
-        overline.addWidget(import_control)
+        self.mode_buttons = {}
+        for mode, name in (("article", "文章"), ("dialogue", "对话")):
+            control = button(name, lambda checked=False, m=mode: self.choose_creation_mode(m), kind="segment")
+            control.setCheckable(True)
+            control.setChecked(mode == "article")
+            control.setFixedWidth(58)
+            overline.addWidget(control)
+            self.mode_buttons[mode] = control
+        self.import_control = button("", self.import_text, "import", "icon")
+        self.import_control.setToolTip("导入字幕或文本")
+        overline.addWidget(self.import_control)
+        overline.addWidget(button("", self.open_creation_home, "previous", "icon"))
         editor.addLayout(overline)
         self.text_edit = PresetScriptEditor()
+        self.text_edit.enable_mentions = False
         self.text_edit.setObjectName("scriptEditor")
         self.text_edit.setAcceptRichText(False)
-        self.text_edit.setPlaceholderText("从第一句话开始…\n在行首输入 @ 选择声音预设，空格后输入正文")
+        self.text_edit.setPlaceholderText("从第一句话开始…")
         self.text_edit.textChanged.connect(self.update_script_stats)
         self.text_edit.textChanged.connect(self.document_changed)
-        editor.addWidget(self.text_edit, 1)
+        self.editor_stack = QStackedWidget()
+        self.editor_stack.addWidget(self.text_edit)
+        self.dialogue_editor = DialogueEditor()
+        self.dialogue_editor.changed.connect(self.dialogue_changed)
+        self.dialogue_editor.submit_requested.connect(self.generate_dialogue_entry)
+        self.dialogue_editor.play_requested.connect(self.play_dialogue_entry)
+        self.editor_stack.addWidget(self.dialogue_editor)
+        editor.addWidget(self.editor_stack, 1)
         footer = QHBoxLayout()
         self.script_stats = label("0 字  ·  0 个片段", "muted")
         footer.addWidget(self.script_stats)
         footer.addStretch()
-        footer.addWidget(label("TXT / LRC / SRT / VTT", "eyebrow"))
+        self.format_hint = label("TXT / LRC / SRT / VTT", "eyebrow")
+        footer.addWidget(self.format_hint)
         editor.addLayout(footer)
-        doc.addWidget(writing)
+        doc.addWidget(writing, 1)
         layout.addWidget(document, 1)
 
         inspector = QWidget()
@@ -127,4 +147,8 @@ class GenerationLayout:
         action_layout.insertWidget(1, self.generate_button)
         inspector_layout.insertWidget(0, actions)
         layout.addWidget(inspector)
-        self.tabs.addWidget(page)
+        self.creation_pages = QStackedWidget()
+        self.creation_pages.addWidget(creation_home(self))
+        self.creation_pages.addWidget(page)
+        self.creation_pages.setCurrentIndex(1)
+        self.tabs.addWidget(self.creation_pages)

@@ -36,6 +36,9 @@ class SegmentInput(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     timestamp: str = Field(default="", max_length=50)
     voice_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    source_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    source_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    force_generate: bool = False
 
 
 class ScriptMention(BaseModel):
@@ -43,6 +46,20 @@ class ScriptMention(BaseModel):
     end: int = Field(ge=1, le=4000000)
     preset_id: str = Field(pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
     label: str = Field(min_length=1, max_length=100)
+
+
+class DialogueEntry(BaseModel):
+    id: str = Field(pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    text: str = Field(default="", max_length=5000)
+    voice_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    voice_name: str = Field(default="", max_length=100)
+
+
+class EditorState(BaseModel):
+    mode: Literal["article", "dialogue"] = "article"
+    article_text: str = Field(default="", max_length=2000000)
+    article_mentions: list[ScriptMention] = Field(default_factory=list, max_length=10000)
+    dialogue_entries: list[DialogueEntry] = Field(default_factory=list, max_length=10000)
 
 
 class GenerationOverrides(BaseModel):
@@ -73,6 +90,7 @@ class JobInput(BaseModel):
     overrides: GenerationOverrides | None = None
     script: str | None = Field(default=None, max_length=2000000)
     script_mentions: list[ScriptMention] | None = Field(default=None, max_length=10000)
+    editor_state: EditorState | None = None
     workflow_key: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.:-]{1,160}$")
     record_only: bool = False
     delivery_ack: bool = False
@@ -88,6 +106,7 @@ class DocumentInput(BaseModel):
     title: str = Field(default="未命名配音", max_length=200)
     script: str = Field(default="", max_length=2000000)
     script_mentions: list[ScriptMention] | None = Field(default=None, max_length=10000)
+    editor_state: EditorState | None = None
 
 
 class AudioDeletion(BaseModel):

@@ -48,7 +48,7 @@ class Manager:
         self.thread.start()
 
     def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-               use_preset=True, record_only=False, delivery_ack=False, script_mentions=None):
+               use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None):
         # Validation and enqueue must be atomic with model deletion/reconfiguration.
         with self.lock:
             if self.stopping.is_set():
@@ -60,10 +60,10 @@ class Manager:
                     raise VoiceError("JOB_NOT_FOUND", str(exc), stage="工作流提交") from exc
             record_only = record_only or bool(workflow_key) or title in WORKFLOW_TITLES
             return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key,
-                                use_preset, record_only, delivery_ack, script_mentions)
+                                use_preset, record_only, delivery_ack, script_mentions, editor_state)
 
     def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None):
+                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
         prepared, segments = prepare_segments(self.config, model_name, segments, overrides=overrides,
@@ -78,14 +78,16 @@ class Manager:
                     script = existing.get("script")
                     if script_mentions is None:
                         script_mentions = existing.get("script_mentions")
+                    if editor_state is None:
+                        editor_state = existing.get("editor_state")
                 if record_only and not existing["record_only"]:
                     raise VoiceError("WORKFLOW_TARGET_MISMATCH", "工作流记录不能追加到创作作品", stage="工作流提交")
                 self.store.append(job_id, title, voice, fingerprint, segments, script, provenance,
                                   workflow=bool(workflow_key) or record_only, delivery_ack=delivery_ack,
-                                  script_mentions=script_mentions)
+                                  script_mentions=script_mentions, editor_state=editor_state)
             else:
                 job_id = self.store.create(title, voice, fingerprint, segments, script, provenance, workflow_key,
-                                           record_only, delivery_ack, script_mentions)
+                                           record_only, delivery_ack, script_mentions, editor_state)
             self.wake.set()
         return job_id
 
@@ -266,10 +268,12 @@ class Manager:
             transient = item["audio_storage"] == "temporary"
             if transient:
                 key = hashlib.sha256(f"{job_id}:{index}:{key}".encode("ascii")).hexdigest()
+            elif item.get("force_generate"):
+                key = hashlib.sha256(f"take:{job_id}:{index}:{key}".encode("ascii")).hexdigest()
             output = (self.workflow_audio.root if transient else self.root / "audio") / f"{key}.wav"
             cached = False
             with self.lock:
-                cache = None if transient else self.store.cache_get(key)
+                cache = None if transient or item.get("force_generate") else self.store.cache_get(key)
                 if cache:
                     try:
                         details = validate_wave(output)
