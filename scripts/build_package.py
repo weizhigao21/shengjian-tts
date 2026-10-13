@@ -1,4 +1,4 @@
-"""Build into a fresh directory, validate, then publish with reversible backups."""
+"""Build in isolation, validate, then overwrite program files and retain user data."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,6 +9,10 @@ import subprocess
 import sys
 import zipfile
 
+if __package__:
+    from .package_files import overwrite_program
+else:
+    from package_files import overwrite_program
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
@@ -33,33 +37,11 @@ def contained(path, parent):
     return path
 
 
-def publish(candidate, target, backup):
-    """Keep portable data at its original public path without copying model weights."""
+def publish(candidate, target):
+    """Publish only program files; existing configuration/data folders stay in place."""
     contained(candidate, ROOT / "build")
-    for path in (target, backup):
-        contained(path, ROOT / "dist")
-    for path in (target / "data", backup / "data", candidate / "data"):
-        contained(path, path.parent)
-    moved_old = False
-    moved_data = False
-    try:
-        if target.exists():
-            target.rename(backup)
-            moved_old = True
-            if (backup / "data").exists():
-                (backup / "data").rename(candidate / "data")
-                moved_data = True
-        candidate.rename(target)
-    except Exception:
-        if moved_data and (candidate / "data").exists():
-            (candidate / "data").rename(backup / "data")
-        if moved_old:
-            backup.rename(target)
-        raise
-    if moved_old:
-        print(f"旧程序备份：{backup}", flush=True)
-        if moved_data:
-            print("已有 data 已延续到新发布目录；旧程序备份不重复保存 data。", flush=True)
+    contained(target, ROOT / "dist")
+    overwrite_program(candidate, target, (*DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS))
 
 
 def distribution_archive(candidate, destination):
@@ -112,8 +94,9 @@ def main():
     version = result.stdout.strip().rsplit(' ', 1)[-1]
     archive = distribution_archive(candidate, dist / f"声笺-v{version}-windows-x64.zip")
     target = dist / "声笺"
-    backup = dist / ("声笺-backup-" + stamp)
-    publish(candidate, target, backup)
+    publish(candidate, target)
+    contained(work, ROOT / "build")
+    shutil.rmtree(work)
     print(f"打包完成：{target / '声笺.exe'}", flush=True)
     print(f"分发包：{archive}（只含程序文件，不含数据库、音色与生成音频）", flush=True)
 

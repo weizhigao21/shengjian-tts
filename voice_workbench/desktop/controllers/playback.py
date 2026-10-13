@@ -18,6 +18,10 @@ from ...naming import display_title
 
 
 class PlaybackController:
+    def dialogue_audio_name(self, item):
+        row = next((r for r in self.dialogue_editor.rows if r.identity == item.get("source_id")), None)
+        return audio_name({**item, "source_name": row.role_name} if row else item)
+
     def render_job(self, job, force=False):
         if job["id"] != self.selected_job:
             return
@@ -43,7 +47,7 @@ class PlaybackController:
             status = STATES[item["status"]] + (" · 缓存" if item["cached"] else "")
             created = item.get("created") or job.get("created")
             stamp = datetime.fromtimestamp(created).strftime("%m-%d %H:%M:%S") if created else item.get("timestamp", "")
-            name = audio_name(item) if item.get("source_id") else display_title(job) + f" · 第 {item.get('generation', 1)} 次 · {item['text']}"
+            name = self.dialogue_audio_name(item) if item.get("source_id") else display_title(job) + f" · 第 {item.get('generation', 1)} 次 · {item['text']}"
             elapsed, elapsed_tip = generation_elapsed(item)
             for col, text in enumerate((str(item["idx"]), stamp, name, elapsed, status, error.get("message", ""))):
                 tooltip = ("生成时间：" + stamp + ("\n字幕时间：" + item["timestamp"] if item["timestamp"] else "")) if col == 1 else text
@@ -238,10 +242,10 @@ class PlaybackController:
         self.previous_button.setEnabled(self.adjacent_row(-1) is not None)
         self.next_button.setEnabled(self.adjacent_row(1) is not None)
         self.clip_title.setEnabled(bool(self.visible_segments))
-        title = ((audio_name(item) if item.get("source_id") else display_title(self.job_data)) + " · " + item["text"] if item else
+        title = ((self.dialogue_audio_name(item) if item.get("source_id") else display_title(self.job_data)) + " · " + item["text"] if item else
                  "本框还没有生成音频" if self.editor_mode == "dialogue" else "还没有生成记录")
         self.clip_title.setText(self.clip_title.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 184))
-        self.clip_title.setToolTip(title + "\n点击展开生成列表")
+        self.clip_title.setToolTip(title + ("\n对白 ID：" + item["source_id"] if item and item.get("source_id") else "") + "\n点击展开生成列表")
         self.update_transport()
 
     def toggle_playback(self):
@@ -277,8 +281,10 @@ class PlaybackController:
         status = next((s for s in ("running", "queued", "failed", "cancelled", "done") if counts[s]), "draft")
         self.job_summary.setText(f"{STATES[status]} · {done}/{total}" + (f" · {counts['failed']} 段失败" if counts["failed"] else ""))
         self.job_summary.setToolTip(job["title"])
-        source = dialogue_id(self.dialogue_editor.selected_id) if self.editor_mode == "dialogue" and self.dialogue_editor.selected_id else display_title(job)
+        selected = self.dialogue_editor.selected_row() if self.editor_mode == "dialogue" else None
+        source = (selected.role_name or dialogue_id(selected.identity)) if selected else display_title(job)
         self.clip_list_title.setText(source + " · 生成记录")
+        self.clip_list_title.setToolTip("对白 ID：" + selected.identity if selected else display_title(job))
         self.job_progress.setRange(0, max(1, total))
         self.job_progress.setValue(done)
         self.job_progress.setVisible(status in ("running", "queued"))

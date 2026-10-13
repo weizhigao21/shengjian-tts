@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.27-E87936?style=flat-square" alt="版本 v0.7.27" />
+  <img src="https://img.shields.io/badge/版本-v0.7.28-E87936?style=flat-square" alt="版本 v0.7.28" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -24,7 +24,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.27 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.28 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -200,7 +200,7 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 设置页显示实际目录，可点击「打开本地文件」。数据库为 `tasks.sqlite3`，配置为 `config.json`；音频、参考声音、模型和引擎分别保存在 `audio/`、`voices/`、`models/`、`runtime/`。
 
-更新前退出界面与独立服务并备份数据。替换两个 EXE、完整 `_internal/` 与说明文件，保留用户数据目录。首次从旧文件夹包升级时自动复制原 `data/` 到用户目录，已有用户数据库不会被覆盖。
+更新前退出界面与独立服务。只覆盖两个 EXE、完整 `_internal/` 与说明文件，保留配置和用户数据目录。首次从旧文件夹包升级时自动复制原 `data/` 到用户目录，已有用户数据库不会被覆盖。
 
 失败片段显示阶段、原因与建议，修复后可只重试失败片段。错误日志位于 `logs/<任务ID>-<序号>.json`，引擎日志位于 `logs/audio-cpp.log`。默认服务地址为 `127.0.0.1:8765`，同一数据目录只允许一个服务实例。
 
@@ -215,7 +215,7 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 .\打包.bat --no-pause
 ```
 
-脚本检查依赖并打包，缺少 pip 时使用 ensurepip 离线补齐。产物为 `dist/声笺/` 和 `dist/声笺-v版本-windows-x64.zip`，包含程序、文档与界面图片，不含个人数据库、音色、音频、模型或引擎。
+脚本检查依赖并打包，缺少 pip 时使用 ensurepip 离线补齐。产物为 `dist/声笺/` 和 `dist/声笺-v版本-windows-x64.zip`，包含程序、文档与界面图片，不含个人数据库、音色、音频、模型或引擎。验证成功后直接覆盖旧程序，保留已有配置与数据目录，不创建旧程序备份；成功后清理本次临时构建目录。
 
 </details>
 
@@ -324,7 +324,8 @@ flowchart LR
 │  ├─ local_voice_client.py        音色发现、版本固定、批次下载与保存后确认
 │  └─ local_voice_picker.py        工作流中的链接接入、音色选择与刷新控件
 ├─ scripts/                        联动安装、快捷方式、图标与验证脚本
-│  ├─ build_package.py             打包、产物验证、旧包备份与数据延续
+│  ├─ build_package.py             打包、产物验证与程序覆盖发布
+│  ├─ package_files.py             程序文件替换、占用检查与数据保护
 │  ├─ frozen_entry.py              界面 EXE 与后台服务 EXE 的共同入口
 │  ├─ check_engine_download.py     真实引擎下载、暂停续传、安装与推理检查
 │  ├─ render_readme.py             隔离演示数据，渲染 README 界面截图

@@ -84,6 +84,8 @@ v0.7.23 的对白条目可保存 `model_id` 和 `overrides`；片段可填局部
 
 v0.7.24 增加能力标记 `fixed_creation_type`：任务类型在创建时的 `editor_state.mode` 中确定，未提供时按文章处理。保存文稿或追加生成不能改变类型，否则返回 HTTP 400、`TASK_TYPE_LOCKED`；省略 `editor_state` 时保留已有状态。另一种类型应创建新任务，旧记录不受影响。
 
+v0.7.28 增加 `dialogue_role_names`：对白条目可填 `role_name`（最多 100 字），例如 `{"id":"row-1","role_name":"姐姐","text":"你好"}`。角色名属于显示信息，改名不改变 `source_id`、提交版本或声音快照。同名角色按 ID 区分；有名称时，查询片段和生成音频列表返回当前 `source_name`，`audio_label` 优先显示角色名加音色，未命名或已移除的对白沿用短 ID。完整 ID 始终保留，旧客户端无需新增字段。
+
 v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 `text_chunk_mode:default` 在新版不再提供此参数时省略；VoxCPM2 的 `voxcpm2.chunk_strategy` / `chunk_strategy` 按引擎契约转换。原预设及版本标签保留，新生成记录保存实际使用的参数；未知参数、非默认的旧分段方式及无效值仍报错。
 
 片段与生成音频列表中的 `generation_seconds` 为本次推理调用至 WAV 校验完成的耗时（秒），含首次模型加载，不含排队；`duration` 为音频时长。缓存复用时 `cached:1`、`generation_seconds:0`，旧记录或尚未推理时耗时为 `null`。失败重试记录本次尝试的耗时。

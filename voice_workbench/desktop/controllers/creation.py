@@ -101,6 +101,10 @@ class CreationController:
         self.document_changed()
         self.update_script_stats()
 
+    def dialogue_name_changed(self, identity):
+        if not self.loading_document and self.editor_mode == "dialogue":
+            self.refresh_audio_scope()
+
     def generate_dialogue_entry(self, identity):
         if self.submitting:
             return

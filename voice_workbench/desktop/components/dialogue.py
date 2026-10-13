@@ -5,12 +5,13 @@ import math
 
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 from PyQt6.QtGui import QTextCharFormat
-from PyQt6.QtWidgets import QHBoxLayout, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from ...services.dialogue import entry_revision, dialogue_id
-from ...ui import button, generation_elapsed, icon, label, ElidedLabel
+from ...ui import button, generation_elapsed, icon, ElidedLabel
 from ..model_labels import model_label
 from .voice_mentions import PresetScriptEditor, VOICE_ROLE
+from .delayed_tooltip import DelayedToolTip
 
 
 class DialogueInput(PresetScriptEditor):
@@ -66,6 +67,8 @@ class DialogueRow(QWidget):
         self.voice_id, self.voice_name = entry.get("voice_id"), entry.get("voice_name", "")
         self.model_id, self.overrides = entry.get("model_id"), entry.get("overrides")
         self.latest = None
+        self.record_count = 0
+        self.effective_voice = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.setObjectName("dialogueRow")
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
@@ -78,11 +81,18 @@ class DialogueRow(QWidget):
         layout.setSpacing(9)
         header = QHBoxLayout()
         header.setSpacing(5)
-        self.id_label = label(dialogue_id(self.identity), "muted")
-        self.id_label.setFixedWidth(68)
-        self.id_label.setStyleSheet("font-size: 11px; color: #85858a;")
-        self.id_label.setToolTip("对白 ID：" + self.identity + "\n此 ID 关联本框全部生成音频，不随顺序变化。")
-        header.addWidget(self.id_label)
+        self.name_edit = QLineEdit(entry.get("role_name") or "")
+        self.name_edit.setObjectName("dialogueRoleName")
+        self.name_edit.setFixedWidth(140)
+        self.name_edit.setMaxLength(100)
+        self.name_edit.setPlaceholderText(dialogue_id(self.identity))
+        self.name_edit.setAccessibleName("角色名称")
+        self.name_edit.setStyleSheet("QLineEdit#dialogueRoleName { border: 1px solid transparent; background: transparent; padding: 5px; }"
+                                    "QLineEdit#dialogueRoleName:hover { background: #f7f5f3; }"
+                                    "QLineEdit#dialogueRoleName:focus { border-color: #d9ac8c; background: white; }")
+        self.name_edit.textChanged.connect(self.name_changed)
+        self.name_edit.editingFinished.connect(self.finish_name)
+        header.addWidget(self.name_edit)
         self.voice_button = button("", self.choose_voice, "voices")
         self.voice_button.setMinimumWidth(110)
         self.voice_button.setMaximumWidth(330)
@@ -100,9 +110,10 @@ class DialogueRow(QWidget):
         self.play_button.setStyleSheet("QPushButton:hover { background: #eef5ef; }")
         self.play_button.setEnabled(False)
         header.addWidget(self.play_button)
-        self.generate_button = button("生成", lambda: panel.submit_requested.emit(self.identity), "play", "primary")
-        self.generate_button.setFixedWidth(106)
-        self.generate_button.setToolTip("生成 / 重新生成这条对白")
+        self.generate_button = button("", lambda: panel.submit_requested.emit(self.identity), "play", "primary")
+        self.generate_button.setFixedWidth(32)
+        self.generate_button.setToolTip("生成这条对白")
+        self.generate_button.setAccessibleName("生成这条对白")
         header.addWidget(self.generate_button)
         self.delete_button = button("", lambda: panel.remove_row(self), "trash", "icon")
         self.delete_button.setToolTip("移除这条对白，历史音频保留")
@@ -118,9 +129,14 @@ class DialogueRow(QWidget):
         self.text.preset_chosen.connect(self.set_voice)
         self.text.next_requested.connect(lambda: panel.add_after(self))
         layout.addWidget(self.text)
-        for control in (self.text, self.text.viewport(), self.id_label, self.status, self.voice_button,
+        for control in (self.text, self.text.viewport(), self.name_edit, self.status, self.voice_button,
                         self.generate_button, self.play_button, self.delete_button):
             control.installEventFilter(self)
+        self.detail_tip = DelayedToolTip(self, self.detail_text)
+        for control in (self, self.name_edit, self.text, self.text.viewport(), self.status):
+            self.detail_tip.watch(control)
+        for control in (self.voice_button, self.generate_button, self.play_button, self.delete_button):
+            self.detail_tip.watch(control, details=False)
         self.refresh_voice()
 
     def eventFilter(self, watched, event):
@@ -134,7 +150,34 @@ class DialogueRow(QWidget):
 
     def entry(self):
         return {"id": self.identity, "text": self.text.toPlainText(), "voice_id": self.voice_id, "voice_name": self.voice_name,
-                "model_id": self.model_id, "overrides": self.overrides}
+                "model_id": self.model_id, "overrides": self.overrides,
+                **({"role_name": self.role_name} if self.role_name else {})}
+
+    @property
+    def role_name(self):
+        return self.name_edit.text().strip()
+
+    def name_changed(self):
+        self.changed()
+        self.panel.name_changed.emit(self.identity)
+
+    def finish_name(self):
+        self.name_edit.setText(self.role_name)
+        self.name_edit.setCursorPosition(0)
+
+    def detail_text(self):
+        base = next((v for v in self.panel.voices if v["id"] == (self.voice_id or self.model_id)), None)
+        voice = {**(base or self.effective_voice or {}), **(self.overrides or {})}
+        lines = ["角色：" + (self.role_name or "未命名（点击名称区输入角色名称）"),
+                 "对白 ID：" + self.identity, "音色：" + (self.voice_name or "当前参数"),
+                 "模型：" + (model_label(voice) if voice.get("backend") else "未选择"), "状态：" + self.status.text(),
+                 f"生成记录：{self.record_count} 条 · 正文：{len(self.text.toPlainText())} 字"]
+        if self.latest:
+            lines.append("最近生成：" + generation_elapsed(self.latest)[0])
+        status_detail = self.status.toolTip().partition("\n")[2]
+        if status_detail:
+            lines.append(status_detail)
+        return "\n".join(lines)
 
     def changed(self):
         self.panel.changed.emit()
@@ -183,11 +226,16 @@ class DialogueRow(QWidget):
         self.panel.voice_changed.emit(self.identity)
 
     def update_status(self, records, default_voice, ready):
+        self.effective_voice = default_voice
+        self.record_count = sum(s.get("source_id") == self.identity for s in records)
         latest = next((s for s in reversed(records) if s.get("source_id") == self.identity), None)
         self.latest = next((s for s in reversed(records) if s.get("source_id") == self.identity and s["status"] == "done" and s.get("audio")), None)
         self.play_button.setEnabled(bool(self.latest))
         self.generate_button.setEnabled(ready and bool(self.text.toPlainText().strip()) and not (latest and latest["status"] in ("queued", "running")))
-        self.generate_button.setText("重新生成" if latest else "生成")
+        action = "重新生成这条对白" if latest else "生成这条对白"
+        self.generate_button.setIcon(icon("retry" if latest else "play", "#ffffff"))
+        self.generate_button.setToolTip(action)
+        self.generate_button.setAccessibleName(action)
         if self.voice_id and not any(v["id"] == self.voice_id for v in self.panel.voices):
             status = "音色已删除"
         elif latest and latest.get("source_revision") != entry_revision(self.entry(), self.panel.voices, default_voice):
@@ -208,6 +256,7 @@ class DialogueRow(QWidget):
 
 class DialogueEditor(QScrollArea):
     changed = pyqtSignal()
+    name_changed = pyqtSignal(str)
     submit_requested = pyqtSignal(str)
     play_requested = pyqtSignal(int)
     selection_changed = pyqtSignal(str)

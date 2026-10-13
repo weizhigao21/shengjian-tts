@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from scripts import build_package
+from scripts import build_package, package_files
 from voice_workbench import runtime
 from voice_workbench.errors import VoiceError
 from voice_workbench.runner import check_voice
@@ -41,30 +41,29 @@ def make_release(tmp_path, monkeypatch):
     return candidate, target, backup
 
 
-def test_rebuilding_keeps_existing_portable_data_and_old_program(tmp_path, monkeypatch):
+def test_rebuilding_overwrites_program_without_backups_and_keeps_portable_data(tmp_path, monkeypatch):
     candidate, target, backup = make_release(tmp_path, monkeypatch)
-    build_package.publish(candidate, target, backup)
+    original = (target / "data").stat()
+    build_package.publish(candidate, target)
     assert (target / "声笺.exe").read_text() == "new"
     assert (target / "data" / "user-config.json").read_text() == "keep me"
-    assert (backup / "声笺.exe").read_text() == "old"
-    assert not (backup / "data").exists()
+    assert not backup.exists() and not list(target.parent.glob('声笺-backup-*'))
+    assert (target / "data").stat().st_ino == original.st_ino
+    assert (candidate / "声笺.exe").read_text() == "new"
 
 
-def test_failed_publish_restores_old_release_and_user_data(tmp_path, monkeypatch):
+def test_locked_program_fails_before_overwriting_any_file_or_user_data(tmp_path, monkeypatch):
     candidate, target, backup = make_release(tmp_path, monkeypatch)
-    rename = Path.rename
-
-    def fail_publish(path, destination):
-        if path == candidate:
-            raise PermissionError("文件被占用")
-        return rename(path, destination)
-
-    monkeypatch.setattr(Path, "rename", fail_publish)
+    def fail_publish(paths):
+        assert target/'声笺.exe' in paths
+        raise PermissionError("文件被占用")
+    monkeypatch.setattr(package_files, "ensure_unlocked", fail_publish)
     with pytest.raises(PermissionError):
-        build_package.publish(candidate, target, backup)
+        build_package.publish(candidate, target)
     assert (target / "声笺.exe").read_text() == "old"
     assert (target / "data" / "user-config.json").read_text() == "keep me"
     assert (candidate / "声笺.exe").read_text() == "new"
+    assert not backup.exists()
 
 
 def test_publish_rejects_targets_outside_the_release_directory(tmp_path, monkeypatch):
@@ -73,9 +72,54 @@ def test_publish_rejects_targets_outside_the_release_directory(tmp_path, monkeyp
     outside.mkdir()
     (outside / "important.txt").write_text("keep")
     with pytest.raises(RuntimeError, match="路径超出"):
-        build_package.publish(candidate, outside, backup)
+        build_package.publish(candidate, outside)
     assert (outside / "important.txt").read_text() == "keep"
     assert (target / "data" / "user-config.json").is_file()
+
+
+def test_overwrite_replaces_runtime_prunes_stale_libraries_and_preserves_extra_folders(tmp_path, monkeypatch):
+    candidate, target, backup = make_release(tmp_path, monkeypatch)
+    for directory in ('config', 'configs', 'models', 'audio', 'docs'):
+        (target/directory).mkdir()
+        (target/directory/'personal.txt').write_bytes(b'private')
+    (candidate/'_internal').mkdir()
+    (candidate/'_internal/library.dll').write_bytes(b'new runtime')
+    (target/'_internal').mkdir()
+    (target/'_internal/library.dll').write_bytes(b'old runtime')
+    (target/'_internal/obsolete.dll').write_bytes(b'obsolete')
+    (candidate/'README.md').write_bytes(b'new documentation')
+    (target/'README.md').write_bytes(b'old documentation')
+    build_package.publish(candidate, target)
+    assert (target/'_internal/library.dll').read_bytes() == b'new runtime'
+    assert not (target/'_internal/obsolete.dll').exists()
+    assert (target/'README.md').read_bytes() == b'new documentation'
+    assert all((target/directory/'personal.txt').read_bytes() == b'private'
+        for directory in ('config', 'configs', 'models', 'audio', 'docs'))
+    assert not list(target.rglob('.声笺-update-*')) and not backup.exists()
+
+
+@pytest.mark.parametrize('relative', ['data/config.json', 'config/settings.json', 'docs/private.txt'])
+def test_candidate_cannot_overwrite_config_or_unmanaged_files(tmp_path, monkeypatch, relative):
+    candidate, target, backup = make_release(tmp_path, monkeypatch)
+    path = candidate/relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'not program data')
+    with pytest.raises(RuntimeError, match='非程序文件'):
+        build_package.publish(candidate, target)
+    assert (target/'声笺.exe').read_text() == 'old'
+    assert (target/'data/user-config.json').read_text() == 'keep me'
+
+
+def test_failed_copy_keeps_original_file_and_removes_temporary_file(tmp_path, monkeypatch):
+    candidate, target, backup = make_release(tmp_path, monkeypatch)
+    def fail_copy(*args):
+        raise OSError('copy failed')
+    monkeypatch.setattr(package_files.shutil, 'copy2', fail_copy)
+    with pytest.raises(OSError, match='copy failed'):
+        build_package.publish(candidate, target)
+    assert (target/'声笺.exe').read_text() == 'old'
+    assert (target/'data/user-config.json').read_text() == 'keep me'
+    assert not list(target.rglob('.声笺-update-*'))
 
 
 def test_distribution_zip_excludes_personal_data_even_in_used_release(tmp_path, monkeypatch):

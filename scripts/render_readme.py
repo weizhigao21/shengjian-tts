@@ -118,6 +118,8 @@ def prepare(data, original):
                 "听见了吗？风从山谷吹来，故事也有了新的声音。",
                 "那就出发吧，一起去看看下一段风景。")), 1)]
         segments = []
+        entries[0]["role_name"] = "旅人"
+        entries[1]["role_name"] = "向导"
         for entry, voice in zip(entries, voices):
             snapshot, fingerprint = config.resolve(voice["id"])
             segments.append({"text": entry["text"], "source_id": entry["id"], "source_revision": entry_revision(entry, voices),

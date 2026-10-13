@@ -51,6 +51,7 @@ class GenerationLayout:
         self.editor_stack.addWidget(self.text_edit)
         self.dialogue_editor = DialogueEditor()
         self.dialogue_editor.changed.connect(self.dialogue_changed)
+        self.dialogue_editor.name_changed.connect(self.dialogue_name_changed)
         self.dialogue_editor.submit_requested.connect(self.generate_dialogue_entry)
         self.dialogue_editor.play_requested.connect(self.play_dialogue_entry)
         self.dialogue_editor.selection_changed.connect(self.select_dialogue_entry)

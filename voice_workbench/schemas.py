@@ -62,6 +62,7 @@ class ScriptMention(BaseModel):
 
 class DialogueEntry(BaseModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    role_name: str | None = Field(default=None, max_length=100)
     text: str = Field(default="", max_length=5000)
     voice_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
     voice_name: str = Field(default="", max_length=100)

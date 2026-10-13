@@ -8,6 +8,7 @@ import time
 import uuid
 
 from .naming import UNNAMED, work_title, work_type, display_title
+from .services.dialogue import role_names
 
 WORKFLOW_TITLES = ("双语工作流配音", "工作流兼容请求")
 WORKFLOW_AUDIO_TTL = 3600
@@ -219,11 +220,14 @@ class Store:
             job["editor_state"] = json.loads(job.get("editor_state") or "null")
             job["work_type"], job["display_title"] = work_type(job), display_title(job)
             items = [dict(s) for s in self.db.execute("SELECT * FROM segments WHERE job_id=? AND audio_deleted=0 AND (? IS NULL OR generation=?) ORDER BY idx", (job_id, generation, generation))]
+            names = role_names(job["editor_state"])
             for item in items:
                 item["error"] = json.loads(item["error"]) if item["error"] else None
                 item["voice"] = json.loads(item["voice"]) if item["voice"] else job["voice"]
                 item["fingerprint"] = item["fingerprint"] or job["fingerprint"]
                 item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
+                if item.get("source_id") in names:
+                    item["source_name"] = names[item["source_id"]]
             job["segments"] = items
             job["total"] = len(items)
             job["completed"] = sum(s["status"] == "done" for s in items)
@@ -339,13 +343,22 @@ class Store:
                 WHERE j.record_only=0 AND s.audio_deleted=0 AND s.status='done' AND s.audio IS NOT NULL AND s.audio!=''
                 ORDER BY s.created DESC,s.job_id,s.idx DESC""")
             result = []
+            documents = {}
             for row in rows:
                 item = dict(row)
                 item["id"] = f"{item['job_id']}:{item['idx']}"
                 item["voice"] = json.loads(item["voice"] or "{}")
                 item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
+                serialized = item.pop("work_editor_state")
+                if item["job_id"] not in documents:
+                    state = json.loads(serialized or "null")
+                    documents[item["job_id"]] = state, role_names(state)
+                state, names = documents[item["job_id"]]
                 item["display_title"] = display_title({"title": item["work_title"], "auto_named": item.pop("work_auto_named"),
-                    "editor_state": json.loads(item.pop("work_editor_state") or "null")})
+                    "editor_state": state})
+                name = names.get(item.get("source_id"))
+                if name:
+                    item["source_name"] = name
                 result.append(item)
             return result
 

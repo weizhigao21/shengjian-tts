@@ -70,7 +70,8 @@ class AudioSettings:
     def render_audio(self, *_):
         text = self.audio_search.text().strip().casefold()
         self.visible_audio = [a for a in self.audio_data if (self.audio_category == "all" or a.get("content_type", "article") == self.audio_category)
-            and (not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a), a.get("source_label") or "")).casefold())]
+            and (not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a),
+                a.get("source_label") or "", a.get("source_name") or "", a.get("source_id") or "")).casefold())]
         self.visible_audio = sorted_audio(self.visible_audio, self.audio_sort.currentData())
         table = self.audio_table
         scroll = table.verticalScrollBar().value()
