@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "local-voice-workbench"
 dynamic = ["version"]
 description = "Local speech service for the bilingual audio workflow"
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "PyQt6>=6.6,<7", "httpx>=0.27,<1"]
 

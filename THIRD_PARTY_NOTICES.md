@@ -1,25 +1,40 @@
-# 上游参考与运行时
+# 第三方声明
 
-本项目参考 yovoice 的本机进程管理和 audio.cpp 请求协议，使用 Python 独立实现界面、任务队列和工作流适配。
+声笺源代码使用 [GPLv3](LICENSE)。Windows 分发包包含 Python、Qt / PyQt6 及相关依赖，
+完整版本、原始许可和源码来源见 [licenses/README.md](licenses/README.md)。
+发行页同时提供对应声笺源码，构建环境记录在 `requirements-release.txt`，入口为 `打包.bat` 与 `声笺.spec`。
 
-桌面视觉设计也参考 yovoice 的 `paper-theme.ts`、`styles.css` 和侧栏工作台布局；Qt 控件、图标与波形绘制为本项目独立实现。
+## 参考与改编
 
-声音库的票根卡片、唱片试听图形和简洁弹窗参考 yovoice 的 `features/library/library-layout.tsx`、`characters.tsx`、`record-cover.tsx` 和 `voice-editor.tsx`，使用 Qt 重新绘制与实现；未直接打包其 React 前端。
+| 来源 | 参考或改编内容 | 许可 |
+| :--- | :--- | :--- |
+| [yovoice](https://github.com/leemysw/yovoice) · leemysw | 模型目录、IndexTTS 情绪组合；进程管理、请求协议与界面布局参考 | Apache-2.0；[完整许可](licenses/YOVOICE-LICENSE.txt) |
+| [audio.cpp](https://github.com/0xShug0/audio.cpp) · ShugoAI LLC | 原生引擎协议、模型参数与运行库安装方式 | Apache-2.0；引擎另行下载 |
+| [IndexTTS](https://github.com/index-tts/index-tts) | 四种表达方式、八维情绪顺序与官方 Python 接口 | 官方实现与权重各自遵循上游许可 |
 
-高级生成参数的名称、范围和默认值参考模型包内嵌声明、yovoice 的 `generation-options.json` 及 audio.cpp v0.7.4 的模型请求解析与分段实现；控件和参数校验由 Python 独立实现。
+声笺使用 Python / Qt 实现界面、队列和适配，没有直接打包 yovoice 的 React 前端。
+视觉设计参考其 `paper-theme.ts`、`styles.css`、侧栏工作台与声音库组件；Qt 控件、SVG 图标与波形由本项目实现。
 
-IndexTTS 四种表达方式、八维情绪顺序及参数接口依据 [IndexTTS 官方用法](https://github.com/index-tts/index-tts#-usage) 和 audio.cpp 模型解析。12 个情绪快捷组合改编自 yovoice 的 `web/src/features/create/inspector.tsx`（Apache-2.0，作者 leemysw）；界面、保存和推理适配使用 Python / Qt 实现，未打包其 React 源码。
+改编内容保留如下来源信息：
 
-`voice_workbench/assets/model_catalog.json` 改编自 yovoice 的 `internal/catalog/catalog.json`（Apache-2.0，作者 leemysw），仅保留本程序已有适配的四种语音模型家族。下载地址规则参考 `internal/catalog/catalog.go`，固定默认 revision 为 `6d5436fc85f7a20c2e9f4e472b7f3a532f686444`，单条模型指定的 revision 优先；模型说明、下载器和管理界面由 Python / Qt 实现。
+- `voice_workbench/assets/model_catalog.json`：改编自 yovoice 的 `internal/catalog/catalog.json`；
+  下载规则参考 `internal/catalog/catalog.go`，默认 revision 为 `6d5436fc85f7a20c2e9f4e472b7f3a532f686444`，条目自身的 revision 优先。
+- `voice_workbench/index_emotion.py`：12 个情绪组合改编自 yovoice 的 `web/src/features/create/inspector.tsx`。
+  标准参数依据 IndexTTS 官方接口和 audio.cpp 模型解析，保存与推理适配由本项目实现。
+- `voice_workbench/assets/engine_catalog.json`：记录 audio.cpp 官方发行资产及摘要；
+  CUDA 程序与运行库的组合方式参考 yovoice 的 `internal/workbench/runtime_install.go`。
 
-目录中的 GGUF 来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。下载的权重各自遵循其模型许可，目录的 Apache-2.0 许可不替代权重许可。本项目没有打包这些权重。yovoice 的完整 Apache-2.0 许可保存在 `voice_workbench/assets/YOVOICE_LICENSE.txt`。
+## 包内依赖
 
-`voice_workbench/assets/engine_catalog.json` 记录 [audio.cpp v0.7.4 官方发布](https://github.com/0xShug0/audio.cpp/releases/tag/v0.7.4) 的 Windows CPU 及 CUDA 12.4 ZIP 包、文件大小和 SHA-256；CUDA 程序包与运行库的组合方式参考 yovoice 的 `internal/catalog/catalog.go`、`internal/workbench/runtime_install.go`。下载、续传、解压及配置由 Python 独立实现，下载后的完整目录保留上游包中的许可文件。运行时依赖仍遵循其上游许可；本仓库与声笺 EXE 包不内置这些下载资产。
+- PyQt6：Copyright Riverbank Computing Limited，GPLv3。
+- Qt：Copyright The Qt Company 及贡献者，LGPLv3；通过动态 DLL 链接，程序未修改 Qt。
+- CPython：Python Software Foundation 许可，完整历史声明保存在 `licenses/Python-LICENSE.txt`。
+- Python 依赖、PyInstaller 引导程序与构建工具：各自原始许可收录于 `licenses/`。
+- CPython 动态库依赖 OpenSSL、libffi 和 SQLite；分别遵循 OpenSSL、MIT 与公有领域声明。
+  Windows 的 Microsoft C++ 运行库按其再分发条款使用。
 
-- [yovoice](https://github.com/leemysw/yovoice)：Apache-2.0；原项目作者 leemysw。
-- [audio.cpp](https://github.com/0xShug0/audio.cpp)：Apache-2.0；Copyright ShugoAI LLC；原生统一推理引擎。
-- [IndexTTS](https://github.com/index-tts/index-tts)：模型与官方实现遵循其上游许可。
-- [Qt / PyQt6](https://www.riverbankcomputing.com/software/pyqt/)：依赖遵循其上游许可。
+## 模型与下载引擎
 
-当前仓库不打包上游二进制或模型权重；从本机已安装目录引用的资产仍遵循其原许可。
-如果将来发布含上游运行时或模型的安装包，须同时保留其许可证和相应 notices。
+发行 ZIP 不包含 audio.cpp、CUDA 运行库或模型权重。用户通过设置页下载或导入，下载后的目录保留上游许可。
+GGUF 默认来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。
+模型权重遵循各自模型许可，目录数据的 Apache-2.0 许可不替代权重许可。

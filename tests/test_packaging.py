@@ -136,6 +136,10 @@ def test_distribution_zip_excludes_personal_data_even_in_used_release(tmp_path, 
     (target / 'docs' / 'images' / 'app.png').write_bytes(b'public icon')
     (target / 'docs' / 'images' / 'personal.png').write_bytes(b'private screenshot')
     (target / 'docs' / 'personal.txt').write_text('private notes')
+    (target / 'LICENSE').write_text('GPLv3 license')
+    (target / 'licenses' / 'pyqt6').mkdir(parents=True)
+    (target / 'licenses' / 'pyqt6' / 'LICENSE').write_bytes(b'upstream license')
+    (target / 'licenses' / 'personal.txt').write_bytes(b'private notes')
     for name in build_package.DOCUMENTATION_GUIDES:
         (target / name).write_text('public design documentation')
     archive = build_package.distribution_archive(target, tmp_path/'dist/release.zip')
@@ -143,19 +147,21 @@ def test_distribution_zip_excludes_personal_data_even_in_used_release(tmp_path, 
         assert set(saved.namelist()) == {'声笺/声笺.exe', '声笺/_internal/library.dll',
                                        '声笺/README.md', '声笺/API.md', '声笺/UI_STYLE.md',
                                        '声笺/docs/images/workbench.png', '声笺/docs/images/app.png',
+                                       '声笺/LICENSE', '声笺/licenses/pyqt6/LICENSE',
                                        *('声笺/'+name for name in build_package.DOCUMENTATION_GUIDES)}
         assert saved.read('声笺/_internal/library.dll') == b'library'
         assert saved.read('声笺/docs/images/workbench.png') == b'public screenshot'
+        assert saved.read('声笺/licenses/pyqt6/LICENSE') == b'upstream license'
     assert (target / 'data' / 'tasks.sqlite3').read_bytes() == b'personal database'
 
 
 def test_copy_documentation_keeps_all_relative_readme_assets(tmp_path, monkeypatch):
     monkeypatch.setattr(build_package, "ROOT", tmp_path)
-    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS):
+    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
         source = tmp_path / name
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(name.encode("utf-8"))
     candidate = tmp_path / "build" / "staging" / "声笺"
     build_package.copy_documentation(candidate)
-    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS):
+    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
         assert (candidate / name).read_bytes() == (tmp_path / name).read_bytes()
