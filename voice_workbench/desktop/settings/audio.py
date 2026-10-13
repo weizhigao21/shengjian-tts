@@ -141,11 +141,16 @@ class AudioSettings:
                 "本地服务未连接，请连接后再添加。" if not self.owner.ready else
                 "带入音频与生成文本，保存到声音库；参考音频需要 1–60 秒。")
         reference.setToolTip(hint)
+        edit = menu.addAction(icon("audio"), "在音频编辑中打开")
+        edit.setEnabled(item["available"] and self.owner.ready)
         details = menu.addAction(icon("info"), "查看详情")
         chosen = menu.exec(self.audio_table.viewport().mapToGlobal(position))
         menu.deleteLater()
         if chosen is reference:
             self.add_audio_reference(item)
+        elif chosen is edit:
+            self.owner.open_audio_editor(self.owner.data_dir / "audio" / item["audio"], item.get("text", ""),
+                                         name=item.get("audio_label") or item.get("display_title") or "音频编辑")
         elif chosen is details:
             self.audio_details(item)
 

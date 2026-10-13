@@ -140,7 +140,7 @@ class ServiceController:
         # Work history must not wait for model/library widgets to bind.
         self.render_jobs(jobs)
         current = health.get("current")
-        self.set_service_state(f"●  正在生成第 {current['index']} 段" if current else
+        self.set_service_state("●  正在处理编辑音频" if health.get("audio_editing") else f"●  正在生成第 {current['index']} 段" if current else
                                f"●  本地服务在线 · 队列 {health['queue']}" if health['queue'] else "●  本地服务在线", "ready")
         self.banner.setToolTip(f"{self.banner.text()}\n{self.url} · 队列 {health['queue']} 个任务")
         voice_ids = [(v["id"], v["name"], v.get("model_name")) for v in voices]

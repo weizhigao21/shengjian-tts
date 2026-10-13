@@ -246,6 +246,10 @@ class DocumentController:
         self.tabs.setCurrentIndex(index)
 
     def sync_navigation(self, index):
+        self.transport.setVisible(index != 0 or self.creation_pages.currentIndex() != 2)
+        if index != 0:
+            self.audio_editor.controller.save()
+            self.audio_editor.controller.stop()
         names = ("语音创作", "声音库", "工作流联动", "设置")
         self.page_title.setText("工作台  /  " + names[index])
         for i, control in enumerate(self.nav_buttons):

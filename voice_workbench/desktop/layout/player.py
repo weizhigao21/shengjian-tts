@@ -97,6 +97,8 @@ class PlayerLayout:
         self.clip_sort = audio_sort_combo()
         self.clip_sort.currentIndexChanged.connect(self.sort_segments)
         header.addWidget(self.clip_sort)
+        self.edit_audio_button = button("编辑音频", self.edit_current_audio, "audio", "ghost")
+        header.addWidget(self.edit_audio_button)
         self.retry_button = button("重试失败", self.retry, "retry", "ghost")
         self.cancel_button = button("取消生成", self.cancel, "close", "ghost")
         for control in (self.retry_button, self.cancel_button):

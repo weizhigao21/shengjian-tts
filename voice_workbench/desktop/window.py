@@ -139,6 +139,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
 
     def closeEvent(self, event):
         self.capture_document_save()
+        self.audio_editor.controller.capture_save()
         if self.submitting and self.workers:
             # Let the GUI receive a new task's ID before flushing its latest edits.
             self.close_requested = True
@@ -148,6 +149,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
             return
         self.close_timer.stop()
         self.closing = True
+        self.audio_editor.controller.close()
         self.clear_autoplay()
         self.timer.stop()
         self.document_timer.stop()
@@ -164,6 +166,18 @@ class Window(CreationController, DocumentController, GenerationController, Playb
             worker.wait(30000)
             worker.deleteLater()
         self.workers.clear()
+        editor = self.audio_editor.controller
+        if editor.draft_saves.pending and self.ready:
+            try:
+                with httpx.Client(base_url=self.url, trust_env=False, timeout=2) as client:
+                    for snapshot in list(editor.draft_saves.pending.values()):
+                        try:
+                            checked(client.patch(f"/audio-editor/projects/{snapshot.task_id}", json=snapshot.body))
+                            editor.draft_saves.acknowledge(snapshot)
+                        except Exception as exc:
+                            self.service_log.append("退出时音频编辑保存失败：" + str(exc))
+            except Exception as exc:
+                self.service_log.append("退出时音频编辑保存失败：" + str(exc))
         if self.draft_saves.pending:
             try:
                 with httpx.Client(base_url=self.url, trust_env=False, timeout=2) as client:

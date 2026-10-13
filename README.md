@@ -6,10 +6,10 @@
 
 **让文字拥有声音，让配音融入你的工作流。**
 
-本地语音生成 · 多角色对话 · 声音预设 · 双语工作流联动
+本地语音生成 · 多角色对话 · 音频编辑 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.31-E87936?style=flat-square" alt="源码版本 v0.7.31" />
+  <img src="https://img.shields.io/badge/源码-v0.7.32-E87936?style=flat-square" alt="源码版本 v0.7.32" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.31。** 模型列表显示 GGUF 文件版本的发布时间，支持引擎模型扫描、用途筛选和离线缓存。详见[更新记录](CHANGELOG.md)、[模型扫描](docs/MODEL_DISCOVERY.md)和[优化记录](docs/OPTIMIZATION.md)。
+**当前源码：v0.7.32。** 新增独立音频编辑模式，支持 WAV 选区、裁剪、音量、淡入淡出、拼接、版本回溯，以及 Vevo2 换声和台词修改接口。详见[音频编辑说明](docs/AUDIO_EDITING.md)和[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.31 的 Windows 包待构建。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.32 的 Windows 包待构建。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -40,6 +40,7 @@
 | **按模型配置** | 根据模型实际能力显示音色、克隆、声音设计和高级参数，支持固定随机种子。 |
 | **IndexTTS 情绪控制** | 2.0 / 2.5 支持跟随音色、参考演绎、情绪调节和文字引导，提供 12 个预设、八维微调与强度设置。 |
 | **多角色对话** | 输入 `@` 选择音色，为每框命名角色、调整参数并单独生成；选中框后，播放器和历史列表只显示它的音频。 |
+| **音频编辑** | 导入 PCM WAV 或打开生成记录，拖动选区、裁剪 / 拼接 / 调整音量，保留各次版本；可接入 Vevo2 换声和台词修改。 |
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
 | **模型与引擎** | 自动扫描引擎模型、补全下载目录，按用途筛选；支持校验、更新、回退及 CPU / NVIDIA CUDA。 |
@@ -50,6 +51,10 @@
 点击图片查看原图。截图使用演示数据。
 
 ![对话模式：音色标签、独立文本框和逐条生成操作](docs/images/dialogue.png)
+
+![音频编辑：波形选区、参数与独立版本记录](docs/images/audio-editor.png)
+
+音频编辑截图使用测试音频；Vevo2 需要另行安装，实际模型效果尚待验证。[使用说明](docs/AUDIO_EDITING.md)
 
 <details>
 <summary>对白历史与 IndexTTS 情绪面板</summary>

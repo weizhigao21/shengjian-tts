@@ -38,3 +38,5 @@
 发行 ZIP 不包含 audio.cpp、CUDA 运行库或模型权重。用户通过设置页下载或导入，下载后的目录保留上游许可。
 GGUF 默认来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。
 模型权重遵循各自模型许可，目录数据的 Apache-2.0 许可不替代权重许可。
+
+音频编辑的 Vevo2 适配依据 audio.cpp 的公开服务协议。Vevo2 官方权重使用 [CC-BY-NC-ND-4.0](https://huggingface.co/RMSnow/Vevo2)，另行下载，不包含在声笺 GPLv3 发行包中。

@@ -16,8 +16,9 @@ class DraftSnapshot:
 
 
 class DraftSaveQueue:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, title_field="title"):
         self.path = Path(path)
+        self.title_field = title_field
         self.pending = {}
         self.revision = 0
         self.load_error = None
@@ -29,7 +30,7 @@ class DraftSaveQueue:
                     raise ValueError("待存草稿应为列表")
                 snapshots = [DraftSnapshot(**item) for item in items]
                 if any(not isinstance(s.task_id, str) or not isinstance(s.revision, int)
-                       or not isinstance(s.body, dict) or not isinstance(s.body.get("title"), str) for s in snapshots):
+                       or not isinstance(s.body, dict) or not isinstance(s.body.get(self.title_field), str) for s in snapshots):
                     raise ValueError("待存草稿格式无效")
                 self.pending = {s.task_id: s for s in snapshots}
                 self.revision = max((s.revision for s in snapshots), default=0)
@@ -39,7 +40,8 @@ class DraftSaveQueue:
     def _persist(self):
         try:
             if self.load_error and self.path.exists():
-                self.path.replace(self.path.with_name(f"pending-drafts-unreadable-{time_ns()}.json"))
+                prefix = "pending-drafts" if self.title_field == "title" else self.path.stem
+                self.path.replace(self.path.with_name(f"{prefix}-unreadable-{time_ns()}.json"))
                 self.load_error = None
             atomic_json(self.path, [vars(s) for s in self.pending.values()])
             self.write_error = None

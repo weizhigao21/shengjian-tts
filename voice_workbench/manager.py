@@ -43,6 +43,8 @@ class Manager:
         self.workflow_audio.expired()
         from .model_management import ModelManager
         self.models = ModelManager(self)
+        from .audio_editing.service import AudioEditor
+        self.audio_editor = AudioEditor(self)
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
@@ -128,6 +130,7 @@ class Manager:
     def status(self):
         with self.lock:
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
+                    "audio_editing": self.audio_editor.active,
                     "active": [{"job_id": a["job_id"], "index": a["index"]} for a in self.active.values()],
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
                     "queue": self.store.queued_job_count()}
@@ -143,13 +146,17 @@ class Manager:
 
     def set_performance(self, settings):
         with self.lock:
-            if self.active:
+            if self.active or self.editing_busy:
                 raise VoiceError("ENGINE_BUSY", "正在生成音频，请完成或取消后调整并发设置", stage="性能设置")
             self.release_runners()
             self.config.save_performance(settings)
             self.serial_jobs.clear()
             self.performance_notice = ""
             return self.config.performance()
+
+    @property
+    def editing_busy(self):
+        return self.audio_editor.gpu_busy
 
     def _capacity(self, job, item):
         if not self.parallel_supported or not item.get("workflow") or item["voice"]["backend"] != "audio_cpp" or job["id"] in self.serial_jobs:
@@ -230,7 +237,7 @@ class Manager:
             while not self.stopping.is_set():
                 submitted = False
                 with self.lock:
-                    if not self.stopping.is_set():
+                    if not self.stopping.is_set() and not self.audio_editor.gpu_busy:
                         if time.monotonic() >= next_cleanup:
                             self.workflow_audio.expired()
                             next_cleanup = time.monotonic() + 60
@@ -342,6 +349,7 @@ class Manager:
             self.release_runners()
             self.wake.set()
         self.models.close()
+        self.audio_editor.close()
         self.thread.join(timeout=20)
         if self.thread.is_alive():
             raise RuntimeError("推理队列仍在退出中，不能关闭任务数据库")

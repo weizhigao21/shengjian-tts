@@ -26,6 +26,12 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     expected = json.loads(fixture.read_text(encoding='utf-8'))
     data = tmp_path/'unused-data'
     actual = create_app(data).openapi()
+    # The independent audio editor adds routes and schemas; old routes stay frozen.
+    for path in list(actual['paths']):
+        if path.startswith('/audio-editor/'):
+            actual['paths'].pop(path)
+    for name in ('AudioImport', 'AudioOperation', 'EditState', 'EditModelImport'):
+        actual['components']['schemas'].pop(name)
     # Model discovery adds an endpoint without changing the published routes.
     assert actual['paths'].pop('/models/scan')['post']['responses'].get('202')
     # New editors add optional metadata and per-segment presets. Keep the

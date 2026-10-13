@@ -29,6 +29,8 @@ FAMILIES = {"index_tts2", "voxcpm2", "kokoro_tts", "qwen3_tts"}
 
 def model_description(entry):
     family = entry.get("family")
+    if family == "vevo2":
+        return "音频编辑模式：换声、修改台词；支持中文和英语，使用参考 WAV。"
     if family == "kokoro_tts":
         return "轻量语音模型，使用内置音色；不支持声音克隆或文本设计音色。"
     if family == "index_tts2":
@@ -127,7 +129,7 @@ class ModelManager:
         if not Path(path).is_file():
             raise VoiceError("ENGINE_MISSING", "请选择存在的 audiocpp_server.exe", stage="模型管理")
         with self.manager.lock, self.config.lock:
-            if self.manager.current:
+            if self.manager.current or getattr(self.manager, "editing_busy", False):
                 raise VoiceError("ENGINE_BUSY", "正在生成音频，请完成或取消后更换引擎", stage="模型管理")
             self.manager.release_runners()
             value = self.config.read()
@@ -191,6 +193,16 @@ class ModelManager:
                 "update_available": False, "update_status": None, "revision": metadata.get("revision", ""),
                 "can_rollback": False}
             models[identity].update(installed_publication(entry, metadata))
+        for identity, entry in value.get("audio_edit_models", {}).items():
+            path = Path(entry["path"])
+            if identity not in models and path.is_file() and identity not in value.get("removed_models", []):
+                models[identity] = {"id": hashlib.sha256(identity.encode()).hexdigest()[:24], "name": entry["name"],
+                    "family": "vevo2", "precision": "本地", "path": str(path), "size": path.stat().st_size,
+                    "is_directory": False, "exists": True, "managed": False, "can_delete_file": False,
+                    "preset_count": 0, "catalog_id": None, "description": model_description({"family": "vevo2"}),
+                    "adapted": False, "update_available": False, "update_status": None, "revision": "", "can_rollback": False}
+        for entry in models.values():
+            entry["edit_adapted"] = entry["family"] == "vevo2"
         return list(models.values())
 
     def listing(self):
@@ -208,6 +220,7 @@ class ModelManager:
                 adapted = effective.get("adapted", effective.get("family") in FAMILIES)
                 available.append({**effective, **publication_metadata(effective), "description": model_description(effective), **state,
                                   "installed": identity in present, "adapted": adapted,
+                                  "edit_adapted": effective["family"] == "vevo2" and effective.get("single_file", True),
                                   "downloadable": bool(entry.get("remotePath")) and effective.get("single_file", True)})
         return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing(),
                 "update_checked": self.update_checked, "update_error": self.update_error,
@@ -232,6 +245,9 @@ class ModelManager:
             actual = _read_package(str(path), stat.st_size, stat.st_mtime_ns).get("family")
         except (OSError, ValueError, TypeError, KeyError, struct.error) as exc:
             raise VoiceError("MODEL_METADATA_INVALID", f"无法读取模型配置：{exc}", stage="模型导入") from exc
+        if actual == "vevo2" and family in (None, "vevo2"):
+            self.manager.audio_editor.import_model(path)
+            return {"family": "vevo2", "path": str(path), "edit_adapted": True}
         if actual not in FAMILIES or (family and family != actual):
             raise VoiceError("MODEL_FAMILY_MISMATCH", "模型内嵌配置不属于支持的语音模型家族", stage="模型导入")
         voice = VoiceConfig(id="imported-model", name="默认模型设置", backend="audio_cpp", python=sys.executable,
@@ -260,7 +276,7 @@ class ModelManager:
             target = path_identity(model["path"])
             queued = any(s["status"] in ("queued", "running") and path_identity(s["voice"].get("model_dir") or ".") == target
                          for j in self.manager.store.list(10000) for s in self.manager.store.get(j["id"])["segments"])
-            if self.manager.current or queued:
+            if self.manager.current or getattr(self.manager, "editing_busy", False) or queued:
                 raise VoiceError("ENGINE_BUSY", "模型正在使用或有排队任务，请完成或取消后删除", stage="模型删除")
             with self.lock:
                 downloading = any(t.is_alive() and Path(self.catalog[key].get("remotePath", "")).name == Path(model["path"]).name
@@ -278,6 +294,7 @@ class ModelManager:
             value = self.config.read()
             for group in ("voices", "model_templates"):
                 value[group] = [v for v in value.get(group, []) if not v.get("model_dir") or path_identity(v["model_dir"]) != target]
+            value.get("audio_edit_models", {}).pop(target, None)
             value["removed_models"] = sorted(set(value.get("removed_models", [])) | {target})
             if delete_file:
                 value.get("model_file_versions", {}).pop(target, None)
@@ -386,7 +403,7 @@ class ModelManager:
                 with self.manager.lock, self.config.lock:
                     if self.manager.stopping.is_set():
                         raise DownloadPaused()
-                    if not self.manager.current:
+                    if not self.manager.current and not getattr(self.manager, "editing_busy", False):
                         value = self.config.read()
                         for group in ("voices", "model_templates"):
                             for voice in value.get(group, []):
@@ -411,7 +428,7 @@ class ModelManager:
 
     def rollback(self, identity):
         with self.manager.lock, self.config.lock:
-            if self.manager.current or any(t.is_alive() for t in self.threads.values()):
+            if self.manager.current or getattr(self.manager, "editing_busy", False) or any(t.is_alive() for t in self.threads.values()):
                 raise VoiceError("ENGINE_BUSY", "请先完成生成或模型下载再回退", stage="模型回退")
             model = next((m for m in self.installed() if m["id"] == identity), None)
             value = self.config.read()

@@ -86,7 +86,7 @@ class AudioCppRunner:
         load = voice.get("load_options", {})
         # 同一模型切换参考声音时复用已加载的权重。
         identity = (voice["engine_executable"], voice["model_dir"], voice["family"], voice["device"], load,
-                    Path(voice["model_dir"]).stat().st_mtime_ns, voice["revision"], self.cpu_threads)
+                    Path(voice["model_dir"]).stat().st_mtime_ns, voice["revision"], self.cpu_threads, voice.get("task"))
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         with self.lock:
             if self.process and self.process.poll() is None and self.key == key:
@@ -97,7 +97,7 @@ class AudioCppRunner:
                 with socket.socket() as probe:
                     probe.bind(("127.0.0.1", 0))
                     port = probe.getsockname()[1]
-                task = "vdes" if voice["family"] == "qwen3_tts" and selected_mode(voice) == "design" else "tts"
+                task = voice.get("task") or ("vdes" if voice["family"] == "qwen3_tts" and selected_mode(voice) == "design" else "tts")
                 native_model = self.native_paths.model(voice["model_dir"])
                 entry = {"id": "speech", "family": voice["family"], "path": native_model, "task": task, "mode": "offline"}
                 if load:

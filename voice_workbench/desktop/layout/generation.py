@@ -152,5 +152,9 @@ class GenerationLayout:
         self.creation_pages = QStackedWidget()
         self.creation_pages.addWidget(creation_home(self))
         self.creation_pages.addWidget(page)
+        from .audio_editing import AudioEditPanel
+        self.audio_editor = AudioEditPanel(self)
+        self.creation_pages.addWidget(self.audio_editor)
+        self.creation_pages.currentChanged.connect(self.creation_page_changed)
         self.creation_pages.setCurrentIndex(1)
         self.tabs.addWidget(self.creation_pages)

@@ -18,6 +18,14 @@ from ...naming import display_title
 
 
 class PlaybackController:
+    def edit_current_audio(self):
+        item = self.current_segment()
+        if item and item["status"] == "done" and item.get("audio"):
+            self.open_audio_editor(self.data_dir / "audio" / item["audio"], item.get("text", ""),
+                                   name=display_title(self.job_data) if self.job_data else "音频编辑")
+        else:
+            self.statusBar().showMessage("请先选中已完成的音频片段。", 5000)
+
     def dialogue_audio_name(self, item):
         row = next((r for r in self.dialogue_editor.rows if r.identity == item.get("source_id")), None)
         return audio_name({**item, "source_name": row.role_name} if row else item)

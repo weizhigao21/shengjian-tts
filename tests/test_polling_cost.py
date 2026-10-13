@@ -17,6 +17,8 @@ def test_health_counts_all_active_jobs_without_loading_history(tmp_path, monkeyp
         manager = Manager.__new__(Manager)
         manager.store, manager.lock = store, store.lock
         manager.active, manager.current, manager.performance_notice = {}, None, ""
+        from types import SimpleNamespace
+        manager.audio_editor = SimpleNamespace(active=None)
         class Config:
             def performance(self): return {}
         manager.config = Config()

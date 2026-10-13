@@ -359,7 +359,7 @@ class EngineManager:
             with self.manager.lock:
                 if self.manager.stopping.is_set():
                     raise DownloadPaused()
-                if not self.manager.current:
+                if not self.manager.current and not getattr(self.manager, "editing_busy", False):
                     self.use(backend)
                     self._state(backend, status="done", error="", upgrade=False)
                     # Installed files are retained; complete ZIPs no longer need disk space.

@@ -414,6 +414,7 @@ QWidget#sheet, QFrame#card { background:#ffffff; border:1px solid #e8e8ea; borde
 QWidget#sidebar { background:transparent; }
 QWidget#inspector { background:#fcfcfc; border-left:1px solid #ededee; }
 QWidget#inspectorBody { background:#fcfcfc; }
+QWidget#audioEditContent { background:white; }
 QWidget#modelManagementContent { background:white; }
 QLabel { background:transparent; border:none; }
 QLabel[role="brand"] { font-size:23px; font-weight:700; }

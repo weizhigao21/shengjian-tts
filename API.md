@@ -2,6 +2,23 @@
 
 默认地址 `http://127.0.0.1:8765`。启动服务后可在 `/docs` 查看完整请求结构。
 
+音频编辑使用独立的项目与版本 ID。[操作说明](docs/AUDIO_EDITING.md)列出文件限制和模型要求。`POST /audio-editor/projects` 接收本机 `path`、可选 `name` 和 `original_text`，返回原始版本。处理请求的 `source_version` 必须来自同一项目已完成的版本：
+
+```json
+{
+  "source_version": "从项目 versions 中取得的 ID",
+  "operation": "render",
+  "start": 0.5,
+  "end": 3.5,
+  "gain_db": -3,
+  "fade_in": 0.1,
+  "fade_out": 0.2,
+  "state": {"name": "旁白后期", "original_text": "原台词", "target_text": "新台词"}
+}
+```
+
+`end=null` 表示到音频末尾。`operation` 可取 `render`（保留选区并调整）、`append`（另填 `append_path`）、`vc`（Vevo2 换声）、`edit`（Vevo2 台词修改）。AI 请求携带 `model_path`、`device`（cuda / cpu）、`reference_path`、`steps`（默认 32）、`seed`（-1 随机）；`edit` 可省略参考音频沿用选区音色，`vc` 必须提供参考。处理返回 202 后轮询项目的 `versions`，状态为 queued / running / done / failed / cancelled，完成版本包含 `audio_url` 和音频详情。目录中的 `edit_adapted` 表示编辑支持，独立于文章 / 对话使用的 `adapted`。
+
 ## 常用接口
 
 | 方法与路径 | 用途 |
@@ -20,6 +37,11 @@
 | `POST /jobs/{id}/generations/{generation}/cancel` | 取消指定批次 |
 | `GET /audio/{filename}`、`GET /logs/{id}/{index}` | 普通生成音频、错误详情 |
 | `GET /generated-audio`、`POST /generated-audio/delete` | 查询与批量删除生成音频 |
+| `GET /audio-editor/options`、`POST /audio-editor/models` | 编辑可用模型 / 参考声音与本地 Vevo2 GGUF 导入 |
+| `GET /audio-editor/projects`、`POST /audio-editor/projects` | 编辑项目列表、导入 PCM WAV |
+| `GET /audio-editor/projects/{id}`、`PATCH /audio-editor/projects/{id}` | 编辑版本列表、保存名称 / 台词 / 当前版本 |
+| `POST /audio-editor/projects/{id}/process`、`POST /audio-editor/projects/{id}/cancel` | 后台音频处理（202）、取消处理 |
+| `GET /audio-editor/audio/{filename}` | 读取管理目录内的编辑版本 WAV |
 | `GET /models`、`POST /models/import` | 模型目录、下载状态、导入 GGUF |
 | `POST /models/scan` | 后台扫描当前引擎声明及官方 GGUF 目录，返回 202；使用 `source` 字段 |
 | `POST /models/{id}/download`、`POST /models/{id}/pause`、`POST /models/{id}/remove` | 下载、暂停、移除模型 |
