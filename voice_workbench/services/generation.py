@@ -1,5 +1,6 @@
 """Resolve and validate a preset into a generation snapshot and provenance."""
 from dataclasses import dataclass
+import json
 import secrets
 from ..config import ConfigStore, voice_fingerprint
 from ..runner import check_voice
@@ -19,18 +20,33 @@ class PreparedGeneration:
 def prepare_segments(config, model_name, segments, overrides=None, use_preset=True, validator=None):
     """Validate all paragraph voices before creating one atomic generation batch.
 
-    Explicit mentions use the saved preset, without the inspector's unrelated
-    overrides. Each segment retains its own immutable-at-submission snapshot.
+    Explicit voices use their saved preset plus optional row overrides, without
+    the inspector's unrelated global overrides. Snapshots are fixed at submission.
     """
-    explicit = {s["voice_id"] for s in segments if s.get("voice_id")}
-    presets = {v["id"] for v in config.voices() if not v.get("is_template")}
-    if missing := explicit - presets:
+    available = {v["id"]: v for v in config.voices()}
+    missing = {s["voice_id"] for s in segments if s.get("voice_id") and
+               (s["voice_id"] not in available or s.get("use_preset", True) and available[s["voice_id"]].get("is_template"))}
+    if missing:
         raise VoiceError("VOICE_NOT_FOUND", "@ 指定的声音预设不存在：" + ", ".join(sorted(missing)),
                          "请重新输入 @ 选择声音预设。", "提交")
-    snapshots = {identity: prepare_generation(config, identity, validator=validator) for identity in sorted(explicit)}
     default = (prepare_generation(config, model_name, overrides=overrides, use_preset=use_preset, validator=validator)
-               if any(not s.get("voice_id") for s in segments) else snapshots[segments[0]["voice_id"]])
-    result = [{**s, "prepared_voice": snapshots[s["voice_id"]] if s.get("voice_id") else default} for s in segments]
+               if any(not s.get("voice_id") for s in segments) else None)
+    result = []
+    snapshots = {}
+    for segment in segments:
+        identity = segment.get("voice_id")
+        if identity:
+            # Dialogue overrides belong only to this row; global overrides stay unrelated.
+            local = segment.get("overrides")
+            key = (identity, segment.get("use_preset", True), json.dumps(local, sort_keys=True))
+            if key not in snapshots:
+                snapshots[key] = prepare_generation(config, identity, overrides=local,
+                    use_preset=segment.get("use_preset", True), validator=validator)
+            prepared = snapshots[key]
+        else:
+            prepared = default
+        result.append({**segment, "prepared_voice": prepared})
+    default = default or result[0]["prepared_voice"]
     return default, result
 
 

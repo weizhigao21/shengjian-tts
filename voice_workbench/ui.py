@@ -310,7 +310,16 @@ class RecentJobDelegate(QStyledItemDelegate):
         painter.drawEllipse(rectangle.left() + 9, rectangle.center().y() - 2, 4, 4)
         painter.setPen(QColor("#282829" if selected else "#777778"))
         painter.setFont(option.font)
-        text_rect = rectangle.adjusted(22, 0, -30, 0)
+        from .naming import work_type
+        category = "对话" if work_type(value) == "dialogue" else "文章"
+        painter.setPen(QColor("#967248" if category == "对话" else "#85858a"))
+        small = QFont(option.font)
+        small.setPixelSize(10)
+        painter.setFont(small)
+        painter.drawText(rectangle.adjusted(20, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, category)
+        painter.setFont(option.font)
+        painter.setPen(QColor("#282829" if selected else "#777778"))
+        text_rect = rectangle.adjusted(47, 0, -30, 0)
         text = option.fontMetrics.elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight, text_rect.width())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, text)
         if selected or hover:

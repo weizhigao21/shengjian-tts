@@ -161,6 +161,7 @@ class Manager:
         return runner
 
     def generated_audio(self):
+        from .services.dialogue import audio_name, dialogue_id
         result = self.store.generated_audio()
         for item in result:
             voice = item["voice"]
@@ -172,6 +173,8 @@ class Manager:
             path = self.root / "audio" / item["audio"]
             item["audio_url"] = f"/audio/{item['audio']}"
             item["available"] = path.is_file()
+            item["source_label"] = dialogue_id(item["source_id"]) if item.get("source_id") else None
+            item["audio_label"] = audio_name(item) if item.get("source_id") else item["display_title"]
             if item["duration"] is None and item["available"]:
                 try:
                     item["duration"] = validate_wave(path)["duration"]

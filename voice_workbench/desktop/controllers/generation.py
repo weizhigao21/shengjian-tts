@@ -63,7 +63,7 @@ class GenerationController:
         self.pending_autoplay = {"job_id": result["job_id"], "indices": set(indices)} if indices else None
         if result.get("title") and self.title_edit.text() == getattr(self, "submission_title", None):
             self.title_edit.blockSignals(True)
-            self.title_edit.setText(result["title"])
+            self.title_edit.setText(result.get("display_title", result["title"]))
             self.title_edit.blockSignals(False)
         self.update_generation_actions()
         if self.document_dirty:
@@ -78,6 +78,7 @@ class GenerationController:
 
     def generate(self):
         try:
+            self.capture_dialogue_parameters()
             self.submit(self.document_segments(), self.title_edit.text() or "配音任务")
         except Exception as exc:
             self.show_error(str(exc))
@@ -165,12 +166,13 @@ class GenerationController:
                 segments = self.document_segments()
                 tagged = {s.get("voice_id") for s in segments if s.get("voice_id")}
                 if tagged:
-                    for identity in tagged:
-                        preset = next(v for v in self.voices if v["id"] == identity)
-                        check_voice(preset)
+                    for segment in segments:
+                        if segment.get("voice_id"):
+                            preset = next(v for v in self.voices if v["id"] == segment["voice_id"])
+                            check_voice({**preset, **(segment.get("overrides") or {})})
                     generate_usable = usable or all(s.get("voice_id") for s in segments)
                     if generate_usable:
-                        message = f"使用 {len(tagged)} 个音色预设 · 未指定音色的对白沿用右侧设置"
+                        message = "参数仅作用于选中的对白框" if self.editor_mode == "dialogue" else f"使用 {len(tagged)} 个音色预设"
             except (ValueError, StopIteration) as exc:
                 generate_usable = False
                 message = str(exc) or "声音预设已删除，请重新选择"
@@ -252,4 +254,5 @@ class GenerationController:
                 summary += "\n自动识别文本语言"
             summary += "\n当前设置可直接生成；保存预设后可用于双语工作流。"
             self.voice_summary.setText(summary)
+        self.capture_dialogue_parameters()
         self.update_generation_actions()

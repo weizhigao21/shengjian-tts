@@ -39,6 +39,8 @@ class SegmentInput(BaseModel):
     source_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
     source_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     force_generate: bool = False
+    use_preset: bool = True
+    overrides: GenerationOverrides | None = None
 
 
 class ScriptMention(BaseModel):
@@ -53,6 +55,8 @@ class DialogueEntry(BaseModel):
     text: str = Field(default="", max_length=5000)
     voice_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
     voice_name: str = Field(default="", max_length=100)
+    model_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.-]{1,64}$")
+    overrides: GenerationOverrides | None = None
 
 
 class EditorState(BaseModel):

@@ -16,6 +16,17 @@ class AudioSettings:
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
+        categories = QHBoxLayout()
+        self.audio_categories = {}
+        self.audio_category = "all"
+        for value, text in (("all", "全部音频"), ("article", "文章音频"), ("dialogue", "对话音频")):
+            control = button(text, lambda checked=False, kind=value: self.set_audio_category(kind), kind="segment")
+            control.setCheckable(True)
+            control.setChecked(value == "all")
+            categories.addWidget(control)
+            self.audio_categories[value] = control
+        categories.addStretch()
+        layout.addLayout(categories)
         tools = QHBoxLayout()
         self.select_all = QCheckBox("全选")
         self.select_all.clicked.connect(self.toggle_all)
@@ -58,7 +69,8 @@ class AudioSettings:
 
     def render_audio(self, *_):
         text = self.audio_search.text().strip().casefold()
-        self.visible_audio = [a for a in self.audio_data if not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a))).casefold()]
+        self.visible_audio = [a for a in self.audio_data if (self.audio_category == "all" or a.get("content_type", "article") == self.audio_category)
+            and (not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a), a.get("source_label") or "")).casefold())]
         self.visible_audio = sorted_audio(self.visible_audio, self.audio_sort.currentData())
         table = self.audio_table
         scroll = table.verticalScrollBar().value()
@@ -70,8 +82,9 @@ class AudioSettings:
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             item.setData(Qt.ItemDataRole.UserRole, a["id"])
             item.setCheckState(Qt.CheckState.Checked if a["id"] in self.selected_ids else Qt.CheckState.Unchecked)
-            name = f"{a['work_title']} · 第 {a['generation']} 次 / {a['idx']}" + ("（作品已移除）" if a.get("work_deleted") else "")
-            self.cell(table, row, 1, name + "\n" + a["text"], name + "\n" + a["text"] + "\n" + a["audio"])
+            name = f"{a.get('audio_label') or a['work_title']} · 第 {a['generation']} 次 / {a['idx']}" + ("（作品已移除）" if a.get("work_deleted") else "")
+            self.cell(table, row, 1, name + "\n" + a["text"], name + "\n" + a["text"] + "\n作品：" + a["work_title"]
+                + "\n对白 ID：" + (a.get("source_id") or "—") + "\n" + a["audio"])
             self.cell(table, row, 2, a["model"] + "\n" + a["mode"])
             self.cell(table, row, 3, preset_text(a))
             stamp = datetime.fromtimestamp(a["created"]).strftime("%Y-%m-%d %H:%M:%S") if a.get("created") else "时间未记录"
@@ -92,9 +105,16 @@ class AudioSettings:
         table.verticalScrollBar().setValue(scroll)
         table.blockSignals(False)
         table.setUpdatesEnabled(True)
-        self.audio_count.setText(f"共 {len(self.audio_data)} 条音频" + (f" · 搜索结果 {len(self.visible_audio)} 条" if text else ""))
+        self.audio_count.setText(f"当前列表 {len(self.visible_audio)} 条 · 共 {len(self.audio_data)} 条音频")
         self.update_selection()
         self.update_play_buttons()
+
+    def set_audio_category(self, category):
+        self.audio_category = category
+        self.selected_ids.clear()
+        for value, control in self.audio_categories.items():
+            control.setChecked(value == category)
+        self.render_audio()
 
     def checked_item(self, item):
         if item.column() != 0:
@@ -151,7 +171,7 @@ class AudioSettings:
         count = len(self.selected_ids)
         self.selection_label.setText(f"已选 {count} 条" if count else "")
         self.delete_selected.setEnabled(count > 0 and not self.deleting)
-        self.delete_all.setEnabled(bool(self.audio_data) and not self.deleting)
+        self.delete_all.setEnabled(bool(self.visible_audio) and not self.deleting)
         self.select_all.setChecked(bool(visible_ids) and visible_ids <= self.selected_ids)
 
     def play_audio(self, item):
@@ -193,11 +213,11 @@ class AudioSettings:
     def delete_audio(self, ids=None, delete_all=False):
         if self.deleting:
             return
-        ids = [a["id"] for a in self.audio_data] if delete_all else ids if ids is not None else sorted(self.selected_ids)
-        count = len(self.audio_data) if delete_all else len(ids)
+        ids = [a["id"] for a in self.visible_audio] if delete_all else ids if ids is not None else sorted(self.selected_ids)
+        count = len(ids)
         if count == 0:
             return
-        result = QMessageBox.question(self, "删除生成音频", (f"删除全部 {count} 条音频？" if delete_all else f"删除所选 {count} 条音频？") + "\n对应生成记录和不再使用的音频文件会删除，无法撤销。作品文本会保留。",
+        result = QMessageBox.question(self, "删除生成音频", (f"删除当前列表全部 {count} 条音频？" if delete_all else f"删除所选 {count} 条音频？") + "\n对应生成记录和不再使用的音频文件会删除，无法撤销。作品文本会保留。",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
         if result != QMessageBox.StandardButton.Yes:
             return

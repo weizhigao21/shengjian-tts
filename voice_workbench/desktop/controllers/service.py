@@ -109,7 +109,7 @@ class ServiceController:
             health = checked(client.get("/health"))
             if health.get("service") != "local-voice-workbench" or Path(health["data_dir"]).resolve() != self.data_dir:
                 raise RuntimeError("端口上的服务与当前项目不匹配")
-            if not {"generation_options", "work_generations", "asset_management", "dialogue_editor"}.issubset(health.get("capabilities", [])):
+            if not {"generation_options", "work_generations", "asset_management", "dialogue_editor", "dialogue_audio_scope"}.issubset(health.get("capabilities", [])):
                 raise RuntimeError("语音服务版本过旧，请关闭旧窗口及独立运行的旧服务后重新启动。")
             response = client.get(f"/jobs/{selected}") if selected else None
             job = checked(response) if response and response.status_code != 404 else None

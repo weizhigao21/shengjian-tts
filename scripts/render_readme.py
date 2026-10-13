@@ -6,6 +6,7 @@ profile; inference is never started, and no user audio or text is exported.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import datetime
 import json
 import math
@@ -32,6 +33,8 @@ from voice_workbench.gui import Window, configure_font, configure_language
 from voice_workbench.model_info import model_ui
 from voice_workbench.store import Store
 from voice_workbench.subtitles import parse_text
+from voice_workbench.services.dialogue import entry_revision
+from voice_workbench.services.generation import PreparedGeneration
 
 SCRIPT = """[00:00.00]清晨，山谷中的第一束光落在窗边。雾气沿着河面缓缓升起，一座小城从沉睡中醒来。
 [00:08.00]At dawn, the first light falls by the window. Mist rises above the river, and a small town wakes from sleep.
@@ -108,9 +111,32 @@ def prepare(data, original):
                 store.db.execute("UPDATE segments SET created=? WHERE job_id=?", (stamp - position * 3600, job_id))
             if position == 0:
                 main_id = job_id
+        entries = [{"id": f"d0{i}a{i}00000000000000000000000000000", "voice_id": voice["id"], "voice_name": voice["name"], "text": text}
+            for i, (voice, text) in enumerate(zip(voices, (
+                "清晨，山谷中的第一束光落在窗边。我们沿着街角走向山海，旅途从这里开始。",
+                "听见了吗？风从山谷吹来，故事也有了新的声音。",
+                "那就出发吧，一起去看看下一段风景。")), 1)]
+        segments = []
+        for entry, voice in zip(entries, voices):
+            snapshot, fingerprint = config.resolve(voice["id"])
+            segments.append({"text": entry["text"], "source_id": entry["id"], "source_revision": entry_revision(entry, voices),
+                "prepared_voice": PreparedGeneration(snapshot, fingerprint, {"preset_used": True, "preset_id": voice["id"],
+                    "preset_name": voice["name"], "preset_modified": False, "mode": voice["voice_mode"]})})
+        dialogue_id = store.create("山海对话", segments[0]["prepared_voice"].voice, "demo-dialogue", segments,
+            "\n".join(e["text"] for e in entries), editor_state={"mode": "dialogue", "article_text": "", "article_mentions": [], "dialogue_entries": entries})
+        for segment in store.get(dialogue_id)["segments"]:
+            store.next(dialogue_id)
+            filename = f"demo-dialogue-{segment['idx']}.wav"
+            demo_wave(data / "audio" / filename)
+            store.finish(dialogue_id, segment["idx"], audio=filename, duration=5, generation_seconds=2.4 + segment["idx"])
+        store.append(dialogue_id, "山海对话", segments[0]["prepared_voice"].voice, "demo-dialogue", segments[:1],
+            editor_state=store.get(dialogue_id)["editor_state"])
+        store.next(dialogue_id)
+        demo_wave(data / "audio/demo-dialogue-4.wav")
+        store.finish(dialogue_id, 4, audio="demo-dialogue-4.wav", duration=5, generation_seconds=2.8)
     finally:
         store.close()
-    return main_id, narration["id"]
+    return main_id, narration["id"], dialogue_id
 
 
 def main():
@@ -130,7 +156,7 @@ def main():
     staging.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="demo-", dir=staging) as temporary:
         data = Path(temporary)
-        main_id, narration_id = prepare(data, configuration)
+        main_id, narration_id, dialogue_job = prepare(data, configuration)
         with TestClient(create_app(data)) as client:
             window = Window(8765, data, autostart=False)
             window.timer.stop()
@@ -176,18 +202,19 @@ def main():
             window.clip_title.click()
             capture("generation-list")
             window.clip_list.hide()
-            window.choose_creation_mode("dialogue")
-            window.title_edit.setText("山海之间 · 对话")
-            first = window.dialogue_editor.rows[0]
-            first.set_voice(next(v for v in window.voices if v["id"] == narration_id))
-            first.text.setPlainText("清晨，山谷中的第一束光落在窗边。我们沿着街角走向山海，旅途从这里开始。")
-            second = window.dialogue_editor.add_after(first)
-            second.set_voice(next(v for v in window.voices if v["id"] == "demo-reader"))
-            second.text.setPlainText("听见了吗？风从山谷吹来，故事也有了新的声音。")
-            third = window.dialogue_editor.add_after(second)
-            third.set_voice(next(v for v in window.voices if v["id"] == "demo-commentary"))
-            third.text.setPlainText("那就出发吧，一起去看看下一段风景。")
+            window.selected_job = dialogue_job
+            window.render_jobs(client.get("/jobs").json())
+            window.open_job_data(client.get("/jobs/" + dialogue_job).json())
+            with closing(Store(data)) as demo_store:
+                with demo_store.db:
+                    for row in window.dialogue_editor.rows:
+                        revision = entry_revision(row.entry(), window.voices, window.generation_voice())
+                        demo_store.db.execute("UPDATE segments SET source_revision=? WHERE job_id=? AND source_id=?", (revision, dialogue_job, row.identity))
+            window.render_job(client.get("/jobs/" + dialogue_job).json(), force=True)
             capture("dialogue")
+            window.clip_title.click()
+            capture("dialogue-history")
+            window.clip_list.hide()
             window.set_page(1)
             window.library.set_page("presets")
             capture("voice-library")

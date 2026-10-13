@@ -54,6 +54,8 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.submitting = False
         self.loading_document = False
         self.editor_mode = "article"
+        self._binding_dialogue = False
+        self.audio_scope = None
         self.document_dirty = False
         self.document_save_running = False
         self.after_save = []

@@ -162,6 +162,7 @@ def test_existing_database_is_backed_up_before_dialogue_migration(tmp_path):
     store = Store(tmp_path)
     target = store.create("旧文章", {"id": "old"}, "fingerprint", [{"text": "原文"}], script="原文")
     store.db.execute("ALTER TABLE jobs DROP COLUMN editor_state")
+    store.db.execute("DROP INDEX dialogue_audio_history")
     for column in ("source_id", "source_revision", "force_generate"):
         store.db.execute(f"ALTER TABLE segments DROP COLUMN {column}")
     store.db.commit()

@@ -13,13 +13,16 @@ from ...subtitles import normalize_timestamp
 from ...runner import validate_wave
 from PyQt6.QtGui import QColor
 from ..constants import STATES
+from ...services.dialogue import audio_name, dialogue_id
+from ...naming import display_title
 
 
 class PlaybackController:
     def render_job(self, job, force=False):
         if job["id"] != self.selected_job:
             return
-        if not force and job == self.job_data and self.segments_table.rowCount() == len(job["segments"]):
+        scoped = self.scoped_segments(job)
+        if not force and job == self.job_data and self.segments_table.rowCount() == len(scoped):
             if self.auto_select_audio and self.playable_rows():
                 self.segments_table.selectRow(self.playable_rows()[0])
                 self.auto_select_audio = False
@@ -29,27 +32,29 @@ class PlaybackController:
         selected_idx = (self.current_segment() or {}).get("idx")
         self.job_data = job
         self.update_dialogue_records()
-        self.visible_segments = sorted_audio(job["segments"], self.clip_sort.currentData())
+        self.visible_segments = sorted_audio(scoped, self.clip_sort.currentData())
         selected_row = next((row for row, s in enumerate(self.visible_segments) if s["idx"] == selected_idx), -1)
         self.segments_table.blockSignals(True)
         self.segments_table.setUpdatesEnabled(False)
-        if self.segments_table.rowCount() != len(job["segments"]):
-            self.segments_table.setRowCount(len(job["segments"]))
+        if self.segments_table.rowCount() != len(scoped):
+            self.segments_table.setRowCount(len(scoped))
         for row, item in enumerate(self.visible_segments):
             error = item["error"] or {}
             status = STATES[item["status"]] + (" · 缓存" if item["cached"] else "")
             created = item.get("created") or job.get("created")
             stamp = datetime.fromtimestamp(created).strftime("%m-%d %H:%M:%S") if created else item.get("timestamp", "")
-            name = f"{item.get('batch_title') or job['title']} · 第 {item.get('generation', 1)} 次 · {item['text']}"
+            name = audio_name(item) if item.get("source_id") else display_title(job) + f" · 第 {item.get('generation', 1)} 次 · {item['text']}"
             elapsed, elapsed_tip = generation_elapsed(item)
             for col, text in enumerate((str(item["idx"]), stamp, name, elapsed, status, error.get("message", ""))):
                 tooltip = ("生成时间：" + stamp + ("\n字幕时间：" + item["timestamp"] if item["timestamp"] else "")) if col == 1 else text
                 if col == 3:
                     tooltip = elapsed_tip
+                elif col == 2 and item.get("source_id"):
+                    tooltip = name + "\n对白 ID：" + item["source_id"] + "\n正文：" + item["text"] + f"\n生成批次：{item.get('generation', 1)}"
                 cell = self.update_table_cell(self.segments_table, row, col, text, tooltip)
                 if col in (0, 1, 3) and cell.textAlignment() != Qt.AlignmentFlag.AlignCenter:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        if 0 <= selected_row < len(job["segments"]) and self.segments_table.currentRow() != selected_row:
+        if 0 <= selected_row < len(scoped) and self.segments_table.currentRow() != selected_row:
             self.segments_table.selectRow(selected_row)
         elif selected_row < 0:
             self.segments_table.setCurrentCell(-1, -1)
@@ -95,14 +100,17 @@ class PlaybackController:
             return
         current = self.current_segment()
         generation = (current or self.job_data["segments"][-1]).get("generation", 1) if self.job_data["segments"] else 1
-        items = [s for s in self.job_data["segments"] if s.get("generation", 1) == generation and s["status"] == "done"]
+        items = [s for s in self.visible_segments if s.get("generation", 1) == generation and s["status"] == "done"]
         if not items:
             self.show_error("当前生成批次没有已完成片段。")
             return
         folder = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not folder:
             return
-        target = Path(folder) / self.job_data["id"] / f"生成-{generation:03d}"
+        base = Path(folder) / self.job_data["id"]
+        if self.editor_mode == "dialogue" and self.dialogue_editor.selected_id:
+            base = base / dialogue_id(self.dialogue_editor.selected_id)
+        target = base / f"生成-{generation:03d}"
         target.mkdir(parents=True, exist_ok=True)
         manifest = []
         cursor_ms = 0
@@ -114,7 +122,8 @@ class PlaybackController:
                     filename = f"{item['idx']:04d}_{stamp.replace(':', '-')}_{short_text}.wav"
                     shutil.copy2(self.data_dir / "audio" / item["audio"], target / filename)
                     manifest.append({"file": filename, "text": item["text"], "timestamp": stamp,
-                                     "generation": generation, "created": item.get("created"), "voice": item.get("voice", self.job_data["voice"])})
+                                     "generation": generation, "created": item.get("created"), "voice": item.get("voice", self.job_data["voice"]),
+                                     "content_type": item.get("content_type", "article"), "source_id": item.get("source_id")})
                     cursor_ms += round(validate_wave(self.data_dir / "audio" / item["audio"])["duration"] * 1000)
             (target / "segments.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
             self.statusBar().showMessage(f"已导出 {len(manifest)} 个片段：{target}", 8000)
@@ -228,8 +237,9 @@ class PlaybackController:
         self.details_button.setEnabled(bool(item))
         self.previous_button.setEnabled(self.adjacent_row(-1) is not None)
         self.next_button.setEnabled(self.adjacent_row(1) is not None)
-        self.clip_title.setEnabled(bool(self.job_data and self.job_data["segments"]))
-        title = f"{item.get('batch_title') or self.job_data['title']} · {item['text']}" if item else "生成记录" if self.job_data and self.job_data["segments"] else "还没有生成记录"
+        self.clip_title.setEnabled(bool(self.visible_segments))
+        title = ((audio_name(item) if item.get("source_id") else display_title(self.job_data)) + " · " + item["text"] if item else
+                 "本框还没有生成音频" if self.editor_mode == "dialogue" else "还没有生成记录")
         self.clip_title.setText(self.clip_title.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, 184))
         self.clip_title.setToolTip(title + "\n点击展开生成列表")
         self.update_transport()
@@ -261,20 +271,26 @@ class PlaybackController:
 
     def decorate_job(self, job):
         from ..constants import STATES
-        counts = {state: sum(s["status"] == state for s in job["segments"]) for state in STATES}
-        done, total = counts["done"], len(job["segments"])
+        counts = {state: sum(s["status"] == state for s in self.visible_segments) for state in STATES}
+        done, total = counts["done"], len(self.visible_segments)
         self.job_summary.setVisible(total > 0)
-        self.job_summary.setText(f"{STATES[job['status']]} · {done}/{total}" + (f" · {counts['failed']} 段失败" if counts["failed"] else ""))
+        status = next((s for s in ("running", "queued", "failed", "cancelled", "done") if counts[s]), "draft")
+        self.job_summary.setText(f"{STATES[status]} · {done}/{total}" + (f" · {counts['failed']} 段失败" if counts["failed"] else ""))
         self.job_summary.setToolTip(job["title"])
-        self.clip_list_title.setText(job["title"] + " · 生成记录")
+        source = dialogue_id(self.dialogue_editor.selected_id) if self.editor_mode == "dialogue" and self.dialogue_editor.selected_id else display_title(job)
+        self.clip_list_title.setText(source + " · 生成记录")
         self.job_progress.setRange(0, max(1, total))
         self.job_progress.setValue(done)
-        self.job_progress.setVisible(job["status"] in ("running", "queued"))
+        self.job_progress.setVisible(status in ("running", "queued"))
         self.export_button.setEnabled(done > 0)
         self.retry_button.setEnabled(counts["failed"] + counts["cancelled"] > 0)
         self.cancel_button.setEnabled(job["status"] in ("running", "queued"))
+        self.retry_button.setVisible(self.editor_mode == "article")
+        self.cancel_button.setVisible(self.editor_mode == "article")
         self.segments_table.setColumnHidden(5, not counts["failed"])
-        self.result_hint.setText("双击失败片段，查看具体原因、修复建议和原始异常。" if counts["failed"] else "点击片段播放 · 上一个 / 下一个切换 · 每次生成保留在当前作品")
+        self.result_hint.setText("双击失败片段，查看具体原因、修复建议和原始异常。" if counts["failed"] else
+            "仅显示当前对白框的音频 · 上一个 / 下一个切换本框历史版本" if self.editor_mode == "dialogue" else
+            "点击片段播放 · 上一个 / 下一个切换 · 每次生成保留在当前作品")
         for row, item in enumerate(self.visible_segments):
             color = "#ad5427" if item["status"] == "failed" else "#3c7a51" if item["status"] == "done" else "#88888e"
             cell = self.segments_table.item(row, 4)

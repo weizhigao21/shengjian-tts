@@ -366,7 +366,8 @@ def test_settings_multi_selection_search_and_buttons_keep_state_on_refresh(tmp_p
     window.poll = lambda: None
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     qtbot.mouseClick(settings.delete_all, Qt.MouseButton.LeftButton)
-    assert captured[0][1] == {"ids": [a["id"] for a in audios]}
+    assert captured[0][1] == {"ids": [a["id"] for a in settings.visible_audio]}
+    assert len(captured[0][1]["ids"]) == 1  # Search/category clearing never deletes hidden audio.
     # Download progress updates retain the same action widget and current scroll position.
     settings.pages.setCurrentIndex(0)
     first = settings.catalog_table.cellWidget(0, 4)

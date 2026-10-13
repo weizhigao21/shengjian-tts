@@ -10,7 +10,8 @@ from voice_workbench.gui import Window, configure_font
 
 @pytest.mark.parametrize('width,height', [(1080,720), (1380,900)])
 def test_engine_asset_labels_stay_inside_scroll_view_with_full_right_gutter(tmp_path, qtbot, qapp, width, height):
-    qapp.setStyle('Fusion')
+    if qapp.style().objectName().lower() != 'fusion':
+        qapp.setStyle('Fusion')
     configure_font(qapp)
     window = Window(8799,tmp_path,autostart=False)
     qtbot.addWidget(window)

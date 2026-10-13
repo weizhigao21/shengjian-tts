@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 
-from .naming import UNNAMED, work_title
+from .naming import UNNAMED, work_title, work_type, display_title
 
 WORKFLOW_TITLES = ("双语工作流配音", "工作流兼容请求")
 WORKFLOW_AUDIO_TTL = 3600
@@ -44,6 +44,7 @@ class Store:
                 job["voice"] = json.loads(job["voice"])
                 job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
                 job["editor_state"] = json.loads(job.get("editor_state") or "null")
+                job["work_type"], job["display_title"] = work_type(job), display_title(job)
             return jobs
 
     def __init__(self, root: Path):
@@ -54,14 +55,17 @@ class Store:
         if path.is_file():
             with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as existing:
                 columns = {r[1] for r in existing.execute("PRAGMA table_info(jobs)")}
-            if columns and ("script_mentions" not in columns or "editor_state" not in columns):
+                segment_columns = {r[1] for r in existing.execute("PRAGMA table_info(segments)")}
+            if columns and ("script_mentions" not in columns or "editor_state" not in columns or "content_type" not in segment_columns):
                 from .data_paths import snapshot_database
-                prefix = "before-voice-mentions-" if "script_mentions" not in columns else "before-dialogue-editor-"
+                prefix = ("before-voice-mentions-" if "script_mentions" not in columns else
+                          "before-dialogue-editor-" if "editor_state" not in columns else "before-dialogue-scope-")
                 backup = self.root / "backups" / (prefix + str(time.time_ns()) + ".sqlite3")
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 snapshot_database(path.resolve(), backup)
         self.db = sqlite3.connect(self.root / "tasks.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        migrate_types = "content_type" not in {r[1] for r in self.db.execute("PRAGMA table_info(segments)")}
         self.db.executescript("""
           PRAGMA journal_mode=WAL;
           CREATE TABLE IF NOT EXISTS jobs (
@@ -78,6 +82,7 @@ class Store:
             "segments": {"voice": "TEXT", "fingerprint": "TEXT", "batch_title": "TEXT",
                          "created": "REAL", "generation": "INTEGER NOT NULL DEFAULT 1",
                          "provenance": "TEXT", "source_id": "TEXT", "source_revision": "TEXT", "force_generate": "INTEGER NOT NULL DEFAULT 0",
+                         "content_type": "TEXT NOT NULL DEFAULT 'article'",
                          "duration": "REAL", "generation_seconds": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0",
                          "audio_storage": "TEXT NOT NULL DEFAULT 'permanent'", "delivery_ack": "INTEGER NOT NULL DEFAULT 0",
                          "audio_expires": "REAL", "audio_released": "REAL", "audio_release_reason": "TEXT"},
@@ -95,7 +100,13 @@ class Store:
             batch_title=COALESCE(batch_title,(SELECT title FROM jobs WHERE id=job_id)),
             created=COALESCE(created,(SELECT created FROM jobs WHERE id=job_id))""")
         self.db.commit()
+        if migrate_types:
+            with self.db:
+                self.db.execute("UPDATE segments SET content_type='dialogue' WHERE source_id IS NOT NULL")
         self.db.executescript("""
+            CREATE INDEX IF NOT EXISTS dialogue_audio_history ON segments(job_id,source_id,idx);
+            CREATE VIEW IF NOT EXISTS article_audio_records AS SELECT * FROM segments WHERE content_type='article';
+            CREATE VIEW IF NOT EXISTS dialogue_audio_records AS SELECT * FROM segments WHERE content_type='dialogue';
             CREATE INDEX IF NOT EXISTS workflow_jobs ON jobs(workflow_key);
             CREATE INDEX IF NOT EXISTS queued_segments ON segments(status,job_id,idx);
             CREATE INDEX IF NOT EXISTS generation_segments ON segments(job_id,generation);
@@ -138,7 +149,8 @@ class Store:
             title = self.db.execute("SELECT title FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             generation = self.db.execute("SELECT MAX(generation) FROM segments WHERE job_id=?", (job_id,)).fetchone()[0]
             indices = [r[0] for r in self.db.execute("SELECT idx FROM segments WHERE job_id=? AND generation=? ORDER BY idx", (job_id, generation))]
-            return {"job_id": job_id, "title": title, "generation": generation, "segment_indices": indices,
+            job = self.get(job_id)
+            return {"job_id": job_id, "title": title, "display_title": job["display_title"], "generation": generation, "segment_indices": indices,
                     "status_url": f"/jobs/{job_id}?generation={generation}"}
 
     def append(self, job_id, title, voice, fingerprint, segments, script=None, provenance=None, workflow=False, delivery_ack=False, script_mentions=None, editor_state=None):
@@ -149,14 +161,15 @@ class Store:
             record_only = self.db.execute("SELECT record_only FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             last, generation = self.db.execute("SELECT COALESCE(MAX(idx),0),COALESCE(MAX(generation),0) FROM segments WHERE job_id=?", (job_id,)).fetchone()
             self.db.executemany("""INSERT INTO segments
-                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack,source_id,source_revision,force_generate)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
+                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack,source_id,source_revision,force_generate,content_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
                 "queued", json.dumps(s["prepared_voice"].voice, ensure_ascii=False) if s.get("prepared_voice") else snapshot,
                 s["prepared_voice"].fingerprint if s.get("prepared_voice") else fingerprint, title, now, generation+1,
                 (json.dumps(s["prepared_voice"].provenance if s.get("prepared_voice") else provenance, ensure_ascii=False)
                  if s.get("prepared_voice") or provenance is not None else None), int(workflow),
                 "temporary" if record_only else "permanent", int(delivery_ack and record_only),
-                s.get("source_id"), s.get("source_revision"), int(s.get("force_generate", False))) for i, s in enumerate(segments, 1)])
+                s.get("source_id"), s.get("source_revision"), int(s.get("force_generate", False)),
+                "dialogue" if s.get("source_id") else "article") for i, s in enumerate(segments, 1)])
             self.db.execute("UPDATE jobs SET title=?,voice=?,fingerprint=?,script=?,script_mentions=?,editor_state=?,updated=?,auto_named=? WHERE id=?",
                             (title, snapshot, fingerprint, script, json.dumps(script_mentions or [], ensure_ascii=False),
                              json.dumps(editor_state, ensure_ascii=False), now, automatic, job_id))
@@ -187,6 +200,7 @@ class Store:
             job["voice"] = json.loads(job["voice"])
             job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
             job["editor_state"] = json.loads(job.get("editor_state") or "null")
+            job["work_type"], job["display_title"] = work_type(job), display_title(job)
             items = [dict(s) for s in self.db.execute("SELECT * FROM segments WHERE job_id=? AND audio_deleted=0 AND (? IS NULL OR generation=?) ORDER BY idx", (job_id, generation, generation))]
             for item in items:
                 item["error"] = json.loads(item["error"]) if item["error"] else None
@@ -214,6 +228,7 @@ class Store:
                 job["voice"] = json.loads(job["voice"])
                 job["script_mentions"] = json.loads(job.get("script_mentions") or "[]")
                 job["editor_state"] = json.loads(job.get("editor_state") or "null")
+                job["work_type"], job["display_title"] = work_type(job), display_title(job)
             return jobs
 
     def next(self, job_id=None, admitted=None):
@@ -301,7 +316,8 @@ class Store:
 
     def generated_audio(self):
         with self.lock:
-            rows = self.db.execute("""SELECT s.*,j.title AS work_title,j.deleted AS work_deleted
+            rows = self.db.execute("""SELECT s.*,j.title AS work_title,j.deleted AS work_deleted,
+                j.auto_named AS work_auto_named,j.editor_state AS work_editor_state
                 FROM segments s JOIN jobs j ON j.id=s.job_id
                 WHERE j.record_only=0 AND s.audio_deleted=0 AND s.status='done' AND s.audio IS NOT NULL AND s.audio!=''
                 ORDER BY s.created DESC,s.job_id,s.idx DESC""")
@@ -311,6 +327,8 @@ class Store:
                 item["id"] = f"{item['job_id']}:{item['idx']}"
                 item["voice"] = json.loads(item["voice"] or "{}")
                 item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
+                item["display_title"] = display_title({"title": item["work_title"], "auto_named": item.pop("work_auto_named"),
+                    "editor_state": json.loads(item.pop("work_editor_state") or "null")})
                 result.append(item)
             return result
 

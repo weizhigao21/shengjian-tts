@@ -17,12 +17,12 @@ def jobs(request: Request):
 def submit(body: JobInput, request: Request):
     m = manager(request)
     with m.lock:
-        job_id = m.submit(body.title, body.voice_id, [s.model_dump() for s in body.segments],
+        job_id = m.submit(body.title, body.voice_id, [s.model_dump(exclude_none=True) for s in body.segments],
                           overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
                           script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset,
                           record_only=body.record_only, delivery_ack=body.delivery_ack,
                           script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-                          editor_state=body.editor_state.model_dump() if body.editor_state else None)
+                          editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
         return submitted(m, job_id)
 
 
@@ -34,7 +34,7 @@ def submitted(m, job_id):
 def create_draft(body: DocumentInput, request: Request):
     job_id = manager(request).store.create(body.title, {}, "", [], body.script,
         script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-        editor_state=body.editor_state.model_dump() if body.editor_state else None)
+        editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
     return get_job(manager(request), job_id)
 
 
@@ -44,12 +44,12 @@ def append_generation(job_id: str, body: JobInput, request: Request):
     with m.lock:
         existing = get_job(m, job_id)
         title = body.title if "title" in body.model_fields_set else existing["title"]
-        m.submit(title, body.voice_id, [s.model_dump() for s in body.segments],
+        m.submit(title, body.voice_id, [s.model_dump(exclude_none=True) for s in body.segments],
                  overrides=body.overrides.model_dump(exclude_none=True) if body.overrides else None,
                  job_id=job_id, script=body.script, use_preset=body.use_preset,
                  record_only=body.record_only, delivery_ack=body.delivery_ack,
                  script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-                 editor_state=body.editor_state.model_dump() if body.editor_state else None)
+                 editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
         return submitted(m, job_id)
 
 
@@ -59,8 +59,8 @@ def save_document(job_id: str, body: DocumentInput, request: Request):
     get_job(m, job_id)
     title = m.store.save_document(job_id, body.title, body.script,
         [v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-        body.editor_state.model_dump() if body.editor_state else None)
-    return {"saved": job_id, "title": title}
+        body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
+    return {"saved": job_id, "title": title, "display_title": m.store.get(job_id)["display_title"]}
 
 
 @router.get("/jobs/{job_id}")

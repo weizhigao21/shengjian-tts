@@ -8,7 +8,9 @@ from test_model_capabilities import gguf
 @pytest.mark.parametrize("height", [720, 1000])
 @pytest.mark.parametrize("mode", ["design", "continuation"])
 def test_advanced_toggle_keeps_inspector_controls_in_place(tmp_path, qtbot, qapp, height, mode):
-    qapp.setStyle("Fusion")
+    # The QApplication is shared; avoid deleting its style between popup teardowns.
+    if qapp.style().objectName().lower() != "fusion":
+        qapp.setStyle("Fusion")
     configure_font(qapp)
     path = tmp_path / "voice.gguf"
     gguf(path, {"family": "voxcpm2", "schema_version": 1, "capabilities": {"tts": ["voice_design", "voice_clone"]}})

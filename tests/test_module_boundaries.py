@@ -33,6 +33,7 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
         schemas.pop(name)
     for name, field in [('SegmentInput', 'voice_id'), ('SegmentInput', 'source_id'),
                         ('SegmentInput', 'source_revision'), ('SegmentInput', 'force_generate'),
+                        ('SegmentInput', 'use_preset'), ('SegmentInput', 'overrides'),
                         ('JobInput', 'script_mentions'), ('DocumentInput', 'script_mentions'),
                         ('JobInput', 'editor_state'), ('DocumentInput', 'editor_state')]:
         schemas[name]['properties'].pop(field)

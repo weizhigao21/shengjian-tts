@@ -3,6 +3,8 @@ from __future__ import annotations
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog, QMenu, QPushButton, QTableWidgetItem
 from ...subtitles import parse_text
+from ...naming import display_title, work_type
+from datetime import datetime
 from ...ui import icon
 from ..api_client import checked
 from ..constants import STATES
@@ -40,8 +42,10 @@ class DocumentController:
             self.jobs_table.setUpdatesEnabled(False)
             self.jobs_table.setRowCount(len(jobs))
             for row, value in enumerate(jobs):
-                tooltip = f"{value['title']}\n{STATES[value['status']]} · {value['completed']}/{value['total']}"
-                for col, text in enumerate((value["title"], STATES[value["status"]], f"{value['completed']}/{value['total']}")):
+                category = "对话" if work_type(value) == "dialogue" else "文章"
+                stamp = datetime.fromtimestamp(value["created"]).strftime("%Y-%m-%d %H:%M:%S")
+                tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{STATES[value['status']]} · {value['completed']}/{value['total']}"
+                for col, text in enumerate((display_title(value), STATES[value["status"]], f"{value['completed']}/{value['total']}")):
                     cell = self.update_table_cell(self.jobs_table, row, col, text, tooltip)
                     if cell.data(256) != value["id"]:
                         cell.setData(256, value["id"])
@@ -82,12 +86,11 @@ class DocumentController:
         if job["id"] != self.selected_job:
             return
         self.loading_document = True
-        self.title_edit.setText(job["title"])
+        self.title_edit.setText(display_title(job))
         self.text_edit.setPlainText(job.get("script") if job.get("script") is not None else
             "\n".join((f"[{s['timestamp']}]" if s["timestamp"] else "") + s["text"] for s in job["segments"]))
         self.text_edit.restore_mentions(job.get("script_mentions"))
         self.load_editor_state(job)
-        self.loading_document = False
         self.document_dirty = False
         base = next((v for v in self.voices if v["id"] == job["voice"].get("id") and model_key(v) == model_key(job["voice"])), None)
         base = base or next((v for v in self.voices if job["voice"] and model_key(v) == model_key(job["voice"])), None)
@@ -100,6 +103,9 @@ class DocumentController:
                 self.voice_combo.setCurrentIndex(0)
                 self.voice_combo.blockSignals(False)
             self.update_voice_summary(reapply=True)
+        self.loading_document = False
+        if self.editor_mode == "dialogue":
+            self.select_dialogue_entry(self.dialogue_editor.selected_id)
         self.render_job(job)
 
     def job_menu(self, row):
@@ -197,7 +203,7 @@ class DocumentController:
         def finished(_=None):
             if isinstance(_, dict) and _.get("title") and self.selected_job == target and self.title_edit.text().strip() == body["title"]:
                 self.title_edit.blockSignals(True)
-                self.title_edit.setText(_["title"])
+                self.title_edit.setText(_.get("display_title", _["title"]))
                 self.title_edit.blockSignals(False)
             self.document_save_running = False
             callbacks, self.after_save = self.after_save, []
