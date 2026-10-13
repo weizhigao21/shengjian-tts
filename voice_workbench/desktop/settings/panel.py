@@ -127,5 +127,6 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.owner.call(lambda c: checked(action(c)), done)
 
     def close_management(self):
+        self.app_updates.close_updates()
         self.timer.stop()
         self.stop()

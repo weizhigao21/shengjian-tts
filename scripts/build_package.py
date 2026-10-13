@@ -9,18 +9,23 @@ import subprocess
 import sys
 import zipfile
 
+ROOT = Path(__file__).resolve().parent.parent
+# Build from this checkout, even when an older wheel is installed globally.
+sys.path.insert(0, str(ROOT))
+from voice_workbench.app_updates.manifest import write_manifest, digest_file, MANIFEST, UPDATER
+
 if __package__:
     from .package_files import overwrite_program
 else:
     from package_files import overwrite_program
 
-ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt")
-DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md")
+DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md", "docs/MODEL_DISCOVERY.md",
+                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md")
 DOCUMENTATION_LICENSES = tuple(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "licenses").rglob("*"))
                               if path.is_file() and not path.is_symlink())
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
-    "app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library", "index-emotion", "workflow", "models", "engine-settings", "audio-manager"))
+    "app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library", "index-emotion", "workflow", "models", "engine-settings", "audio-manager", "model-discovery", "audio-editor", "app-updates"))
 
 
 def copy_documentation(candidate):
@@ -43,13 +48,13 @@ def publish(candidate, target):
     """Publish only program files; existing configuration/data folders stay in place."""
     contained(candidate, ROOT / "build")
     contained(target, ROOT / "dist")
-    overwrite_program(candidate, target, (*DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES))
+    overwrite_program(candidate, target, (UPDATER, MANIFEST, *DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES))
 
 
 def distribution_archive(candidate, destination):
     """Publish program files only, even if a locally used folder contains user data."""
     contained(destination, ROOT / "dist")
-    allowed = {"声笺.exe", "声笺服务.exe", "_internal", *DOCUMENTATION}
+    allowed = {"声笺.exe", "声笺服务.exe", UPDATER, MANIFEST, "_internal", *DOCUMENTATION}
     temporary = destination.with_suffix('.zip.tmp')
     try:
         with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -80,7 +85,11 @@ def main():
     subprocess.run([sys.executable, "-m", "PyInstaller", str(ROOT / "声笺.spec"),
                     "--distpath", str(work / "dist"), "--workpath", str(work / "work"),
                     "--noconfirm"], cwd=ROOT, env=environment, check=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", str(ROOT / "声笺更新器.spec"),
+                    "--distpath", str(work / "dist"), "--workpath", str(work / "updater-work"),
+                    "--noconfirm"], cwd=ROOT, env=environment, check=True)
     candidate = work / "dist" / "声笺"
+    shutil.copy2(work / "dist" / UPDATER, candidate / UPDATER)
     for name in ("声笺.exe", "声笺服务.exe", "_internal/voice_workbench/assets/app.ico",
                  "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py",
                  "_internal/voice_workbench/index_emotion.py", "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
@@ -94,7 +103,9 @@ def main():
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     version = result.stdout.strip().rsplit(' ', 1)[-1]
+    write_manifest(candidate, version)
     archive = distribution_archive(candidate, dist / f"shengjian-v{version}-windows-x64.zip")
+    (dist / 'SHA256SUMS.txt').write_text(f"{digest_file(archive)}  {archive.name}\n", encoding='ascii')
     target = dist / "声笺"
     publish(candidate, target)
     contained(work, ROOT / "build")

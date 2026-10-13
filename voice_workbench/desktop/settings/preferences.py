@@ -7,11 +7,12 @@ class PreferencesSettings:
     def _general_page(self):
         scroll, layout = self.scroll_page("generalSettings")
         layout.addWidget(label("数据与本地服务", "hint"))
-        from ... import __version__
         layout.addWidget(self.settings_group([
             self.settings_row("数据保存位置", self.data_location, (self.open_files_button,)),
-            self.settings_row("本地服务", "双语工作流通过这个地址接入。", (label(f"127.0.0.1:{self.owner.port}", "hint"),)),
-            self.settings_row("程序版本", controls=(label("声笺 v" + __version__, "hint"),))]))
+            self.settings_row("本地服务", "双语工作流通过这个地址接入。", (label(f"127.0.0.1:{self.owner.port}", "hint"),))]))
+        from .app_updates import AppUpdateControls
+        self.app_updates = AppUpdateControls(self)
+        layout.addWidget(self.app_updates)
         layout.addStretch()
         self.pages.addWidget(scroll)
 

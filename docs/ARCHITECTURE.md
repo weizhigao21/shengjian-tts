@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.32 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)。
+声笺 v0.7.33 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -44,7 +44,7 @@ v0.7.24 由入口卡片创建对应类型的草稿，文稿控制器的新建操
 
 v0.7.26 将 IndexTTS 表达方式拆为 `index_emotion.py`（标准库参数契约，供两个引擎复用）与 `index_emotion_controls.py`（Qt 面板）。生成服务保留演绎参考并固定每条对白的参数快照；配置与音频生命周期共同保护两种参考文件。新增字段可选，旧预设的默认版本标签兼容。
 
-v0.7.28 的 `role_name` 只负责角色显示，音频关联仍使用稳定的对白 ID；悬停详情由独立组件 `delayed_tooltip.py` 管理。构建脚本用 `package_files.py` 仅覆盖程序文件，保留配置与数据，不创建旧程序备份。
+v0.7.28 的 `role_name` 只负责角色显示，音频关联仍使用稳定的对白 ID；悬停详情由独立组件 `delayed_tooltip.py` 管理。程序文件替换策略在 v0.7.33 提取至 `program_files.py`，构建脚本的 `package_files.py` 保留兼容导入；构建和更新都只覆盖程序文件，保留配置与数据，不创建旧程序备份。
 
 v0.7.29 将待存草稿提取为 `desktop/draft_saves.py`：按任务保存独立快照与递增版本，旧响应只能确认旧版本，导航不会清空排队内容。`pending-drafts.json` 是待提交的恢复记录，正式作品仍通过 API 写入 SQLite。生成成功确认对应快照，失败恢复自动保存；新建任务退出时先接收任务 ID。`desktop/voice_checks.py` 负责界面短缓存，模型、参考文件或参数变化会重新校验，服务端生成前仍完整检查。
 
@@ -55,6 +55,8 @@ v0.7.30 的 `model_scan.py` 独立管理引擎声明、后台仓库扫描和缓�
 v0.7.31 的 `model_dates.py` 负责 GGUF 文件版本日期的批量查询、UTC 校验和缓存回退。日期绑定文件校验值与安装记录，更新目录不会改变仍在使用的旧文件日期；Qt 设置页负责转换为本地时间显示。
 
 ## 验证
+
+v0.7.33 的 `app_updates/` 将发行解析 / 下载、清单校验和独立安装分离。Qt 页面只组织后台任务与进程交接，不在界面线程解压。更新器单独打包，不导入 Qt、后端或 HTTPX；包内文件清单和覆盖策略由构建及更新共用。`_vendor/pyupdater/` 仅保留有明确来源的配置、进程与进度窗原语。
 
 v0.7.32 新增 `audio_editing/`，分别管理 PCM 处理、版本存储、应用服务和 Vevo2 请求。音频编辑通过单独的 API 和 SQLite 保存项目，复用原生服务启动；AI 处理与原配音队列在管理器锁下互斥。Qt 的页面、控制器和波形组件独立，不把音频编辑任务写入文章 / 对话数据库。
 

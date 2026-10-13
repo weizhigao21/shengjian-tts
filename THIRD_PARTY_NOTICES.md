@@ -17,6 +17,7 @@
 
 改编内容保留如下来源信息：
 
+- 用户提供的本地 `G:/code/py-updater`：提交 `f263754f731ec1d55bc3f5ae9fd38ae4f1445242` 的部分配置、ZIP 检查、进程等待 / 启动和 Tk 进度窗，保留在 `voice_workbench/_vendor/pyupdater/`。修正 Windows 句柄、隔离环境和等待策略保存；声笺自行实现 HTTPX / SHA-256 校验与直接覆盖，不使用原备份 / 回滚流程。该本地来源未声明独立 LICENSE，不将其标注为 MIT 或其他上游许可；集成记录见 `SOURCE.md`。
 - `voice_workbench/assets/model_catalog.json`：改编自 yovoice 的 `internal/catalog/catalog.json`；
   下载规则参考 `internal/catalog/catalog.go`，默认 revision 为 `6d5436fc85f7a20c2e9f4e472b7f3a532f686444`，条目自身的 revision 优先。
 - `voice_workbench/index_emotion.py`：12 个情绪组合改编自 yovoice 的 `web/src/features/create/inspector.tsx`。
@@ -29,6 +30,7 @@
 - PyQt6：Copyright Riverbank Computing Limited，GPLv3。
 - Qt：Copyright The Qt Company 及贡献者，LGPLv3；通过动态 DLL 链接，程序未修改 Qt。
 - CPython：Python Software Foundation 许可，完整历史声明保存在 `licenses/Python-LICENSE.txt`。
+- 独立更新器的进度窗使用 CPython 附带的 Tcl / Tk 8.6.12，许可见 `licenses/Tk-LICENSE.txt` 和 CPython 完整历史声明。
 - Python 依赖、PyInstaller 引导程序与构建工具：各自原始许可收录于 `licenses/`。
 - CPython 动态库依赖 OpenSSL、libffi 和 SQLite；分别遵循 OpenSSL、MIT 与公有领域声明。
   Windows 的 Microsoft C++ 运行库按其再分发条款使用。

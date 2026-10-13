@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.32-E87936?style=flat-square" alt="源码版本 v0.7.32" />
+  <img src="https://img.shields.io/badge/源码-v0.7.33-E87936?style=flat-square" alt="源码版本 v0.7.33" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.32。** 新增独立音频编辑模式，支持 WAV 选区、裁剪、音量、淡入淡出、拼接、版本回溯，以及 Vevo2 换声和台词修改接口。详见[音频编辑说明](docs/AUDIO_EDITING.md)和[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.33。** 新增程序更新：在「设置 → 常规」检查发行版本、下载校验并安装重启，保留配置、模型与音频，不创建旧程序备份。详见[程序更新说明](docs/APP_UPDATES.md)和[更新记录](CHANGELOG.md)。独立音频编辑支持 WAV 选区、裁剪、音量、淡入淡出、拼接、版本回溯，以及 Vevo2 换声和台词修改接口。[音频编辑说明](docs/AUDIO_EDITING.md)
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.32 的 Windows 包待构建。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.33 的本地构建包尚未上传发行页。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -44,6 +44,7 @@
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
 | **模型与引擎** | 自动扫描引擎模型、补全下载目录，按用途筛选；支持校验、更新、回退及 CPU / NVIDIA CUDA。 |
+| **程序更新** | 检查 GitHub 正式发行，查看说明、下载校验并安装重启；直接覆盖程序文件，保留配置和数据。 |
 | **工作流接入** | 通过本机链接读取预设，批量配音；工作流记录不挤占侧栏作品列表。 |
 
 ## 界面预览
@@ -55,6 +56,15 @@
 ![音频编辑：波形选区、参数与独立版本记录](docs/images/audio-editor.png)
 
 音频编辑截图使用测试音频；Vevo2 需要另行安装，实际模型效果尚待验证。[使用说明](docs/AUDIO_EDITING.md)
+
+<details>
+<summary>程序更新入口</summary>
+
+![设置 → 常规：版本检查、下载与更新说明](docs/images/app-updates.png)
+
+截图使用模拟发行说明。v0.7.28 等旧包先手动安装含更新器的完整包，之后可在程序内更新。[更新说明](docs/APP_UPDATES.md)
+
+</details>
 
 <details>
 <summary>对白历史与 IndexTTS 情绪面板</summary>

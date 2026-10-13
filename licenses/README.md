@@ -1,9 +1,9 @@
 # 分发依赖与许可证
 
-声笺源代码使用 [GPLv3](../LICENSE)。下表记录首个发行包的构建环境，
+声笺源代码使用 [GPLv3](../LICENSE)。下表记录 v0.7.33 发行包的构建环境，
 包含运行依赖与构建工具；后者不一定进入 EXE。许可文本从该版本已安装的分发包原样复制。
 
-- 对应源代码：[声笺 v0.7.28](https://github.com/weizhigao21/shengjian-tts/tree/v0.7.28)，发行页提供源码 ZIP。
+- 对应源代码：[声笺仓库](https://github.com/weizhigao21/shengjian-tts)，当前 v0.7.33 本地包尚未发布；公开发行页提供 v0.7.28 源码 ZIP。
 - 可复建环境：[requirements-release.txt](../requirements-release.txt)，构建入口 `打包.bat` 与 `声笺.spec`。
 - CPython 3.10.11：[完整声明](Python-LICENSE.txt)、[源代码](https://www.python.org/downloads/release/python-31011/)。
 - Qt 6.11.2：LGPLv3，动态链接；来源为 PyQt6-Qt6 wheel，
@@ -11,6 +11,7 @@
 - yovoice：仅改编的目录与情绪预设，Apache-2.0；[完整许可](YOVOICE-LICENSE.txt)，详见[第三方声明](../THIRD_PARTY_NOTICES.md)。
 - 引擎和模型由用户另行下载，各自保留其上游许可。
 - CPython 附带的 OpenSSL 1.1.1t：[许可](OpenSSL-LICENSE.txt)、[源代码](https://github.com/openssl/openssl/tree/OpenSSL_1_1_1t)。
+- 更新器进度窗使用 CPython 附带的 Tcl / Tk 8.6.12：[Tk 原始许可](Tk-LICENSE.txt)，Tcl / Tk 相关声明同时保留在 CPython 完整许可内。
 - libffi：[许可](libffi-LICENSE.txt)；SQLite：[公有领域声明](https://www.sqlite.org/copyright.html)。
 
 | 依赖 | 版本 | 包内许可 | 上游源码分发 |
