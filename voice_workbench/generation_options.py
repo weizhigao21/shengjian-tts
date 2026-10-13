@@ -44,6 +44,8 @@ FALLBACK = {
         number("interval_silence_ms", "段间静音（毫秒）", 200, 0, 2000, 50),
         number("num_beams", "搜索束数", 3, 1, 10),
         number("length_penalty", "长度惩罚", 0.0, -2, 2, .1),
+        dict(name="use_random_emotion", label="随机情绪采样", type="bool", default=False,
+             help="随机选择情绪样本，保持当前情绪权重；固定随机种子有助于复现。"),
         *chunk_options(0), SEED,
     ],
     "qwen3_tts": [
@@ -60,7 +62,7 @@ FALLBACK = {
     "kokoro_tts": [number("text_chunk_size", "长文分段字数", 240, 32, 12000), SEED],
 }
 RESERVED = {"language", "speed", "speaker", "instruct", "instruction", "reference_text", "x_vector_only_mode",
-            "duration_factor", "emotion_text", "use_emotion_text", "emotion_alpha", "emotion_vector", "use_random_emotion", "phonemes", "return_timestamps"}
+            "duration_factor", "emotion_text", "use_emotion_text", "emotion_alpha", "emotion_vector", "phonemes", "return_timestamps"}
 
 
 def option_specs(family, declared=None, config=None):

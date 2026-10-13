@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.26-E87936?style=flat-square" alt="版本 v0.7.26" />
+  <img src="https://img.shields.io/badge/版本-v0.7.27-E87936?style=flat-square" alt="版本 v0.7.27" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -24,7 +24,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.26 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.27 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
