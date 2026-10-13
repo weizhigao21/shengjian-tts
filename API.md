@@ -21,6 +21,7 @@
 | `GET /audio/{filename}`、`GET /logs/{id}/{index}` | 普通生成音频、错误详情 |
 | `GET /generated-audio`、`POST /generated-audio/delete` | 查询与批量删除生成音频 |
 | `GET /models`、`POST /models/import` | 模型目录、下载状态、导入 GGUF |
+| `POST /models/scan` | 后台扫描当前引擎声明及官方 GGUF 目录，返回 202；使用 `source` 字段 |
 | `POST /models/{id}/download`、`POST /models/{id}/pause`、`POST /models/{id}/remove` | 下载、暂停、移除模型 |
 | `PUT /models/runtime` | 设置本地统一引擎路径 |
 | `POST /models/runtime/download`、`POST /models/runtime/pause`、`POST /models/runtime/use` | 下载、暂停、启用引擎 |
@@ -36,7 +37,9 @@
 
 ## 引擎与模型版本
 
-更新检查由用户触发，启动和轮询不访问上游。检查失败不移除当前引擎、模型或已知的更新信息；下载继续使用固定文件大小和 SHA-256 校验。
+引擎和已安装模型的版本检查由用户触发。支持模型扫描在首次读取模型页、更换引擎或缓存超过一天时后台运行；同一引擎每次启动最多自动尝试一次，也可手动扫描。检查或扫描失败不移除当前引擎、模型或已知目录；下载继续使用固定文件大小和 SHA-256 校验。
+
+`GET /models` 新增 `scan` 状态，包含 `scanning`、`checked`、`families`、`error`、`warnings`。目录条目的 `adapted` 表示能否用于声笺配音，`downloadable` 表示能否自动下载，两者独立。待适配单文件模型下载后仅登记文件，不创建预设；多文件包的 `downloadable` 为 `false`。扫描详情见 [MODEL_DISCOVERY.md](docs/MODEL_DISCOVERY.md)。
 
 `engine.options` 包含 `installed_version`、`recommended_version`、`update_available`、`can_rollback`，安装状态包含 `target_version` 与 `upgrade`。升级下载、校验和启动检查完成后显示 `waiting`，当前生成结束才切换；暂停等待启用后，可继续安装，重启后也可启用已安装的新引擎。
 

@@ -22,6 +22,11 @@ def check_model_updates(body: ModelDownload, request: Request):
     return manager(request).models.check_updates(body.source)
 
 
+@router.post("/models/scan", status_code=202)
+def scan_models(body: ModelDownload, request: Request):
+    return manager(request).models.scanner.start(body.source)
+
+
 @router.post("/models/{model_id}/update", status_code=202)
 def update_model(model_id: str, body: ModelDownload, request: Request):
     return manager(request).models.start_update(model_id, body.source)

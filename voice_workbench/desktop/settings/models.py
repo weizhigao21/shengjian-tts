@@ -26,6 +26,15 @@ class ModelSettings:
             self.settings_row("下载来源", controls=(self.source_combo,)),
             self.settings_row("模型保存位置", self.model_directory, (open_models,)),
             self.settings_row("导入本地模型", "已有 GGUF 文件可直接导入，无需下载。", (button("导入 GGUF", self.import_model, "import"),))]))
+        scan_head = QHBoxLayout()
+        self.model_scan_notice = label("首次打开或更换引擎后自动扫描支持的模型。", "hint")
+        self.model_scan_notice.setWordWrap(True)
+        scan_head.addWidget(self.model_scan_notice, 1)
+        self.model_scan_details = button("支持详情", self.show_model_support, "info", "ghost")
+        scan_head.addWidget(self.model_scan_details)
+        self.model_scan_button = button("扫描支持模型", self.scan_models, "retry", "ghost")
+        scan_head.addWidget(self.model_scan_button)
+        layout.addLayout(scan_head)
         installed_head = QHBoxLayout()
         self.installed_label = label("已下载 · 正在读取", "hint")
         installed_head.addWidget(self.installed_label)
@@ -48,9 +57,15 @@ class ModelSettings:
         self.catalog_label = label("可下载 · 正在读取", "hint")
         available_head.addWidget(self.catalog_label)
         available_head.addStretch()
+        self.model_filter = QComboBox()
+        for title, value in (("全部模型", "all"), ("已适配", "adapted"), ("语音生成", "tts"), ("语音识别 / 对齐", "stt"), ("其他音频模型", "other")):
+            self.model_filter.addItem(title, value)
+        self.model_filter.setMaximumWidth(155)
+        self.model_filter.currentIndexChanged.connect(self.render_models)
+        available_head.addWidget(self.model_filter)
         self.model_search = QLineEdit()
         self.model_search.setPlaceholderText("搜索名称、精度或用途")
-        self.model_search.setMaximumWidth(280)
+        self.model_search.setMaximumWidth(240)
         self.model_search.textChanged.connect(self.render_models)
         available_head.addWidget(self.model_search)
         layout.addLayout(available_head)
@@ -58,7 +73,7 @@ class ModelSettings:
         self.catalog_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.catalog_table))
         self.catalog_table.horizontalHeader().hide()
         self.catalog_table.hide()
-        for col, width in ((1, 65), (2, 82), (3, 135), (4, 100)):
+        for col, width in ((1, 65), (2, 105), (3, 105), (4, 100)):
             self.catalog_table.setColumnWidth(col, width)
         self.catalog_table.cellDoubleClicked.connect(self.download_details)
         layout.addWidget(self.catalog_table)
@@ -76,12 +91,39 @@ class ModelSettings:
         text = self.model_search.text().strip().casefold()
         matches = lambda m: not text or text in " ".join(str(m.get(k, "")) for k in ("name", "description", "precision", "family")).casefold()
         installed = [m for m in self.model_data["installed"] if matches(m)]
-        catalog = [m for m in self.model_data["catalog"] if matches(m) and not m["installed"]]
+        choice = self.model_filter.currentData()
+        speech = {"tts", "clone", "design", "vdes"}
+        recognition = {"stt", "asr", "align", "forced_align"}
+        def included(m):
+            tasks = set(m.get("tasks", ["tts"] if m.get("adapted", True) else []))
+            return (choice == "all" or choice == "adapted" and m.get("adapted", True) or
+                    choice == "tts" and bool(tasks & speech) or choice == "stt" and bool(tasks & recognition) or
+                    choice == "other" and not bool(tasks & (speech | recognition)))
+        catalog = [m for m in self.model_data["catalog"] if matches(m) and not m["installed"] and included(m)]
+        scan = self.model_data.get("scan", {})
+        scanning = scan.get("scanning", False)
+        self.model_scan_button.setEnabled(not scanning)
+        self.model_scan_button.setText("扫描中…" if scanning else "扫描支持模型")
+        families = scan.get("families", [])
+        self.model_scan_details.setEnabled(bool(families))
+        if scanning:
+            notice = "正在扫描引擎模型声明和官方仓库，无需下载模型文件…"
+        elif scan.get("error"):
+            notice = scan["error"]
+        elif scan.get("checked"):
+            total = self.model_data["catalog"]
+            notice = f"识别 {len(families)} 个模型家族 · {sum(m['downloadable'] for m in total)} 个可下载 · {sum(m.get('adapted', True) for m in total)} 个已适配"
+            if scan.get("warnings"):
+                notice += " · 部分仓库未连接，保留已知目录"
+        else:
+            notice = "首次打开或更换引擎后自动扫描支持的模型。"
+        self.model_scan_notice.setText(notice)
+        self.model_scan_notice.setToolTip("\n".join(scan.get("warnings", [])) or notice)
         self.render_engine()
         self.installed_table.horizontalHeaderItem(0).setText(f"已添加的模型 · {len(installed)}")
         self.catalog_table.horizontalHeaderItem(0).setText(f"下载其他模型 · {len(catalog)}")
         self.installed_label.setText(f"已下载 · {len(installed)}" + (" · 没有匹配的模型" if text and not installed else ""))
-        self.catalog_label.setText(f"可下载 · {len(catalog)}" + (" · 没有匹配的模型" if text and not catalog else ""))
+        self.catalog_label.setText(f"模型目录 · {len(catalog)}" + (" · 没有匹配的模型" if text and not catalog else ""))
         self.installed_label.show()
         self.catalog_label.show()
         table = self.installed_table
@@ -93,7 +135,7 @@ class ModelSettings:
             cell.setData(Qt.ItemDataRole.UserRole + 1, {"title": title, "description": m["description"]})
             self.cell(table, row, 1, "目录模型" if m.get("is_directory") else size_text(m["size"]) if m["exists"] else "文件缺失")
             status = m.get("update_status")
-            summary = DOWNLOAD_STATES.get(status, status) if status else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型"
+            summary = DOWNLOAD_STATES.get(status, status) if status else "待适配" if not m.get("adapted", True) else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型"
             if status in ("downloading", "paused", "verifying", "pausing"):
                 summary += f" · {min(100,m.get('update_received',0)*100/(m.get('update_size') or 1)):.0f}%"
             self.cell(table, row, 2, summary, m.get("update_error") or m["path"])
@@ -113,6 +155,8 @@ class ModelSettings:
             self.cell(table, row, 2, size_text(m["size"]))
             status = m["status"]
             summary = DOWNLOAD_STATES.get(status, status)
+            if not m.get("adapted", True) and status == "available":
+                summary = "待适配"
             if status in ("downloading", "paused", "pausing", "verifying"):
                 summary += f" · {min(100, m.get('received', 0) * 100 / m['size']):.0f}%"
             if m.get("error"):
@@ -122,13 +166,38 @@ class ModelSettings:
                 action = self.action_cell(table, row, 4, m["id"] + "-pause", lambda v=m: button("暂停", lambda: self.pause_download(v), "pause", "ghost"))
                 action.setEnabled(status != "pausing")
             else:
-                caption = "继续" if status == "paused" else "重试" if status == "failed" else "下载" if m["downloadable"] else "仅导入"
+                caption = "继续" if status == "paused" else "重试" if status == "failed" else "下载" if m["downloadable"] else "多文件" if m.get("discovered") else "仅导入"
                 action = self.action_cell(table, row, 4, m["id"] + "-download", lambda v=m: button("下载", lambda: self.download_model(v), "import", "ghost"))
                 action.setText(caption)
                 action.setEnabled(m["downloadable"])
+                action.setToolTip("可以下载保存；声笺尚未适配，暂不能用于配音。" if m["downloadable"] and not m.get("adapted", True) else "此模型需要配套文件，暂不支持自动安装。" if m.get("discovered") and not m["downloadable"] else caption)
             table.setRowHeight(row, 66)
         table.fit_rows()
         table.setUpdatesEnabled(True)
+
+    def scan_models(self):
+        from ..api_client import checked
+        self.model_scan_button.setEnabled(False)
+        source = self.source_combo.currentData()
+        def complete(value):
+            if self.model_data is not None:
+                self.model_data["scan"] = value
+                self.render_models()
+            self.refresh()
+        def failed(message):
+            self.model_scan_button.setEnabled(True)
+            self.model_scan_notice.setText(str(message))
+        self.owner.call(lambda c: checked(c.post("/models/scan", json={"source": source})), complete, failed)
+
+    def show_model_support(self):
+        from ...model_scan import TASK_NAMES
+        families = (self.model_data or {}).get("scan", {}).get("families", [])
+        states = {"supported": "已支持", "community": "社区支持", "experimental": "实验性", "testing": "测试中", "wip": "开发中"}
+        rows = ["当前引擎随附的模型声明；‘已适配’筛选中的模型可用于配音。其他单文件 GGUF 可下载保存，多文件包暂不支持自动安装。"]
+        for f in families:
+            tasks = "、".join(dict.fromkeys(TASK_NAMES.get(t, t) for t in f["tasks"]))
+            rows.append(f"{f['name']} · {tasks or '音频处理'} · {states.get(f['status'], f['status'])} ({f['family']})")
+        self.owner.show_details("\n".join(rows))
 
     def model_actions(self, model):
         row = QWidget()
@@ -182,14 +251,21 @@ class ModelSettings:
 
     def download_model(self, model):
         source = self.source_combo.currentData()
-        self.mutate(lambda c: c.post(f"/models/{model['id']}/download", json={"source": source}), "模型开始下载，可在列表中暂停和查看进度。")
+        message = "模型开始下载，可在列表中暂停和查看进度。"
+        if not model.get("adapted", True):
+            message += " 此模型尚未适配，下载后仅保存文件，暂不能用于配音。"
+        self.mutate(lambda c: c.post(f"/models/{model['id']}/download", json={"source": source}), message)
 
     def pause_download(self, model):
         self.mutate(lambda c: c.post(f"/models/{model['id']}/pause"))
 
     def download_details(self, row, _):
         m = self.visible_catalog[row]
-        self.owner.show_details(m["name"] + "\n" + m["description"] + f"\n精度：{m['precision']}\n大小：{size_text(m['size'])}\nSHA-256：{m['sha256']}\n" + m.get("error", ""))
+        support = "可用于配音" if m.get("adapted", True) else "尚未适配，下载后仅保存文件"
+        self.owner.show_details(m["name"] + "\n" + m["description"] +
+            f"\n适配：{support}\n精度：{m['precision']}\n大小：{size_text(m['size'])}" +
+            f"\n仓库：{m.get('repo') or 'audio-cpp/audio.cpp-gguf'}\n文件：{m.get('remotePath', '')}" +
+            f"\n提交：{m.get('revision', '')}\nSHA-256：{m['sha256']}\n" + m.get("error", ""))
 
     def import_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "导入本地模型", "", "语音模型 (*.gguf)")

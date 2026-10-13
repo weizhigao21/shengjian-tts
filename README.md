@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.29-E87936?style=flat-square" alt="源码版本 v0.7.29" />
+  <img src="https://img.shields.io/badge/源码-v0.7.30-E87936?style=flat-square" alt="源码版本 v0.7.30" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.29。** 优化草稿保存、生成失败恢复和多实例退出，减少界面轮询与重复校验。331 项回归通过；详见[更新记录](CHANGELOG.md)和[优化记录](docs/OPTIMIZATION.md)。
+**当前源码：v0.7.30。** 自动扫描当前引擎声明的模型，核对官方仓库并补全下载目录，支持用途筛选和离线缓存。详见[更新记录](CHANGELOG.md)、[模型扫描](docs/MODEL_DISCOVERY.md)和[优化记录](docs/OPTIMIZATION.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.29 的 Windows 包待构建。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.30 的 Windows 包待构建。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -42,7 +42,7 @@
 | **多角色对话** | 输入 `@` 选择音色，为每框命名角色、调整参数并单独生成；选中框后，播放器和历史列表只显示它的音频。 |
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
-| **模型与引擎** | 下载或导入兼容 GGUF，检查更新、校验和回退；支持 CPU 与 NVIDIA CUDA 引擎。 |
+| **模型与引擎** | 自动扫描引擎模型、补全下载目录，按用途筛选；支持校验、更新、回退及 CPU / NVIDIA CUDA。 |
 | **工作流接入** | 通过本机链接读取预设，批量配音；工作流记录不挤占侧栏作品列表。 |
 
 ## 界面预览
@@ -130,6 +130,10 @@ python -m voice_workbench serve --port 8765
 ### 模型能力
 
 统一推理引擎为 [audio.cpp](https://github.com/0xShug0/audio.cpp)，功能按实际模型包的能力显示。引擎版本与可用更新见「设置 → 推理引擎」。
+
+「设置 → 模型」首次读取或更换引擎后自动扫描，也可点击「扫描支持模型」。目录区分**已适配**和**待适配**：以下四类模型可用于配音，其他单文件 GGUF 可下载保存，暂不创建声音预设；多文件包暂不自动安装。支持详情列出引擎声明的全部模型家族，扫描失败保留原有目录。
+
+![引擎模型扫描：支持家族数量、用途筛选与适配状态](docs/images/model-discovery.png)
 
 | 模型 | 生成方式 |
 | :--- | :--- |
@@ -312,6 +316,7 @@ flowchart LR
 │  ├─ engine_management.py         统一推理引擎下载、解压、安装与切换
 │  ├─ engine_updates.py            官方正式版、Windows 下载包与摘要检查
 │  ├─ model_updates.py             固定模型提交、文件大小与 SHA-256 发现
+│  ├─ model_scan.py                引擎模型声明、官方目录扫描与离线缓存
 │  ├─ engine_validation.py         Windows x64 文件头、计算后端与 DLL 依赖验证
 │  ├─ downloads.py                 模型和引擎共用的续传与文件校验
 │  ├─ audio_cpp.py                 统一后端选择、原生引擎进程与请求适配
