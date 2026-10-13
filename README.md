@@ -182,6 +182,8 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 ## 常用说明
 
+已创建任务的草稿会自动保存；暂时提交失败时，待存内容留在本地，连接恢复后重试。源码中的体检修复与性能数据见 [优化记录](docs/OPTIMIZATION.md)。
+
 <details>
 <summary>作品、生成耗时与参考声音</summary>
 

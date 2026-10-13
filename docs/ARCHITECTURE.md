@@ -46,6 +46,10 @@ v0.7.26 将 IndexTTS 表达方式拆为 `index_emotion.py`（标准库参数契�
 
 v0.7.28 的 `role_name` 只负责角色显示，音频关联仍使用稳定的对白 ID；悬停详情由独立组件 `delayed_tooltip.py` 管理。构建脚本用 `package_files.py` 仅覆盖程序文件，保留配置与数据，不创建旧程序备份。
 
+体检优化将待存草稿提取为 `desktop/draft_saves.py`：按任务保存独立快照与递增版本，旧响应只能确认旧版本，导航不会清空排队内容。`pending-drafts.json` 是待提交的恢复记录，正式作品仍通过 API 写入 SQLite。生成成功确认对应快照，失败恢复自动保存；新建任务退出时先接收任务 ID。`desktop/voice_checks.py` 负责界面短缓存，模型、参考文件或参数变化会重新校验，服务端生成前仍完整检查。
+
+原生路径清理保留尚被映射的自有别名，下一次停止或全实例退出时再试；管理器先停止全部实例，再重试清理。健康检查直接统计任务状态；设置按页请求，对白记录按来源 ID 分组。优化范围和验证见 [OPTIMIZATION.md](OPTIMIZATION.md)。
+
 ## 验证
 
 覆盖原服务、模型、任务、播放、界面、文件管理和打包测试；增加后端独立导入、路由注册及生成准备检查。使用隔离目录验证安装包，验证期间不对用户数据库执行生成或迁移。
@@ -57,6 +61,8 @@ voice_workbench/
 ├─ desktop/                    桌面端
 │  ├─ window.py                窗口装配、Qt 初始化和退出
 │  ├─ api_client.py            异步 HTTP 请求与响应解析
+│  ├─ draft_saves.py           按任务与版本保存草稿、断线恢复
+│  ├─ voice_checks.py          界面校验缓存、文件与参数失效
 │  ├─ constants.py             界面状态文字
 │  ├─ model_labels.py          模型身份与显示名称
 │  ├─ components/              可复用编辑组件

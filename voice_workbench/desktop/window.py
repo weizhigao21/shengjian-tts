@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
 from .. import __version__
 from ..ui import application_icon
 from .api_client import ApiWorker, checked
+from .draft_saves import DraftSaveQueue
+from .voice_checks import VoiceCheckCache
 from .controllers.documents import DocumentController
 from .controllers.generation import GenerationController
 from .controllers.playback import PlaybackController
@@ -30,6 +32,10 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.url = f"http://127.0.0.1:{port}"
         self.workers = set()
         self.closing = False
+        self.close_requested = False
+        self.close_timer = QTimer(self)
+        self.close_timer.setSingleShot(True)
+        self.close_timer.timeout.connect(self.close)
         self.process = None
         self.process_log = None
         self.log_offset = 0
@@ -59,6 +65,8 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.document_dirty = False
         self.document_save_running = False
         self.after_save = []
+        self.draft_saves = DraftSaveQueue(self.data_dir / "pending-drafts.json")
+        self.voice_checks = VoiceCheckCache()
         self.auto_select_audio = True
         self.document_timer = QTimer(self)
         self.document_timer.setSingleShot(True)
@@ -73,6 +81,8 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.reference_player.setAudioOutput(self.reference_output)
         self.reference_preview_origin = None
         self._build()
+        if self.draft_saves.load_error:
+            self.service_log.append("本地待存草稿读取失败，请检查 pending-drafts.json：" + self.draft_saves.load_error)
         self.load_saved_jobs()
         self.reference_player.playbackStateChanged.connect(self.update_reference_icon)
         self.reference_player.errorOccurred.connect(self.reference_playback_error)
@@ -99,6 +109,9 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         worker.start()
 
     def show_error(self, message):
+        if self.close_requested:
+            self.service_log.append("退出前请求失败：" + str(message))
+            return
         QMessageBox.warning(self, "操作未完成", str(message))
 
     def resizeEvent(self, event):
@@ -125,6 +138,15 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         dialog.exec()
 
     def closeEvent(self, event):
+        self.capture_document_save()
+        if self.submitting and self.workers:
+            # Let the GUI receive a new task's ID before flushing its latest edits.
+            self.close_requested = True
+            self.setEnabled(False)
+            self.close_timer.start(50)
+            event.ignore()
+            return
+        self.close_timer.stop()
         self.closing = True
         self.clear_autoplay()
         self.timer.stop()
@@ -142,10 +164,15 @@ class Window(CreationController, DocumentController, GenerationController, Playb
             worker.wait(30000)
             worker.deleteLater()
         self.workers.clear()
-        if self.document_dirty and self.selected_job:
+        if self.draft_saves.pending:
             try:
                 with httpx.Client(base_url=self.url, trust_env=False, timeout=2) as client:
-                    checked(client.patch(f"/jobs/{self.selected_job}/document", json=self.document_payload()))
+                    for snapshot in list(self.draft_saves.pending.values()):
+                        try:
+                            checked(client.patch(f"/jobs/{snapshot.task_id}/document", json=snapshot.body))
+                            self.draft_saves.acknowledge(snapshot)
+                        except Exception as exc:
+                            self.service_log.append("退出时草稿提交失败：" + str(exc))
             except Exception as exc:
                 self.service_log.append("退出时草稿保存失败：" + str(exc))
         if self.owns_service and self.process and self.process.poll() is None:

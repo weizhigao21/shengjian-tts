@@ -24,7 +24,8 @@ def cleanup_workflow_records(request: Request):
     return manager(request).workflow_audio.cleanup_all()
 
 
-@router.api_route("/workflow/audio/{filename}", methods=["GET", "HEAD"])
+@router.get("/workflow/audio/{filename}", operation_id="get_workflow_audio")
+@router.head("/workflow/audio/{filename}", operation_id="head_workflow_audio")
 def workflow_audio(filename: str, request: Request):
     delivery = manager(request).workflow_audio
     path, acknowledged = delivery.lookup(filename)

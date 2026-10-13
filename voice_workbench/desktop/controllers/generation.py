@@ -1,5 +1,6 @@
 """GenerationController responsibilities, composed by the owning Qt widget."""
 from __future__ import annotations
+import json
 from pathlib import Path
 from PyQt6.QtWidgets import QFileDialog
 from ...subtitles import parse_text
@@ -34,17 +35,26 @@ class GenerationController:
             self.show_error("请等待服务连接并选择声音。")
             return
         self.document_timer.stop()
-        self.document_dirty = False
         use_preset = self.selected_preset() is not None
         body = {**self.document_payload(), "voice_id": voice["model_name"] if use_preset else voice["id"], "use_preset": use_preset,
                 "title": title, "segments": segments,
                 "overrides": self.model_controls.overrides()}
         self.submission_title = title
         target = self.selected_job
+        document = self.document_payload()
+        snapshot = self.draft_saves.stage(target, document) if target else None
         self.submitting = True
         self.update_generation_actions()
+        def accepted(result):
+            self.capture_document_save()
+            if snapshot:
+                self.draft_saves.acknowledge(snapshot)
+            if self.document_payload() == document:
+                self.document_dirty = False
+            self.submitted(result)
+            self.save_document()
         def send():
-            self.call(lambda c: checked(c.post(f"/jobs/{target}/generate" if target else "/jobs", json=body)), self.submitted, self.submission_failed)
+            self.call(lambda c: checked(c.post(f"/jobs/{target}/generate" if target else "/jobs", json=body)), accepted, self.submission_failed)
         if self.document_save_running:
             self.after_save.append(send)
         else:
@@ -73,6 +83,7 @@ class GenerationController:
 
     def submission_failed(self, message):
         self.submitting = False
+        self.document_changed()
         self.update_generation_actions()
         self.show_error(message)
 
@@ -149,11 +160,10 @@ class GenerationController:
         usable = self.ready and bool(voice)
         message = "路径检查通过 · 可短句试音" if usable else "请选择模型"
         if usable:
-            try:
-                check_voice(voice)
-            except Exception as exc:
+            problem = self.voice_checks.problem(voice, check_voice)
+            if problem:
                 usable = False
-                message = str(exc)
+                message = problem
         elif not self.ready:
             message = "等待本地服务连接"
         self.voice_health.setText(message)
@@ -169,10 +179,20 @@ class GenerationController:
                 segments = self.document_segments()
                 tagged = {s.get("voice_id") for s in segments if s.get("voice_id")}
                 if tagged:
+                    presets = {v["id"]: v for v in self.voices}
+                    checked_presets = set()
                     for segment in segments:
                         if segment.get("voice_id"):
-                            preset = next(v for v in self.voices if v["id"] == segment["voice_id"])
-                            check_voice({**preset, **(segment.get("overrides") or {})})
+                            identity = segment["voice_id"], json.dumps(segment.get("overrides") or {}, sort_keys=True)
+                            if identity in checked_presets:
+                                continue
+                            checked_presets.add(identity)
+                            preset = presets.get(segment["voice_id"])
+                            if not preset:
+                                raise ValueError("声音预设已删除，请重新选择")
+                            problem = self.voice_checks.problem({**preset, **(segment.get("overrides") or {})}, check_voice)
+                            if problem:
+                                raise ValueError(problem)
                     generate_usable = usable or all(s.get("voice_id") for s in segments)
                     if generate_usable:
                         message = "参数仅作用于选中的对白框" if self.editor_mode == "dialogue" else f"使用 {len(tagged)} 个音色预设"

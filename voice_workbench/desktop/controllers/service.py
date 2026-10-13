@@ -130,6 +130,7 @@ class ServiceController:
 
     def render(self, values):
         self.polling = False
+        was_ready = self.ready
         self.ready = True
         self.last_connection_error = None
         health, voices, jobs, job = values[:4]
@@ -158,6 +159,8 @@ class ServiceController:
         self.update_voice_summary()
         if job and job["id"] == self.selected_job:
             self.render_job(job)
+        if not was_ready:
+            self.save_document()
 
     def set_service_state(self, text, state):
         self.banner.setText(text)

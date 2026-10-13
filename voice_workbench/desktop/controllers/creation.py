@@ -28,6 +28,7 @@ class CreationController:
         if self.ready:
             self.submitting = True
             self.update_generation_actions()
+            body = self.document_payload()
             def created(job):
                 self.submitting = False
                 self.selected_job = job["id"]
@@ -35,7 +36,7 @@ class CreationController:
                 self.update_generation_actions()
                 self.document_changed()
                 self.poll()
-            self.call(lambda c: checked(c.post("/jobs/draft", json=self.document_payload())), created, self.submission_failed)
+            self.call(lambda c: checked(c.post("/jobs/draft", json=body)), created, self.submission_failed)
 
     def choose_creation_mode(self, mode, dirty=True):
         if self.selected_job and not self.loading_document and mode != self.editor_mode:

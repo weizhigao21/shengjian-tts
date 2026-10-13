@@ -130,11 +130,16 @@ class Manager:
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
                     "active": [{"job_id": a["job_id"], "index": a["index"]} for a in self.active.values()],
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
-                    "queue": sum(j["status"] in ("queued", "running") for j in self.store.list(10000, include_workflow=True))}
+                    "queue": self.store.queued_job_count()}
 
     def release_runners(self):
         for runner in self.runners.values():
             runner.interrupt()
+        # Retry shared Windows aliases only after all replicas have released their mappings.
+        for runner in self.runners.values():
+            cleanup = getattr(runner, "cleanup_paths", None)
+            if cleanup:
+                cleanup()
 
     def set_performance(self, settings):
         with self.lock:

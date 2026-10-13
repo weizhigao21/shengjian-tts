@@ -80,6 +80,7 @@ class AudioCppRunner:
         self.endpoint = None
         self.log_handle = None
         self.native_paths = None
+        self.pending_paths = []
 
     def start(self, voice, cancelled):
         load = voice.get("load_options", {})
@@ -200,8 +201,13 @@ class AudioCppRunner:
                 self.log_handle.close()
                 self.log_handle = None
             if self.native_paths:
-                self.native_paths.close()
+                self.pending_paths.append(self.native_paths)
                 self.native_paths = None
+            self.cleanup_paths()
+
+    def cleanup_paths(self):
+        with self.lock:
+            self.pending_paths = [paths for paths in self.pending_paths if not paths.close()]
 
 
 class UnifiedRunner:
@@ -219,3 +225,6 @@ class UnifiedRunner:
     def interrupt(self):
         self.native.interrupt()
         self.python.interrupt()
+
+    def cleanup_paths(self):
+        self.native.cleanup_paths()

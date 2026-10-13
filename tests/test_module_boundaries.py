@@ -14,8 +14,8 @@ from test_generation_options import vox_voice
 def without_unstable_metadata(schema):
     schema = json.loads(json.dumps(schema))
     schema['info'].pop('version', None)
-    # The existing GET/HEAD streaming route shares a generated operation ID;
-    # FastAPI derives its suffix from a set whose iteration order varies.
+    # The historical fixture shares a generated GET/HEAD ID. Ignore those IDs
+    # here; test their current uniqueness independently.
     for method in ('get', 'head'):
         schema['paths']['/workflow/audio/{filename}'][method].pop('operationId', None)
     return schema
@@ -51,6 +51,12 @@ def test_backend_imports_do_not_load_qt_or_create_a_service(tmp_path):
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert 'backend imports without Qt' in result.stdout
+
+
+def test_openapi_operations_have_distinct_ids(tmp_path):
+    schema = create_app(tmp_path).openapi()
+    ids = [operation["operationId"] for path in schema["paths"].values() for operation in path.values()]
+    assert len(ids) == len(set(ids))
 
 
 def test_legacy_desktop_imports_share_the_modular_classes(qapp):

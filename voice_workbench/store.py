@@ -237,6 +237,10 @@ class Store:
                 job["status"] = next(s for s in ("running", "queued", "failed", "cancelled", "done") if s in states)
             return job
 
+    def queued_job_count(self):
+        with self.lock:
+            return self.db.execute("SELECT COUNT(*) FROM jobs WHERE deleted=0 AND status IN ('queued','running')").fetchone()[0]
+
     def list(self, limit=100, include_workflow=False):
         with self.lock:
             jobs = [dict(row) for row in self.db.execute("""SELECT j.*,count(s.idx) AS total,
@@ -285,7 +289,7 @@ class Store:
             self._refresh(job_id)
 
     def _refresh(self, job_id):
-        states = [r[0] for r in self.db.execute("SELECT status FROM segments WHERE job_id=? AND audio_deleted=0", (job_id,))]
+        states = {r[0] for r in self.db.execute("SELECT status FROM segments WHERE job_id=? AND audio_deleted=0 GROUP BY status", (job_id,))}
         state = "draft" if not states else "running" if "running" in states else "queued" if "queued" in states else "failed" if "failed" in states else "cancelled" if "cancelled" in states else "done"
         self.db.execute("UPDATE jobs SET status=?,updated=? WHERE id=?", (state, time.time(), job_id))
         # A large batch can take hours. Start the download grace period only when

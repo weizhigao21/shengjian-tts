@@ -80,8 +80,11 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         if not self.isVisible() or not self.owner.ready or self.loading or self.deleting:
             return
         from ..api_client import checked
+        section = self.pages.currentIndex()
+        if section == 3:
+            return
         self.loading = True
-        if self.pages.currentIndex() == 2:
+        if section == 2:
             def performance_loaded(value):
                 self.loading = False
                 if not self.performance_dirty:
@@ -97,11 +100,11 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
             return
         def fetched(values):
             self.loading = False
-            models, audio = values
-            if models != self.model_data:
-                self.model_data = models
+            if section in (0, 4) and values != self.model_data:
+                self.model_data = values
                 self.render_models()
-            if audio != self.audio_data:
+            if section == 1 and values != self.audio_data:
+                audio = values
                 self.audio_data = audio
                 self.selected_ids.intersection_update(a["id"] for a in audio)
                 if self.playing_id and self.playing_id not in {a["id"] for a in audio}:
@@ -110,7 +113,8 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         def failed(message):
             self.loading = False
             self.owner.statusBar().showMessage("管理列表刷新失败：" + message, 6000)
-        self.owner.call(lambda c: (checked(c.get("/models")), checked(c.get("/generated-audio"))), fetched, failed)
+        endpoint = "/generated-audio" if section == 1 else "/models"
+        self.owner.call(lambda c: checked(c.get(endpoint)), fetched, failed)
 
     def mutate(self, action, message=""):
         from ..api_client import checked

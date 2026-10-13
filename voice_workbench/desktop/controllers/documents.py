@@ -70,6 +70,7 @@ class DocumentController:
             selected = self.jobs_table.item(row, 0).data(256)
             if selected != self.selected_job:
                 self.save_document()
+                self.document_dirty = False
                 self.clear_autoplay()
                 self.job_data = None
                 self.segments_table.setRowCount(0)
@@ -85,13 +86,17 @@ class DocumentController:
         from ..model_labels import model_key
         if job["id"] != self.selected_job:
             return
+        self.capture_document_save()
+        pending = self.draft_saves.pending.get(job["id"])
+        if pending:
+            job = {**job, **pending.body, "display_title": pending.body["title"]}
         self.loading_document = True
         self.title_edit.setText(display_title(job))
         self.text_edit.setPlainText(job.get("script") if job.get("script") is not None else
             "\n".join((f"[{s['timestamp']}]" if s["timestamp"] else "") + s["text"] for s in job["segments"]))
         self.text_edit.restore_mentions(job.get("script_mentions"))
         self.load_editor_state(job)
-        self.document_dirty = False
+        self.document_dirty = bool(pending)
         base = next((v for v in self.voices if v["id"] == job["voice"].get("id") and model_key(v) == model_key(job["voice"])), None)
         base = base or next((v for v in self.voices if job["voice"] and model_key(v) == model_key(job["voice"])), None)
         if base:
@@ -107,6 +112,8 @@ class DocumentController:
         if self.editor_mode == "dialogue":
             self.select_dialogue_entry(self.dialogue_editor.selected_id)
         self.render_job(job)
+        if pending:
+            self.document_timer.start(650)
 
     def job_menu(self, row):
         from ...ui import icon
@@ -137,6 +144,7 @@ class DocumentController:
         self.call(lambda c: checked(c.delete(f"/jobs/{job_id}")), lambda r: self.job_deleted(job_id))
 
     def job_deleted(self, job_id):
+        self.draft_saves.discard(job_id)
         self.deleted_job_ids.add(job_id)
         if self.selected_job == job_id:
             self.clear_autoplay()
@@ -194,13 +202,17 @@ class DocumentController:
 
     def save_document(self):
         self.document_timer.stop()
-        if not self.document_dirty or not self.selected_job or not self.ready or self.document_save_running or self.submitting:
+        self.capture_document_save()
+        if not self.draft_saves.pending or not self.ready or self.document_save_running or self.submitting:
             return
-        target = self.selected_job
-        body = self.document_payload()
-        self.document_dirty = False
+        snapshot = next(iter(self.draft_saves.pending.values()))
+        target, body = snapshot.task_id, snapshot.body
         self.document_save_running = True
         def finished(_=None):
+            self.capture_document_save()
+            self.draft_saves.acknowledge(snapshot)
+            if self.selected_job == target and self.document_payload() == body:
+                self.document_dirty = False
             if isinstance(_, dict) and _.get("title") and self.selected_job == target and self.title_edit.text().strip() == body["title"]:
                 self.title_edit.blockSignals(True)
                 self.title_edit.setText(_.get("display_title", _["title"]))
@@ -209,9 +221,10 @@ class DocumentController:
             callbacks, self.after_save = self.after_save, []
             for callback in callbacks:
                 callback()
-            if self.document_dirty and not self.submitting:
+            if not self.submitting:
                 self.save_document()
         def failed(message):
+            self.draft_saves.retry_later(snapshot)
             if self.selected_job == target:
                 self.document_dirty = True
             self.statusBar().showMessage("草稿保存失败：" + message, 8000)
@@ -219,7 +232,15 @@ class DocumentController:
             callbacks, self.after_save = self.after_save, []
             for callback in callbacks:
                 callback()
+            self.document_timer.start(5000)
         self.call(lambda c: checked(c.patch(f"/jobs/{target}/document", json=body)), finished, failed)
+
+    def capture_document_save(self):
+        if self.document_dirty and self.selected_job and not self.loading_document:
+            snapshot = self.draft_saves.stage(self.selected_job, self.document_payload())
+            if self.draft_saves.write_error:
+                self.statusBar().showMessage("本地草稿暂存失败：" + self.draft_saves.write_error, 8000)
+            return snapshot
 
     def set_page(self, index):
         self.tabs.setCurrentIndex(index)
@@ -257,10 +278,13 @@ class DocumentController:
         self.preview_segment()
         for control in (self.retry_button, self.cancel_button, self.export_button):
             control.setEnabled(False)
+        self.loading_document = True
         self.title_edit.setText("未命名配音")
         self.text_edit.clear()
         self.dialogue_editor.load([])
         self.editor_mode = "article"
+        self.document_dirty = False
+        self.loading_document = False
         self.open_creation_home()
 
     def update_script_stats(self):

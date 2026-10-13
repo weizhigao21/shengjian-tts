@@ -73,12 +73,22 @@ class NativePaths:
 
     def close(self):
         # Unlink only our files. Never recursively traverse or delete a model directory.
+        remaining = []
         for file in self.files:
-            file.unlink(missing_ok=True)
-        self.files.clear()
-        for directory in reversed(self.directories):
-            directory.rmdir()
-        self.directories.clear()
-        for root in self.roots:
-            root.rmdir()
-        self.roots.clear()
+            try:
+                file.unlink(missing_ok=True)
+            except OSError:
+                # Another replica can still map the same hard-linked weights on Windows.
+                remaining.append(file)
+        self.files = remaining
+        for folders in (self.directories, self.roots):
+            remaining = []
+            for folder in reversed(folders):
+                try:
+                    folder.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    remaining.append(folder)
+            folders[:] = reversed(remaining)
+        return not (self.files or self.directories or self.roots)

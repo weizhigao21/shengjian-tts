@@ -1,5 +1,6 @@
 import errno
 import json
+import mmap
 import os
 from pathlib import Path
 import sys
@@ -9,6 +10,7 @@ import pytest
 
 from voice_workbench.audio_cpp import AudioCppRunner
 from voice_workbench.native_paths import NativePaths
+from voice_workbench.manager import Manager
 from test_model_capabilities import kokoro
 from voice_workbench.schemas import VoiceConfig
 
@@ -119,3 +121,44 @@ def test_process_launch_failure_releases_aliases_and_log_handle(tmp_path, monkey
     assert runner.native_paths is None and runner.log_handle is None
     assert roots and not roots[0].exists()
     assert Path(voice["model_dir"]).is_file()
+
+
+def test_shared_mapping_defers_only_owned_aliases_and_retries_after_all_runners_stop(tmp_path):
+    folder = tmp_path / "中文模型"
+    folder.mkdir()
+    model = folder / "权重.gguf"
+    original = b"GGUF original weights"
+    model.write_bytes(original)
+    first, second = AudioCppRunner(tmp_path / "one"), AudioCppRunner(tmp_path / "two")
+    first.native_paths, second.native_paths = NativePaths(), NativePaths()
+    first_root, second_root = first.native_paths.root, second.native_paths.root
+    alias = Path(first.native_paths.model(model))
+    other = Path(second.native_paths.model(model))
+    stream = other.open("rb")
+    mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+    class MappedProcess:
+        stopped = False
+        def poll(self): return 0 if self.stopped else None
+        def kill(self):
+            mapping.close()
+            stream.close()
+            self.stopped = True
+        def wait(self, timeout=None): return 0
+    process = second.process = MappedProcess()
+    try:
+        first.interrupt()
+        assert not process.stopped  # Cancelling one lane must not stop another.
+        assert alias.exists() and first.pending_paths
+        assert model.read_bytes() == original
+        manager = Manager.__new__(Manager)
+        manager.runners = {0: first, 1: second}
+        manager.release_runners()
+        assert process.stopped and second.process is None
+        assert not first.pending_paths and not second.pending_paths
+        assert not first_root.exists() and not second_root.exists()
+        assert model.read_bytes() == original
+    finally:
+        if not process.stopped:
+            process.kill()
+        first.interrupt()
+        second.interrupt()

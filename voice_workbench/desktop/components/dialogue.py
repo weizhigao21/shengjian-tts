@@ -368,8 +368,11 @@ class DialogueEditor(QScrollArea):
                           for r in self.rows if r.text.toPlainText().strip())
 
     def update_records(self, records, default_voice, ready):
+        grouped = {}
+        for record in records:
+            grouped.setdefault(record.get("source_id"), []).append(record)
         for row in self.rows:
-            row.update_status(records, default_voice, ready)
+            row.update_status(grouped.get(row.identity, []), default_voice, ready)
 
     def close_popups(self):
         for row in self.rows:
