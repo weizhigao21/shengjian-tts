@@ -129,6 +129,7 @@ def test_gui_generate_reuses_work_new_document_creates_draft_and_reopens_script(
         window.open_job_data(job)
         assert window.text_edit.toPlainText() == "第二稿"
         window.new_document()
+        window.creation_choices['article'].click()
         new = window.selected_job
         assert new != target and window.job_data["status"] == "draft"
         window.text_edit.setPlainText("未生成草稿")
@@ -222,6 +223,7 @@ def test_pending_autosave_finishes_before_generation_and_pending_submit_is_not_d
         monkeypatch.setattr(window, "call", immediate)
         window.poll()
         window.new_document()
+        window.creation_choices['article'].click()
         target = window.selected_job
         pending = []
         monkeypatch.setattr(window, "call", lambda action, success=None, failure=None: pending.append((action, success)))

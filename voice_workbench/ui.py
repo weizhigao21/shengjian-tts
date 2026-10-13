@@ -68,6 +68,9 @@ def application_icon():
 ICONS = {
     "audio": '<path d="M3 10v4m4-8v12m5-15v18m5-15v12m4-8v4"/>',
     "pen": '<path d="m15 4 5 5M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',
+    "article": '<path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h6"/>',
+    "dialogue": '<path d="M3 4h18v13H9l-6 4zM7 8h10M7 12h7"/>',
+    "back": '<path d="M19 12H5m6-6-6 6 6 6"/>',
     "voices": '<rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
     "link": '<path d="m10 13 4-4m-6 7-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m2 1 2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 -1)"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
@@ -311,15 +314,10 @@ class RecentJobDelegate(QStyledItemDelegate):
         painter.setPen(QColor("#282829" if selected else "#777778"))
         painter.setFont(option.font)
         from .naming import work_type
-        category = "对话" if work_type(value) == "dialogue" else "文章"
-        painter.setPen(QColor("#967248" if category == "对话" else "#85858a"))
-        small = QFont(option.font)
-        small.setPixelSize(10)
-        painter.setFont(small)
-        painter.drawText(rectangle.adjusted(20, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, category)
-        painter.setFont(option.font)
-        painter.setPen(QColor("#282829" if selected else "#777778"))
-        text_rect = rectangle.adjusted(47, 0, -30, 0)
+        category = work_type(value)
+        icon(category, "#967248" if category == "dialogue" else "#85858a", 16).paint(
+            painter, rectangle.left() + 20, rectangle.center().y() - 8, 16, 16)
+        text_rect = rectangle.adjusted(43, 0, -30, 0)
         text = option.fontMetrics.elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight, text_rect.width())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, text)
         if selected or hover:

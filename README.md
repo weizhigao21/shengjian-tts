@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.23-E87936?style=flat-square" alt="版本 v0.7.23" />
+  <img src="https://img.shields.io/badge/版本-v0.7.24-E87936?style=flat-square" alt="版本 v0.7.24" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -24,13 +24,13 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.23 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.24 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
 | 功能 | 使用方式 |
 | :--- | :--- |
-| **语音创作** | 输入文本或导入 TXT / LRC / SRT / VTT，按片段生成，结果追加到当前作品。 |
+| **语音创作** | 新建时选择文章或对话，类型创建后固定；文章支持 TXT / LRC / SRT / VTT，按片段生成。 |
 | **按模型配置** | 根据模型实际能力显示音色、克隆、声音设计和高级参数，支持固定随机种子。 |
 | **对话模式** | 输入 `@` 选择音色，每框有固定 ID 和独立参数；点击框后，播放器和生成列表只显示它的音频。 |
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |

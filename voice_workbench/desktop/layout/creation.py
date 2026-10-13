@@ -17,9 +17,9 @@ def creation_home(window):
     options.setSpacing(16)
     window.creation_choices = {}
     for mode, name, symbol, description in (
-            ("article", "文章", "pen", "长文、旁白和字幕\n沿用文本编辑与参数设置"),
-            ("dialogue", "对话", "voices", "多角色对白\n输入 @ 选择音色，每段独立编辑")):
-        control = button(name + "\n" + description, lambda checked=False, m=mode: window.choose_creation_mode(m), symbol)
+            ("article", "文章", "article", "长文、旁白和字幕\n沿用文本编辑与参数设置"),
+            ("dialogue", "对话", "dialogue", "多角色对白\n输入 @ 选择音色，每段独立编辑")):
+        control = button(name + "\n" + description, lambda checked=False, m=mode: window.start_creation(m), symbol)
         control.setObjectName("creationChoice")
         control.setIconSize(QSize(25, 25))
         control.setMinimumHeight(128)

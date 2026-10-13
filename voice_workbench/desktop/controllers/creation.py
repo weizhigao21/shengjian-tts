@@ -19,13 +19,39 @@ class CreationController:
     def resume_creation_editor(self):
         self.choose_creation_mode(self.editor_mode, dirty=False)
 
+    def start_creation(self, mode):
+        if self.submitting:
+            return
+        from ..api_client import checked
+        self.new_document()
+        self.choose_creation_mode(mode, dirty=False)
+        if self.ready:
+            self.submitting = True
+            self.update_generation_actions()
+            def created(job):
+                self.submitting = False
+                self.selected_job = job["id"]
+                self.render_job(job)
+                self.update_generation_actions()
+                self.document_changed()
+                self.poll()
+            self.call(lambda c: checked(c.post("/jobs/draft", json=self.document_payload())), created, self.submission_failed)
+
     def choose_creation_mode(self, mode, dirty=True):
+        if self.selected_job and not self.loading_document and mode != self.editor_mode:
+            self.statusBar().showMessage("任务类型已固定，请返回创作入口新建另一种任务。", 6000)
+            return
         self.capture_dialogue_parameters()
         self.editor_mode = mode
         self.creation_pages.setCurrentIndex(1)
         self.editor_stack.setCurrentIndex(0 if mode == "article" else 1)
-        for key, control in self.mode_buttons.items():
-            control.setChecked(key == mode)
+        self.editor_header.removeWidget(self.generate_button)
+        self.generation_actions.removeWidget(self.generate_button)
+        if mode == "article":
+            self.generation_actions.insertWidget(1, self.generate_button)
+        else:
+            self.editor_header.insertWidget(2, self.generate_button)
+        self.generate_button.show()
         self.import_control.setVisible(mode == "article")
         self.generate_button.setText("全部生成" if mode == "dialogue" else "开始生成")
         self.warmup_button.setVisible(mode == "article")

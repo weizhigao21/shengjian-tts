@@ -26,24 +26,19 @@ class GenerationLayout:
         editor.setContentsMargins(18, 12, 18, 10)
         editor.setSpacing(12)
         overline = QHBoxLayout()
+        self.editor_header = overline
+        self.return_button = button("返回", self.open_creation_home, "back", "ghost")
+        self.return_button.setToolTip("返回创作入口，当前任务会保留")
+        overline.addWidget(self.return_button)
         self.title_edit = QLineEdit("未命名配音")
         self.title_edit.setObjectName("documentTitle")
         self.title_edit.setPlaceholderText("为这段声音起个名字")
         self.title_edit.setMaxLength(200)
         self.title_edit.textChanged.connect(self.document_changed)
         overline.addWidget(self.title_edit, 1)
-        self.mode_buttons = {}
-        for mode, name in (("article", "文章"), ("dialogue", "对话")):
-            control = button(name, lambda checked=False, m=mode: self.choose_creation_mode(m), kind="segment")
-            control.setCheckable(True)
-            control.setChecked(mode == "article")
-            control.setFixedWidth(58)
-            overline.addWidget(control)
-            self.mode_buttons[mode] = control
         self.import_control = button("", self.import_text, "import", "icon")
         self.import_control.setToolTip("导入字幕或文本")
         overline.addWidget(self.import_control)
-        overline.addWidget(button("", self.open_creation_home, "previous", "icon"))
         editor.addLayout(overline)
         self.text_edit = PresetScriptEditor()
         self.text_edit.enable_mentions = False
@@ -130,6 +125,7 @@ class GenerationLayout:
         inspector_layout.addWidget(inspector_scroll, 1)
         actions = QWidget()
         action_layout = QVBoxLayout(actions)
+        self.generation_actions = action_layout
         action_layout.setContentsMargins(18, 12, 18, 12)
         action_layout.setSpacing(10)
         action_layout.addWidget(self.voice_health)
@@ -146,7 +142,7 @@ class GenerationLayout:
         self.warmup_button.setEnabled(False)
         self.generate_button.setEnabled(False)
         configuration_actions.addWidget(self.warmup_button)
-        overline.insertWidget(3, self.generate_button)
+        action_layout.insertWidget(1, self.generate_button)
         inspector_layout.insertWidget(0, actions)
         layout.addWidget(inspector)
         self.creation_pages = QStackedWidget()

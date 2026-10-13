@@ -65,7 +65,9 @@ v0.7.22 增加可选 `editor_state`，保存 `mode`（`article` / `dialogue`）�
 
 v0.7.23 的对白条目可保存 `model_id` 和 `overrides`；片段可填局部 `overrides`，只叠加在这一条的模型 / 预设上。使用未保存的模型设置时，以模型配置 ID 填写 `voice_id`，同时设置 `use_preset: false`。这些能力在 `/health` 中标为 `dialogue_audio_scope`，整批覆盖不会修改其他对白。
 
-作品查询增加 `work_type` 和 `display_title`；生成音频记录增加 `content_type`（`article` / `dialogue`）、`source_label` 与 `audio_label`。完整对白 ID 仍是 `source_id`，短 ID 只用于显示。两类记录保存在同一 SQLite，通过 `article_audio_records` / `dialogue_audio_records` 视图分类，生成时的类型不随作品后续切换而改变。
+作品查询增加 `work_type` 和 `display_title`；生成音频记录增加 `content_type`（`article` / `dialogue`）、`source_label` 与 `audio_label`。完整对白 ID 仍是 `source_id`，短 ID 只用于显示。两类记录保存在同一 SQLite，通过 `article_audio_records` / `dialogue_audio_records` 视图分类。
+
+v0.7.24 增加能力标记 `fixed_creation_type`：任务类型在创建时的 `editor_state.mode` 中确定，未提供时按文章处理。保存文稿或追加生成不能改变类型，否则返回 HTTP 400、`TASK_TYPE_LOCKED`；省略 `editor_state` 时保留已有状态。另一种类型应创建新任务，旧记录不受影响。
 
 v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 `text_chunk_mode:default` 在新版不再提供此参数时省略；VoxCPM2 的 `voxcpm2.chunk_strategy` / `chunk_strategy` 按引擎契约转换。原预设及版本标签保留，新生成记录保存实际使用的参数；未知参数、非默认的旧分段方式及无效值仍报错。
 

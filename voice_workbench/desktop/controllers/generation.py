@@ -158,6 +158,9 @@ class GenerationController:
             message = "等待本地服务连接"
         self.voice_health.setText(message)
         self.new_document_button.setEnabled(not getattr(self, "submitting", False))
+        self.return_button.setEnabled(not self.submitting)
+        for control in self.creation_choices.values():
+            control.setEnabled(not self.submitting)
         self.jobs_table.setEnabled(not getattr(self, "submitting", False))
         self.warmup_button.setEnabled(usable and not getattr(self, "submitting", False))
         generate_usable = usable

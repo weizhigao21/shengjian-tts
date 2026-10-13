@@ -157,6 +157,7 @@ class Store:
         now = time.time()
         snapshot = json.dumps(voice, ensure_ascii=False)
         with self.lock, self.db:
+            editor_state = self.fixed_editor_state(job_id, editor_state)
             title, automatic = self.document_title(job_id, title, script, segments)
             record_only = self.db.execute("SELECT record_only FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             last, generation = self.db.execute("SELECT COALESCE(MAX(idx),0),COALESCE(MAX(generation),0) FROM segments WHERE job_id=?", (job_id,)).fetchone()
@@ -185,11 +186,27 @@ class Store:
 
     def save_document(self, job_id, title, script, script_mentions=None, editor_state=None):
         with self.lock, self.db:
+            editor_state = self.fixed_editor_state(job_id, editor_state)
             title, automatic = self.document_title(job_id, title, script)
             self.db.execute("UPDATE jobs SET title=?,script=?,script_mentions=?,editor_state=?,updated=?,auto_named=? WHERE id=? AND deleted=0",
                             (title, script, json.dumps(script_mentions or [], ensure_ascii=False), json.dumps(editor_state, ensure_ascii=False),
                              time.time(), automatic, job_id))
         return title
+
+    def fixed_editor_state(self, job_id, editor_state):
+        """Preserve a work's creation type across saves and appended generations."""
+        with self.lock:
+            row = self.db.execute("SELECT editor_state FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                from .errors import VoiceError
+                raise VoiceError("JOB_NOT_FOUND", "任务不存在", stage="文稿保存")
+            existing = json.loads(row["editor_state"] or "null")
+            if editor_state is None:
+                return existing
+            if work_type({"editor_state": editor_state}) != work_type({"editor_state": existing}):
+                from .errors import VoiceError
+                raise VoiceError("TASK_TYPE_LOCKED", "任务创建后不能切换文章或对话类型", "请返回创作入口，新建另一种类型的任务。", "任务类型")
+            return editor_state
 
     def get(self, job_id, include_deleted=False, generation=None):
         with self.lock:

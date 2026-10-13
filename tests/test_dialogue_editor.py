@@ -68,7 +68,7 @@ def test_text_grows_without_clipping_and_invalid_tags_or_deleted_presets_are_exp
         widget.segments()
 
 
-def test_mode_entry_and_independent_buffers_save_and_reopen(tmp_path, qtbot, monkeypatch):
+def test_creation_type_is_fixed_and_return_keeps_separate_tasks(tmp_path, qtbot, monkeypatch):
     with TestClient(create_app(tmp_path, runner=Runner())) as client:
         window = Window(8791, tmp_path, autostart=False)
         qtbot.addWidget(window)
@@ -79,22 +79,34 @@ def test_mode_entry_and_independent_buffers_save_and_reopen(tmp_path, qtbot, mon
         window.navigate(0)
         assert window.creation_pages.currentIndex() == 0
         window.new_document()
-        target = window.selected_job
+        assert window.selected_job is None and client.get('/jobs').json() == []
         assert window.creation_pages.currentIndex() == 0
         window.creation_choices["article"].click()
+        article = window.selected_job
         window.text_edit.setPlainText("文章保留原样")
-        window.mode_buttons["dialogue"].click()
+        window.choose_creation_mode('dialogue')
+        assert window.editor_mode == 'article' and window.selected_job == article
+        assert not hasattr(window, 'mode_buttons')
+        assert window.generation_actions.indexOf(window.generate_button) == 1
+        assert window.editor_header.indexOf(window.return_button) == 0
+        assert window.return_button.text() == '返回'
+        window.return_button.click()
+        assert window.creation_pages.currentIndex() == 0
+        assert client.get('/jobs/'+article).json()['script'] == '文章保留原样'
+        window.creation_choices['dialogue'].click()
+        target = window.selected_job
+        assert target != article and window.editor_mode == 'dialogue'
+        assert window.editor_header.indexOf(window.generate_button) == 2
         row = window.dialogue_editor.rows[0]
         identity = row.identity
         row.text.setPlainText("你好，对话")
         row.set_voice(next(v for v in window.voices if not v.get("is_template")))
-        window.mode_buttons["article"].click()
-        assert window.text_edit.toPlainText() == "文章保留原样"
-        window.mode_buttons["dialogue"].click()
+        window.choose_creation_mode('article')
+        assert window.editor_mode == 'dialogue'
         window.save_document()
         saved = client.get(f"/jobs/{target}").json()
         assert saved["editor_state"]["mode"] == "dialogue"
-        assert saved["editor_state"]["article_text"] == "文章保留原样"
+        assert saved["editor_state"]["article_text"] == ""
         assert saved["editor_state"]["dialogue_entries"][0]["id"] == identity
         window.dialogue_editor.load([])
         window.open_job_data(saved)
@@ -102,8 +114,30 @@ def test_mode_entry_and_independent_buffers_save_and_reopen(tmp_path, qtbot, mon
         assert window.dialogue_editor.rows[0].identity == identity
         assert window.dialogue_editor.rows[0].text.toPlainText() == "你好，对话"
         assert window.dialogue_editor.rows[0].voice_id == row.voice_id
+        window.selected_job = article
+        window.open_job_data(client.get('/jobs/'+article).json())
+        assert window.editor_mode == 'article' and window.text_edit.toPlainText() == '文章保留原样'
+        assert window.generation_actions.indexOf(window.generate_button) == 1
+        assert not window.dialogue_editor.isVisible()
         assert window.text_edit.height() > 200
         window.close()
+
+
+@pytest.mark.parametrize('mode', ['article', 'dialogue'])
+def test_type_changes_are_rejected_before_saving_or_generating(tmp_path, mode):
+    other = 'dialogue' if mode == 'article' else 'article'
+    with TestClient(create_app(tmp_path, runner=Runner())) as client:
+        draft = client.post('/jobs/draft', json={'title':'保留任务','script':'原稿', 'editor_state':{'mode':mode}}).json()
+        target = draft['id']
+        for path, method, body in (
+            ('/document', client.patch, {'title':'不应写入','script':'不应替换', 'editor_state':{'mode':other}}),
+            ('/generate', client.post, {'voice_id':'不存在', 'segments':[{'text':'不应生成'}], 'editor_state':{'mode':other}})):
+            result = method('/jobs/'+target+path, json=body)
+            assert result.status_code == 400 and result.json()['error']['code'] == 'TASK_TYPE_LOCKED'
+            assert client.get('/jobs/'+target).json() == draft
+        result = client.patch('/jobs/'+target+'/document', json={'title':'仍保留任务','script':'正常保存'})
+        assert result.status_code == 200
+        assert client.get('/jobs/'+target).json()['work_type'] == mode
 
 
 def test_mixed_dialogue_generates_in_one_work_and_force_really_infers_without_overwriting(tmp_path, qtbot):

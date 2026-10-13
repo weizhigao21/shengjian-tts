@@ -45,7 +45,7 @@ def environment(tmp_path, qtbot, monkeypatch):
         window.poll()
         window.show()
         window.new_document()
-        window.choose_creation_mode("dialogue")
+        window.creation_choices['dialogue'].click()
         first = window.dialogue_editor.rows[0]
         first.set_voice(next(v for v in window.voices if v["id"] == "older"))
         first.text.setPlainText("姐姐你在干什么呀？")
@@ -119,7 +119,8 @@ def test_audio_categories_and_delete_all_respect_current_list(environment, monke
     window, client, runner, first, second = environment
     window.generate()
     wait_job(client, window.selected_job)
-    window.choose_creation_mode("article")
+    window.return_button.click()
+    window.creation_choices['article'].click()
     window.text_edit.setPlainText("一段文章")
     window.generate()
     job = wait_job(client, window.selected_job)
@@ -164,18 +165,18 @@ def test_default_voice_keeps_local_parameters_without_reselecting_a_preset(envir
 def test_type_views_backfill_old_sources_without_changing_old_fields(tmp_path):
     store = Store(tmp_path)
     target = store.create("文章", {"id": "default"}, "key", [{'text':'文章'}])
-    store.append(target, "对话", {"id": "default"}, "key", [{'text':'对白','source_id':'stable-box','source_revision':'a'*64}],
+    store.create("对话", {"id": "default"}, "key", [{'text':'对白','source_id':'stable-box','source_revision':'a'*64}],
                  editor_state={'mode':'dialogue','dialogue_entries':[{'id':'stable-box','text':'对白'}]})
     store.db.execute('DROP VIEW article_audio_records')
     store.db.execute('DROP VIEW dialogue_audio_records')
     store.db.execute('ALTER TABLE segments DROP COLUMN content_type')
     store.db.commit()
-    before = [dict(r) for r in store.db.execute('SELECT * FROM segments ORDER BY idx')]
+    before = [dict(r) for r in store.db.execute('SELECT * FROM segments ORDER BY job_id,idx')]
     store.close()
     migrated = Store(tmp_path)
     assert migrated.db.execute('SELECT count(*) FROM article_audio_records').fetchone()[0] == 1
     assert migrated.db.execute('SELECT source_id FROM dialogue_audio_records').fetchone()[0] == 'stable-box'
-    after = [dict(r) for r in migrated.db.execute('SELECT * FROM segments ORDER BY idx')]
+    after = [dict(r) for r in migrated.db.execute('SELECT * FROM segments ORDER BY job_id,idx')]
     for old, new in zip(before, after):
         assert all(old[k] == new[k] for k in old)
     backups = list((tmp_path/'backups').glob('before-dialogue-scope-*.sqlite3'))

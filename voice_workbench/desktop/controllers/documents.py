@@ -237,7 +237,6 @@ class DocumentController:
             self.settings.player.pause()
 
     def new_document(self):
-        from ..api_client import checked
         if getattr(self, "submitting", False):
             return
         self.save_document()
@@ -263,17 +262,6 @@ class DocumentController:
         self.dialogue_editor.load([])
         self.editor_mode = "article"
         self.open_creation_home()
-        if self.ready:
-            self.submitting = True
-            self.update_generation_actions()
-            def created(job):
-                self.submitting = False
-                self.selected_job = job["id"]
-                self.render_job(job)
-                self.update_generation_actions()
-                self.document_changed()
-                self.poll()
-            self.call(lambda c: checked(c.post("/jobs/draft", json={"title": "未命名配音", "script": ""})), created, self.submission_failed)
 
     def update_script_stats(self):
         from ...subtitles import parse_text

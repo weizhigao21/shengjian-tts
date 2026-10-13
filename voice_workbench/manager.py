@@ -66,6 +66,8 @@ class Manager:
                 use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
+        if job_id:
+            editor_state = self.store.fixed_editor_state(job_id, editor_state)
         prepared, segments = prepare_segments(self.config, model_name, segments, overrides=overrides,
                                               use_preset=use_preset, validator=check_voice)
         voice, fingerprint, provenance = prepared.voice, prepared.fingerprint, prepared.provenance
