@@ -19,6 +19,7 @@ from .downloads import DownloadPaused, download_file, verify_file
 from .model_info import model_ui
 from .model_updates import fetch_model_updates
 from .model_scan import ModelScanner, TASK_NAMES
+from .model_dates import installed_publication, publication_metadata, retain_publication
 from .schemas import VoiceConfig
 
 REVISION = "6d5436fc85f7a20c2e9f4e472b7f3a532f686444"
@@ -102,10 +103,10 @@ class ModelManager:
         try:
             candidates = fetch_model_updates({i: e for i, e in self.catalog.items() if e.get("adapted", e["family"] in FAMILIES)}, self.client_factory, source)
             with self.lock:
-                self.updates = candidates
+                self.updates = {i: retain_publication(e, self.updates.get(i, {})) for i, e in candidates.items()}
                 self.update_checked = time.time()
                 self.update_error = ""
-                atomic_json(self.update_path, {"checked": self.update_checked, "entries": candidates})
+                atomic_json(self.update_path, {"checked": self.update_checked, "entries": self.updates})
         except VoiceError as exc:
             self.update_error = str(exc)
             raise
@@ -170,6 +171,7 @@ class ModelManager:
                 "can_delete_file": voice["backend"] == "audio_cpp" and path.suffix.lower() == ".gguf",
                 "preset_count": int(not template), "catalog_id": entry.get("id"),
                 "description": model_description(entry or voice), "update_available": update_available,
+                **installed_publication(update or entry, file_version),
                 "update_status": state.get("status"), "update_received": state.get("received", 0),
                 "update_error": state.get("error", ""), "update_size": update.get("size", 0),
                 "revision": file_version.get("revision", entry.get("revision") or REVISION) if entry else "",
@@ -188,6 +190,7 @@ class ModelManager:
                 "catalog_id": entry["id"], "description": model_description(entry), "adapted": False,
                 "update_available": False, "update_status": None, "revision": metadata.get("revision", ""),
                 "can_rollback": False}
+            models[identity].update(installed_publication(entry, metadata))
         return list(models.values())
 
     def listing(self):
@@ -203,7 +206,7 @@ class ModelManager:
                     state = {"status": "available", "received": 0}
                 effective = self.updates.get(identity, entry)
                 adapted = effective.get("adapted", effective.get("family") in FAMILIES)
-                available.append({**effective, "description": model_description(effective), **state,
+                available.append({**effective, **publication_metadata(effective), "description": model_description(effective), **state,
                                   "installed": identity in present, "adapted": adapted,
                                   "downloadable": bool(entry.get("remotePath")) and effective.get("single_file", True)})
         return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing(),
@@ -341,6 +344,7 @@ class ModelManager:
             value = self.config.read()
             value.setdefault("model_file_versions", {})[path_identity(path)] = {
                 "catalog_id": entry["id"], "sha256": entry["sha256"], "revision": entry.get("revision") or REVISION,
+                **publication_metadata(entry),
                 "previous_path": previous or ""}
             if not entry.get("adapted", entry["family"] in FAMILIES):
                 value["model_file_versions"][path_identity(path)]["entry"] = entry
@@ -393,7 +397,8 @@ class ModelManager:
                                     voice["revision"] = entry["revision"][:12]
                         self.manager.release_runners()
                         value.setdefault("model_file_versions", {})[path_identity(target)] = {
-                            "catalog_id": identity, "sha256": entry["sha256"], "revision": entry["revision"], "previous_path": model["path"]}
+                            "catalog_id": identity, "sha256": entry["sha256"], "revision": entry["revision"], "previous_path": model["path"],
+                            **publication_metadata(entry)}
                         atomic_json(self.config.path, value)
                         self._state(identity, status="done", received=entry["size"], error="", update=False)
                         return

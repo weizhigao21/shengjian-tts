@@ -370,10 +370,10 @@ def test_settings_multi_selection_search_and_buttons_keep_state_on_refresh(tmp_p
     assert len(captured[0][1]["ids"]) == 1  # Search/category clearing never deletes hidden audio.
     # Download progress updates retain the same action widget and current scroll position.
     settings.pages.setCurrentIndex(0)
-    first = settings.catalog_table.cellWidget(0, 4)
+    first = settings.catalog_table.cellWidget(0, 5)
     settings.model_data = deepcopy(models)
     next(m for m in settings.model_data["catalog"] if m["id"] == settings.visible_catalog[0]["id"]).update(status="failed", error="具体失败原因")
     settings.render_models()
-    assert settings.catalog_table.cellWidget(0, 4) is first
-    assert "具体失败原因" in settings.catalog_table.item(0, 3).toolTip()
+    assert settings.catalog_table.cellWidget(0, 5) is first
+    assert "具体失败原因" in settings.catalog_table.item(0, 4).toolTip()
     window.close()

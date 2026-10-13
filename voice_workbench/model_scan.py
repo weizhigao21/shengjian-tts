@@ -12,9 +12,11 @@ import time
 
 from .config import atomic_json
 from .errors import VoiceError
+from .model_dates import publication_metadata, retain_publication
 from .model_updates import repository_files, safe_remote_path
 
 DEFAULT_REPO = "audio-cpp/audio.cpp-gguf"
+SCAN_SCHEMA = 2
 TASK_NAMES = {"tts": "语音生成", "clone": "声音克隆", "design": "音色设计", "vdes": "音色设计",
               "stt": "语音识别", "asr": "语音识别", "align": "字幕对齐", "vc": "声音转换",
               "music": "音乐生成", "vad": "语音检测", "s2s": "音频处理", "edit": "音频编辑"}
@@ -146,6 +148,8 @@ class ModelScanner:
             if entries and isinstance(cached.get("checked"), (int, float)):
                 warnings = [w[:1000] for w in cached.get("warnings", []) if isinstance(w, str)][:50]
                 self._apply(key, families, entries, cached["checked"], warnings)
+                if cached.get("schema") != SCAN_SCHEMA:
+                    self.checked = None  # Retain old entries while filling new date metadata.
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
@@ -157,6 +161,7 @@ class ModelScanner:
         identity = original.get("id") or "scan-" + hashlib.sha256(
             (declaration["family"] + ":" + declaration["repo"] + ":" + declaration["remotePath"]).encode()).hexdigest()[:20]
         return {**declaration, **original, **{k: metadata[k] for k in ("size", "sha256", "revision")},
+                **publication_metadata(metadata),
                 "id": identity, "repo": declaration["repo"], "discovered": True,
                 "adapted": declaration["family"] in FAMILIES and declaration["single_file"]}
 
@@ -189,7 +194,8 @@ class ModelScanner:
                 return repo_revision, None, ""
             try:
                 with self.models.client_factory() as client:
-                    revision, files = repository_files(client, repo_revision[0], source, repo_revision[1])
+                    paths = [k[2] for k in packages if k[:2] == repo_revision]
+                    revision, files = repository_files(client, repo_revision[0], source, repo_revision[1], paths, self.cancel)
                 return repo_revision, (revision, files), ""
             except Exception as exc:
                 return repo_revision, None, f"{repo_revision[0]}：{exc}"
@@ -217,9 +223,9 @@ class ModelScanner:
                     return
                 checked = time.time()
                 retained = {e["id"]: e for e in self.cached_entries} if key == self.key else {}
-                retained.update({e["id"]: e for e in entries})
+                retained.update({e["id"]: retain_publication(e, retained.get(e["id"], {})) for e in entries})
                 entries = list(retained.values())
-                atomic_json(self.path, {"engine_key": key, "checked": checked, "entries": entries, "warnings": warnings})
+                atomic_json(self.path, {"schema": SCAN_SCHEMA, "engine_key": key, "checked": checked, "entries": entries, "warnings": warnings})
                 self._apply(key, families, entries, checked, warnings)
         except Exception as exc:
             with self.models.lock:

@@ -41,6 +41,8 @@
 
 `GET /models` 新增 `scan` 状态，包含 `scanning`、`checked`、`families`、`error`、`warnings`。目录条目的 `adapted` 表示能否用于声笺配音，`downloadable` 表示能否自动下载，两者独立。待适配单文件模型下载后仅登记文件，不创建预设；多文件包的 `downloadable` 为 `false`。扫描详情见 [MODEL_DISCOVERY.md](docs/MODEL_DISCOVERY.md)。
 
+`catalog` 和 `installed` 的 `published_at` 为当前 GGUF 文件版本的仓库提交时间，使用 UTC ISO 8601；`publication_commit` 为日期来源的文件提交 ID。无法确认时返回 `null`。已安装模型使用实际文件版本的日期，不随可下载的新版本变化。
+
 `engine.options` 包含 `installed_version`、`recommended_version`、`update_available`、`can_rollback`，安装状态包含 `target_version` 与 `upgrade`。升级下载、校验和启动检查完成后显示 `waiting`，当前生成结束才切换；暂停等待启用后，可继续安装，重启后也可启用已安装的新引擎。
 
 `installed` 的模型记录提供 `catalog_id`、`revision`、`new_revision`、`update_available`、`update_status`、`can_rollback`。新版保存在 `models/versions/<摘要前缀>/`，校验包内模型能力后更新预设路径；旧文件保留，历史任务的旧路径仍可使用。回退需要旧文件仍存在，生成或下载期间拒绝回退。

@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.30 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)。
+声笺 v0.7.31 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)。
 
 ## 分层
 
@@ -51,6 +51,8 @@ v0.7.29 将待存草稿提取为 `desktop/draft_saves.py`：按任务保存独�
 原生路径清理保留尚被映射的自有别名，下一次停止或全实例退出时再试；管理器先停止全部实例，再重试清理。健康检查直接统计任务状态；设置按页请求，对白记录按来源 ID 分组。优化范围和验证见 [OPTIMIZATION.md](OPTIMIZATION.md)。
 
 v0.7.30 的 `model_scan.py` 独立管理引擎声明、后台仓库扫描和缓存；`model_updates.py` 复用远程元数据校验。`model_management.py` 负责目录合并、下载及安装记录，桌面端只筛选和显示状态。引擎声明不等于配音适配：单文件待适配模型下载后只登记文件，多文件包不进入自动安装。扫描生命周期随管理器关闭，模型声明按文件签名缓存。详见 [MODEL_DISCOVERY.md](MODEL_DISCOVERY.md)。
+
+v0.7.31 的 `model_dates.py` 负责 GGUF 文件版本日期的批量查询、UTC 校验和缓存回退。日期绑定文件校验值与安装记录，更新目录不会改变仍在使用的旧文件日期；Qt 设置页负责转换为本地时间显示。
 
 ## 验证
 
@@ -110,6 +112,7 @@ voice_workbench/
 ├─ config.py / store.py        配置与 SQLite 数据访问
 ├─ model_info.py               GGUF 与引擎能力读取
 ├─ model_scan.py               引擎模型声明、后台扫描与缓存
+├─ model_dates.py              文件版本日期、批量查询与校验
 ├─ generation_options.py       参数定义、适配与校验
 ├─ audio_cpp.py / runner.py    推理后端、进程和 WAV 校验
 ├─ gui.py / gui_layout.py       旧桌面入口的兼容导出

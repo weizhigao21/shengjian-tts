@@ -57,7 +57,8 @@ def test_auto_scan_expands_catalog_preserves_ids_and_downloads_only_metadata(tmp
         manager.models.listing()
         finish(manager.models)
         value = manager.models.listing()
-        assert len(requests) == 1 and requests[0].url.params["blobs"] == "true"
+        assert len(requests) == 2 and requests[0].url.params["blobs"] == "true"
+        assert requests[1].method == "POST" and "/paths-info/" in requests[1].url.path
         assert len(value["scan"]["families"]) == 3 and len(value["catalog"]) == 4
         known = next(m for m in value["catalog"] if m["remotePath"] == entry["remotePath"])
         assert known["id"] == entry["id"] and known["revision"] == "a" * 40
@@ -204,7 +205,7 @@ def test_settings_scan_summary_filters_and_pending_actions(tmp_path, qtbot):
         assert "3 个模型家族" in panel.model_scan_notice.text()
         panel.model_filter.setCurrentIndex(panel.model_filter.findData("stt"))
         assert [m["family"] for m in panel.visible_catalog] == ["qwen3_asr"]
-        action = panel.catalog_table.cellWidget(0, 4)
+        action = panel.catalog_table.cellWidget(0, 5)
         assert isinstance(action, QPushButton) and action.text() == "下载" and action.isEnabled()
         assert "尚未适配" in action.toolTip()
         panel.model_filter.setCurrentIndex(panel.model_filter.findData("adapted"))

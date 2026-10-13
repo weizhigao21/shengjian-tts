@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.30-E87936?style=flat-square" alt="源码版本 v0.7.30" />
+  <img src="https://img.shields.io/badge/源码-v0.7.31-E87936?style=flat-square" alt="源码版本 v0.7.31" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.30。** 自动扫描当前引擎声明的模型，核对官方仓库并补全下载目录，支持用途筛选和离线缓存。详见[更新记录](CHANGELOG.md)、[模型扫描](docs/MODEL_DISCOVERY.md)和[优化记录](docs/OPTIMIZATION.md)。
+**当前源码：v0.7.31。** 模型列表显示 GGUF 文件版本的发布时间，支持引擎模型扫描、用途筛选和离线缓存。详见[更新记录](CHANGELOG.md)、[模型扫描](docs/MODEL_DISCOVERY.md)和[优化记录](docs/OPTIMIZATION.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.30 的 Windows 包待构建。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.31 的 Windows 包待构建。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -132,6 +132,8 @@ python -m voice_workbench serve --port 8765
 统一推理引擎为 [audio.cpp](https://github.com/0xShug0/audio.cpp)，功能按实际模型包的能力显示。引擎版本与可用更新见「设置 → 推理引擎」。
 
 「设置 → 模型」首次读取或更换引擎后自动扫描，也可点击「扫描支持模型」。目录区分**已适配**和**待适配**：以下四类模型可用于配音，其他单文件 GGUF 可下载保存，暂不创建声音预设；多文件包暂不自动安装。支持详情列出引擎声明的全部模型家族，扫描失败保留原有目录。
+
+已下载和可下载列表显示**发布时间**，取当前 GGUF 文件版本的仓库提交日期；悬停查看完整时间及来源，未提供日期时显示「未知」。更新和回退后，日期跟随实际安装的文件版本。
 
 ![引擎模型扫描：支持家族数量、用途筛选与适配状态](docs/images/model-discovery.png)
 
@@ -316,6 +318,7 @@ flowchart LR
 │  ├─ engine_management.py         统一推理引擎下载、解压、安装与切换
 │  ├─ engine_updates.py            官方正式版、Windows 下载包与摘要检查
 │  ├─ model_updates.py             固定模型提交、文件大小与 SHA-256 发现
+│  ├─ model_dates.py               文件版本发布时间、批量查询与日期校验
 │  ├─ model_scan.py                引擎模型声明、官方目录扫描与离线缓存
 │  ├─ engine_validation.py         Windows x64 文件头、计算后端与 DLL 依赖验证
 │  ├─ downloads.py                 模型和引擎共用的续传与文件校验

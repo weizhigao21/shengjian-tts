@@ -1,4 +1,5 @@
 """Shared settings widgets, table helpers and display labels."""
+from datetime import datetime
 from PyQt6.QtCore import QCoreApplication, QEvent, QPointF, Qt
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtWidgets import (
@@ -6,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from ...ui import ElidedLabel, label
+from ...model_dates import publication_metadata
 
 
 DOWNLOAD_STATES = {"available": "可下载", "downloading": "下载中", "verifying": "校验中",
@@ -18,6 +20,17 @@ ARCHIVE_STATES = {**DOWNLOAD_STATES, "available": "待下载", "downloaded": "�
 
 def size_text(size):
     return f"{size / (1024 ** 3):.2f} GB" if size >= 1024 ** 3 else f"{size / (1024 ** 2):.1f} MB"
+
+
+def publication_text(item):
+    metadata = publication_metadata(item)
+    if not metadata["published_at"]:
+        return "发布时间\n未知", "来源未提供此 GGUF 文件版本的有效提交日期；扫描支持模型可尝试补全。"
+    date = datetime.fromisoformat(metadata["published_at"].replace("Z", "+00:00")).astimezone()
+    tooltip = f"文件版本发布时间：{date:%Y-%m-%d %H:%M:%S %z}\n来源：当前 GGUF 文件版本的仓库提交日期。"
+    if metadata["publication_commit"]:
+        tooltip += "\n提交：" + metadata["publication_commit"]
+    return f"发布时间\n{date:%Y-%m-%d}", tooltip
 
 
 def preset_text(item):

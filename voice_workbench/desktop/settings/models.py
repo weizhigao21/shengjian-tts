@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLineEdit, QMenu, QMessageBox, QWidget,
 )
 from ...ui import ElidedLabel, ModelDescriptionDelegate, button, label
-from .common import size_text, DOWNLOAD_STATES
+from .common import size_text, publication_text, DOWNLOAD_STATES
 
 
 class ModelSettings:
@@ -46,11 +46,11 @@ class ModelSettings:
         self.model_update_notice.setWordWrap(True)
         self.model_update_notice.hide()
         layout.addWidget(self.model_update_notice)
-        self.installed_table = self.table(("模型 / 功能", "大小", "状态", "操作"), whole_page=True)
+        self.installed_table = self.table(("模型 / 功能", "大小", "发布时间", "状态", "操作"), whole_page=True)
         self.installed_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.installed_table))
         self.installed_table.horizontalHeader().hide()
         self.installed_table.hide()
-        for col, width in ((1, 84), (2, 105), (3, 190)):
+        for col, width in ((1, 84), (2, 110), (3, 105), (4, 190)):
             self.installed_table.setColumnWidth(col, width)
         layout.addWidget(self.installed_table)
         available_head = QHBoxLayout()
@@ -69,16 +69,16 @@ class ModelSettings:
         self.model_search.textChanged.connect(self.render_models)
         available_head.addWidget(self.model_search)
         layout.addLayout(available_head)
-        self.catalog_table = self.table(("模型 / 功能", "精度", "文件大小", "状态", "操作"), whole_page=True)
+        self.catalog_table = self.table(("模型 / 功能", "精度", "文件大小", "发布时间", "状态", "操作"), whole_page=True)
         self.catalog_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.catalog_table))
         self.catalog_table.horizontalHeader().hide()
         self.catalog_table.hide()
-        for col, width in ((1, 65), (2, 105), (3, 105), (4, 100)):
+        for col, width in ((1, 65), (2, 105), (3, 110), (4, 105), (5, 100)):
             self.catalog_table.setColumnWidth(col, width)
         self.catalog_table.cellDoubleClicked.connect(self.download_details)
         layout.addWidget(self.catalog_table)
         foot = QHBoxLayout()
-        foot.addWidget(label("模型功能以文件配置为准；Q8 通常更省内存。", "muted"))
+        foot.addWidget(label("发布时间取 GGUF 文件版本的仓库提交日期；Q8 通常更省内存。", "muted"))
         foot.addStretch()
         foot.addWidget(button("模型来源", lambda: QDesktopServices.openUrl(QUrl("https://github.com/leemysw/yovoice")), "link", "ghost"))
         layout.addLayout(foot)
@@ -134,13 +134,14 @@ class ModelSettings:
             cell = self.cell(table, row, 0, title + "\n" + m["description"], title + "\n" + m["description"] + "\n" + m["path"] + f"\n关联预设：{m['preset_count']} 个")
             cell.setData(Qt.ItemDataRole.UserRole + 1, {"title": title, "description": m["description"]})
             self.cell(table, row, 1, "目录模型" if m.get("is_directory") else size_text(m["size"]) if m["exists"] else "文件缺失")
+            self.cell(table, row, 2, *publication_text(m))
             status = m.get("update_status")
             summary = DOWNLOAD_STATES.get(status, status) if status else "待适配" if not m.get("adapted", True) else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型"
             if status in ("downloading", "paused", "verifying", "pausing"):
                 summary += f" · {min(100,m.get('update_received',0)*100/(m.get('update_size') or 1)):.0f}%"
-            self.cell(table, row, 2, summary, m.get("update_error") or m["path"])
+            self.cell(table, row, 3, summary, m.get("update_error") or m["path"])
             key = f"{m['id']}:{bool(m.get('update_available'))}:{status or ''}"
-            self.action_cell(table, row, 3, key, lambda v=m: self.model_actions(v))
+            self.action_cell(table, row, 4, key, lambda v=m: self.model_actions(v))
             table.setRowHeight(row, 66)
         table.fit_rows()
         table.setUpdatesEnabled(True)
@@ -153,6 +154,7 @@ class ModelSettings:
             cell.setData(Qt.ItemDataRole.UserRole + 1, {"title": m["name"], "description": m["description"]})
             self.cell(table, row, 1, m["precision"])
             self.cell(table, row, 2, size_text(m["size"]))
+            self.cell(table, row, 3, *publication_text(m))
             status = m["status"]
             summary = DOWNLOAD_STATES.get(status, status)
             if not m.get("adapted", True) and status == "available":
@@ -161,13 +163,13 @@ class ModelSettings:
                 summary += f" · {min(100, m.get('received', 0) * 100 / m['size']):.0f}%"
             if m.get("error"):
                 summary += "\n" + m["error"]
-            self.cell(table, row, 3, summary, m.get("error") or summary)
+            self.cell(table, row, 4, summary, m.get("error") or summary)
             if status in ("downloading", "verifying", "pausing"):
-                action = self.action_cell(table, row, 4, m["id"] + "-pause", lambda v=m: button("暂停", lambda: self.pause_download(v), "pause", "ghost"))
+                action = self.action_cell(table, row, 5, m["id"] + "-pause", lambda v=m: button("暂停", lambda: self.pause_download(v), "pause", "ghost"))
                 action.setEnabled(status != "pausing")
             else:
                 caption = "继续" if status == "paused" else "重试" if status == "failed" else "下载" if m["downloadable"] else "多文件" if m.get("discovered") else "仅导入"
-                action = self.action_cell(table, row, 4, m["id"] + "-download", lambda v=m: button("下载", lambda: self.download_model(v), "import", "ghost"))
+                action = self.action_cell(table, row, 5, m["id"] + "-download", lambda v=m: button("下载", lambda: self.download_model(v), "import", "ghost"))
                 action.setText(caption)
                 action.setEnabled(m["downloadable"])
                 action.setToolTip("可以下载保存；声笺尚未适配，暂不能用于配音。" if m["downloadable"] and not m.get("adapted", True) else "此模型需要配套文件，暂不支持自动安装。" if m.get("discovered") and not m["downloadable"] else caption)
@@ -217,7 +219,7 @@ class ModelSettings:
         layout.addWidget(button("删除", lambda: self.remove_model(model), "trash", "ghost"))
         more = button("", lambda: None, "info", "icon")
         menu = QMenu(more)
-        menu.addAction("模型详情", lambda: self.owner.show_details(model["name"] + "\n" + model["description"] + "\n" + model["path"] + "\n版本：" + (model.get("revision") or "未记录")))
+        menu.addAction("模型详情", lambda: self.owner.show_details(model["name"] + "\n" + model["description"] + "\n" + model["path"] + "\n版本：" + (model.get("revision") or "未记录") + "\n" + publication_text(model)[1]))
         if model.get("can_rollback"):
             menu.addAction("回退到上个版本", lambda: self.mutate(lambda c: c.post(f"/models/{model['id']}/rollback"), "模型已回退，预设参数保留。"))
         more.setMenu(menu)
@@ -263,6 +265,7 @@ class ModelSettings:
         m = self.visible_catalog[row]
         support = "可用于配音" if m.get("adapted", True) else "尚未适配，下载后仅保存文件"
         self.owner.show_details(m["name"] + "\n" + m["description"] +
+            "\n" + publication_text(m)[1] +
             f"\n适配：{support}\n精度：{m['precision']}\n大小：{size_text(m['size'])}" +
             f"\n仓库：{m.get('repo') or 'audio-cpp/audio.cpp-gguf'}\n文件：{m.get('remotePath', '')}" +
             f"\n提交：{m.get('revision', '')}\nSHA-256：{m['sha256']}\n" + m.get("error", ""))

@@ -3,6 +3,7 @@ import re
 from pathlib import PurePosixPath
 
 from .errors import VoiceError
+from .model_dates import attach_publication_dates, publication_metadata
 
 
 def safe_remote_path(value):
@@ -13,7 +14,7 @@ def safe_remote_path(value):
             all(p not in ("", ".", "..") for p in value.split("/")))
 
 
-def repository_files(client, repo, source="mirror", requested_revision="main"):
+def repository_files(client, repo, source="mirror", requested_revision="main", paths=None, cancel=None):
     """Read bounded immutable file metadata shared by updates and discovery."""
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise ValueError("模型仓库地址无效")
@@ -32,7 +33,8 @@ def repository_files(client, repo, source="mirror", requested_revision="main"):
         size = metadata.get("size", item.get("size", 0))
         if (safe_remote_path(remote) and remote.lower().endswith(".gguf") and
                 re.fullmatch(r"[a-f0-9]{64}", digest) and type(size) is int and 0 < size < 32 * 1024**3):
-            files[remote] = {"sha256": digest, "size": size}
+            files[remote] = {"sha256": digest, "size": size, **publication_metadata({})}
+    attach_publication_dates(client, host, repo, revision, files, paths, cancel)
     return revision, files
 
 
@@ -42,7 +44,8 @@ def fetch_model_updates(catalog, client_factory, source="mirror"):
         repos = {e.get("repo") or "audio-cpp/audio.cpp-gguf" for e in catalog.values() if e.get("remotePath")}
         with client_factory() as client:
             for repo in sorted(repos):
-                revision, files = repository_files(client, repo, source)
+                paths = [e["remotePath"] for e in catalog.values() if (e.get("repo") or "audio-cpp/audio.cpp-gguf") == repo and e.get("remotePath")]
+                revision, files = repository_files(client, repo, source, paths=paths)
                 for identity, entry in catalog.items():
                     if (entry.get("repo") or "audio-cpp/audio.cpp-gguf") != repo:
                         continue
