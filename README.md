@@ -28,7 +28,7 @@
 
 **v0.7.28 · Windows x64 · 解压即用，无需安装 Python。**
 
-从 [Releases](https://github.com/weizhigao21/shengjian-tts/releases/latest) 下载 `声笺-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
+从 [Releases](https://github.com/weizhigao21/shengjian-tts/releases/latest) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
 ## 可以做什么
 

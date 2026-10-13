@@ -94,7 +94,7 @@ def main():
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     version = result.stdout.strip().rsplit(' ', 1)[-1]
-    archive = distribution_archive(candidate, dist / f"声笺-v{version}-windows-x64.zip")
+    archive = distribution_archive(candidate, dist / f"shengjian-v{version}-windows-x64.zip")
     target = dist / "声笺"
     publish(candidate, target)
     contained(work, ROOT / "build")
