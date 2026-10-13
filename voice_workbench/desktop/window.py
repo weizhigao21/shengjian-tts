@@ -71,10 +71,11 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.reference_output = QAudioOutput(self)
         self.reference_player = QMediaPlayer(self)
         self.reference_player.setAudioOutput(self.reference_output)
+        self.reference_preview_origin = None
         self._build()
         self.load_saved_jobs()
         self.reference_player.playbackStateChanged.connect(self.update_reference_icon)
-        self.reference_player.errorOccurred.connect(lambda error, message: self.show_error("参考音频播放失败：" + message))
+        self.reference_player.errorOccurred.connect(self.reference_playback_error)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(1800)

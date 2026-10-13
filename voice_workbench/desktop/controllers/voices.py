@@ -12,16 +12,34 @@ from ..api_client import checked
 
 class VoiceLibraryController:
     def stop_reference(self):
+        self.reference_preview_origin = None
         self.reference_player.stop()
+        self.refresh_reference_icons()
 
     def update_reference_icon(self, state):
-        from ...ui import icon
+        if state == QMediaPlayer.PlaybackState.StoppedState:
+            self.reference_preview_origin = None
+        self.refresh_reference_icons(state)
+
+    def refresh_reference_icons(self, state=None):
+        if state is None:
+            state = self.reference_player.playbackState()
         playing = state == QMediaPlayer.PlaybackState.PlayingState
-        self.model_controls.reference_play.setToolTip("停止试听" if playing else "试听参考声音")
-        self.model_controls.reference_play.setIcon(icon("stop" if playing else "play"))
-        path = self.reference_player.source().toLocalFile()
+        origin = self.reference_preview_origin if playing else None
+        buttons = [self.model_controls.reference_play]
+        buttons.extend(dialog.preview_button for dialog in self.dialogs if hasattr(dialog, "preview_button"))
+        for button in buttons:
+            active = origin is button
+            button.setToolTip("停止试听" if active else "试听参考声音")
+            button.setIcon(icon("stop" if active else "play"))
         for ticket in self.library.tickets:
-            ticket.cover.set_playing(playing and bool(path) and Path(ticket.item.get("reference_audio") or ".").resolve() == Path(path).resolve())
+            active = origin == ticket.preview_origin
+            ticket.cover.set_playing(active)
+            ticket.cover.setToolTip("停止试听" if active else "试听参考声音" if ticket.item.get("reference_audio") else "当前预设没有参考音频")
+
+    def reference_playback_error(self, error, message):
+        self.stop_reference()
+        self.show_error("参考音频播放失败：" + message)
 
     def open_dialog(self, dialog):
         if not hasattr(self, "dialog_shade"):
@@ -67,10 +85,11 @@ class VoiceLibraryController:
         self.call(lambda c: checked(c.delete(f"/voices/{voice['id']}")), lambda r: self.library_deleted("voices", voice))
 
     def delete_reference(self, item):
-        self.stop_reference()
         self.call(lambda c: checked(c.delete(f"/references/{item['id']}")), lambda r: self.library_deleted("references", item))
 
     def library_deleted(self, kind, item):
+        if self.reference_preview_origin == (kind, item["id"]):
+            self.stop_reference()
         self.statusBar().showMessage(f"已删除「{item['name']}」，已生成的任务保留。", 10000)
         if kind == "voices":
             self.voices = [v for v in self.voices if v["id"] != item["id"]]
@@ -95,16 +114,22 @@ class VoiceLibraryController:
         self.statusBar().showMessage("声音预设已保存，双语工作流配置已复制。", 8000)
         self.poll()
 
-    def preview_reference(self, path):
-        self.settings.player.pause()
-        if self.reference_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+    def preview_reference(self, path, origin=None):
+        origin = self.model_controls.reference_play if origin is None else origin
+        source = QUrl.fromLocalFile(str(Path(path).resolve()))
+        if (self.reference_preview_origin == origin and self.reference_player.source() == source
+                and self.reference_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState):
             self.stop_reference()
             return
         try:
             validate_wave(Path(path))
+            self.settings.player.pause()
             self.player.stop()
-            self.reference_player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
+            self.stop_reference()
+            self.reference_player.setSource(source)
+            self.reference_preview_origin = origin
             self.reference_player.play()
+            self.refresh_reference_icons()
         except Exception as exc:
             self.show_error(str(exc))
 

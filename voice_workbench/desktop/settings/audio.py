@@ -176,7 +176,7 @@ class AudioSettings:
 
     def play_audio(self, item):
         self.owner.player.pause()
-        self.owner.reference_player.stop()
+        self.owner.stop_reference()
         if self.playing_id == item["id"]:
             self.player.pause() if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else self.player.play()
             return

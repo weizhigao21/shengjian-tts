@@ -133,7 +133,8 @@ class Ticket(QFrame):
         layout.setContentsMargins(10, 10, 0, 10)
         layout.setSpacing(12)
         path = item.get("reference_audio", "")
-        self.cover = RecordButton(item["id"], lambda: owner.preview_reference(path), path, reference)
+        self.preview_origin = ("references" if reference else "voices", item["id"])
+        self.cover = RecordButton(item["id"], lambda: owner.preview_reference(path, self.preview_origin), path, reference)
         self.cover.setFixedSize(56, 56)
         self.cover.setToolTip("试听参考声音" if path else "当前预设没有参考音频")
         self.cover.setEnabled(bool(path) and not (reference and item.get("error")))
@@ -297,6 +298,7 @@ class LibraryPanel(QWidget):
             layout.addWidget(text)
             self.entries.addWidget(empty)
         self.entries.addStretch()
+        self.owner.refresh_reference_icons()
 
 
 class PaperDialog(QDialog):
@@ -387,7 +389,8 @@ class PresetDialog(PaperDialog):
         scroll.setWidgetResizable(True)
         self.controls = ModelControls()
         self.controls.set_references(owner.references)
-        self.controls.preview_requested.connect(owner.preview_reference)
+        self.preview_button = self.controls.reference_play
+        self.controls.preview_requested.connect(lambda path: owner.preview_reference(path, self.preview_button))
         self.controls.choose_requested.connect(lambda: owner.choose_reference(self.controls))
         self.controls.audio_changed.connect(owner.stop_reference)
         scroll.setWidget(self.controls)
@@ -450,7 +453,8 @@ class ReferenceDialog(PaperDialog):
         self.text.setPlaceholderText("可选：与音频一致的原文，用于精细克隆")
         self.content.addWidget(label("参考原文", "muted"))
         self.content.addWidget(self.text, 1)
-        self.content.addWidget(button("试听参考声音", lambda: owner.preview_reference(self.path), "play", "ghost"))
+        self.preview_button = button("试听参考声音", lambda: owner.preview_reference(self.path, self.preview_button), "play", "ghost")
+        self.content.addWidget(self.preview_button)
         self.confirm.clicked.connect(self.save)
         self.finished.connect(owner.stop_reference)
 
@@ -518,7 +522,8 @@ class ReferencePicker(PaperDialog):
             self.reference_buttons.append((row, reference))
         self.rows.addStretch()
         search.textChanged.connect(lambda value: [row.setVisible(value.casefold() in item["name"].casefold()) for row, item in self.reference_buttons])
-        self.content.addWidget(button("试听选中声音", lambda: owner.preview_reference(self.selection["reference_audio"]) if self.selection else None, "play", "ghost"))
+        self.preview_button = button("试听选中声音", lambda: owner.preview_reference(self.selection["reference_audio"], self.preview_button) if self.selection else None, "play", "ghost")
+        self.content.addWidget(self.preview_button)
         self.confirm.clicked.connect(self.apply)
         self.finished.connect(owner.stop_reference)
 

@@ -159,6 +159,9 @@ def main():
         main_id, narration_id, dialogue_job = prepare(data, configuration)
         with TestClient(create_app(data)) as client:
             window = Window(8765, data, autostart=False)
+            # Static previews do not need the host's native audio device.
+            for player in (window.player, window.reference_player, window.settings.player):
+                player.setAudioOutput(None)
             window.timer.stop()
             window.document_timer.stop()
             window.settings.timer.stop()
