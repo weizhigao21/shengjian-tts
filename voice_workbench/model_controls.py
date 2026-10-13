@@ -10,6 +10,8 @@ from .model_info import KOKORO_LANGUAGES, LANGUAGES, MODES, model_ui, selected_m
 from .ui import NoWheelComboBox, NoWheelSpinBox, button, icon, label
 from .generation_controls import GenerationControls
 from .generation_options import compatible_options
+from .index_emotion_controls import IndexEmotionControls
+from .index_emotion import EMOTION_DEFAULTS
 
 
 class DescriptionInput(QPlainTextEdit):
@@ -106,9 +108,10 @@ class ModelControls(QWidget):
         speed_layout.addWidget(self.speed_value)
         self.speed_slider.valueChanged.connect(lambda value: self.speed.setValue(value / 100))
         self.speed.valueChanged.connect(self.sync_speed)
-        self.emotion = QLineEdit()
-        self.emotion.setMaxLength(500)
-        self.emotion.setPlaceholderText("例如：平静、温柔")
+        self.index_emotion = IndexEmotionControls()
+        self.emotion = self.index_emotion.text_input
+        self.index_emotion.changed.connect(self.changed)
+        self.index_emotion.audio_changed.connect(self.audio_changed)
         self.description = DescriptionInput()
         self.description.setFixedHeight(88)
         self.description.setPlaceholderText("例如：温柔女声，语速舒缓，自然演绎")
@@ -137,7 +140,7 @@ class ModelControls(QWidget):
         self.reference_text.setPlaceholderText("填写参考音频中的原文")
         for text, widget in (("生成方式", self.mode_strip), ("生成语言", self.language), ("内置音色", self.native_voice),
                              ("参考声音", self.reference), ("参考原文", self.reference_text),
-                             ("声音描述", self.description), ("语速", self.speed_row), ("情绪描述", self.emotion)):
+                             ("声音描述", self.description), ("语速", self.speed_row), ("表达方式", self.index_emotion)):
             self.form.addRow(text, widget)
             self.form.labelForField(widget).setProperty("role", "muted")
         self.advanced_toggle = button("高级设置", lambda: None, "chevron", "disclosure")
@@ -207,7 +210,6 @@ class ModelControls(QWidget):
         self.language.currentIndexChanged.connect(self.language_changed)
         self.native_voice.currentIndexChanged.connect(self.changed)
         self.speed.valueChanged.connect(self.changed)
-        self.emotion.textChanged.connect(self.changed)
         self.description.textChanged.connect(self.description_changed)
         self.reference_combo.currentIndexChanged.connect(self.reference_selected)
         self.reference_text.textChanged.connect(self.changed)
@@ -249,7 +251,7 @@ class ModelControls(QWidget):
         populate(self.language, [(v, LANGUAGES.get(v, v)) for v in info["languages"]], language)
         populate_voices(self.native_voice, info, self.language.currentData(), native)
         self.speed.setValue(voice.get("speed", 1) if info["speed"] else 1)
-        self.emotion.setText(voice.get("emotion", "") if info["emotion"] else "")
+        self.index_emotion.bind(voice if info["emotion"] else {**EMOTION_DEFAULTS, "emotion": ""})
         self.description.setText(voice.get("voice_description", ""))
         self.reference_path = voice.get("reference_audio", "")
         self.refresh_references()
@@ -279,7 +281,8 @@ class ModelControls(QWidget):
         self.form.setRowVisible(self.reference_text, cloning and self.info["reference_text"])
         self.reference_text.setPlaceholderText("必须与参考音频原文一致" if mode == "continuation" else "可选：参考音频中的原文")
         self.form.setRowVisible(self.speed_row, self.info["speed"])
-        self.form.setRowVisible(self.emotion, self.info["emotion"])
+        self.form.setRowVisible(self.index_emotion, self.info["emotion"])
+        self.emotion.setVisible(self.info["emotion"])
         describe = mode == "design" or (self.info["family"] == "voxcpm2" and mode == "clone") or (self.info["family"] == "qwen3_tts" and mode == "builtin")
         self.form.setRowVisible(self.description, describe)
         instruction = self.info["family"] == "qwen3_tts" and mode == "builtin"
@@ -341,6 +344,7 @@ class ModelControls(QWidget):
 
     def set_references(self, voices):
         self.references = [dict(v) for v in voices if v.get("reference_audio")]
+        self.index_emotion.set_references(self.references)
         self.refresh_references()
 
     def refresh_references(self):
@@ -449,7 +453,7 @@ class ModelControls(QWidget):
         populate_voices(self.native_voice, info, self.language.currentData(), voice.get("native_voice"))
         if old_family != info["family"]:
             self.description.clear()
-            self.emotion.clear()
+            self.index_emotion.bind({**EMOTION_DEFAULTS, "emotion": ""})
             self.speed.setValue(1)
         self.bind_generation_options(voice if old_family == info["family"] else {**voice, "request_options": {}}, info)
         self.apply_visibility()
@@ -463,6 +467,7 @@ class ModelControls(QWidget):
         result = {"voice_mode": mode, "speed": self.speed.value() if self.info["speed"] else 1,
                   "emotion": self.emotion.text().strip() if self.info["emotion"] else "",
                   "voice_description": self.description.text().strip() if not self.description.isHidden() else ""}
+        result.update(self.index_emotion.values() if self.info["emotion"] else EMOTION_DEFAULTS)
         if mode == "builtin" and self.info["builtin_voices"]:
             result["native_voice"] = self.native_voice.currentData()
         result["language"] = self.language.currentData() or self.voice.get("language", "zh")

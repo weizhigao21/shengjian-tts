@@ -392,6 +392,10 @@ class PresetDialog(PaperDialog):
         self.preview_button = self.controls.reference_play
         self.controls.preview_requested.connect(lambda path: owner.preview_reference(path, self.preview_button))
         self.controls.choose_requested.connect(lambda: owner.choose_reference(self.controls))
+        expression = self.controls.index_emotion
+        expression.choose_requested.connect(lambda: owner.choose_reference(expression))
+        expression.preview_requested.connect(lambda path: owner.preview_reference(path, expression.reference_play))
+        self.preview_buttons = [self.preview_button, expression.reference_play]
         self.controls.audio_changed.connect(owner.stop_reference)
         scroll.setWidget(self.controls)
         self.content.addWidget(scroll, 1)
@@ -493,9 +497,10 @@ class ReferenceDialog(PaperDialog):
 
 class ReferencePicker(PaperDialog):
     def __init__(self, owner, controls):
-        super().__init__(owner, "选择参考声音", 560)
+        emotion = getattr(controls, "reference_role", "speaker") == "emotion"
+        super().__init__(owner, "选择演绎参考" if emotion else "选择参考声音", 560)
         self.owner, self.controls, self.selection = owner, controls, None
-        self.confirm.setText("使用这个声音")
+        self.confirm.setText("使用演绎参考" if emotion else "使用这个声音")
         self.confirm.setEnabled(False)
         self.content.addWidget(button("导入参考声音", lambda: owner.import_reference(selected=lambda r: (self.choose(r), self.apply())), "import", "small"))
         search = QLineEdit()

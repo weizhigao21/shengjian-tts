@@ -10,6 +10,11 @@ import subprocess
 import sys
 import traceback
 
+if __package__:
+    from .index_emotion import emotion_mode, python_emotion
+else:
+    from index_emotion import emotion_mode, python_emotion
+
 _model = None
 _signature = None
 
@@ -87,7 +92,7 @@ def index_speech(request):
             # Turing / 2080 Ti 不默认启用 BF16。
             bf16 = voice["device"] == "cuda" and torch.cuda.is_bf16_supported()
             _model = IndexTTS2(cfg_path=cfg, model_dir=model_dir, device=voice["device"],
-                               use_bf16=bf16, use_qwen_emo=bool(voice["emotion"]))
+                               use_bf16=bf16, use_qwen_emo=emotion_mode(voice) == "text")
         _signature = request["fingerprint"]
     kwargs = {"spk_audio_prompt": voice["reference_audio"], "text": request["text"],
               "output_path": request["output"], "verbose": False}
@@ -96,8 +101,7 @@ def index_speech(request):
         kwargs["duration_factor"] = 1 / voice["speed"]
     elif voice["speed"] != 1:
         raise ValueError("IndexTTS 2 的本适配器暂不提供语速控制，请使用默认语速或 2.5")
-    if voice["emotion"]:
-        kwargs.update(use_emo_text=True, emo_text=voice["emotion"])
+    kwargs.update(python_emotion(voice))
     _model.infer(**kwargs)
 
 

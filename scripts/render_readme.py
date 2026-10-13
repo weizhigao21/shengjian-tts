@@ -35,6 +35,7 @@ from voice_workbench.store import Store
 from voice_workbench.subtitles import parse_text
 from voice_workbench.services.dialogue import entry_revision
 from voice_workbench.services.generation import PreparedGeneration
+from voice_workbench.index_emotion import EMOTION_DEFAULTS
 
 SCRIPT = """[00:00.00]清晨，山谷中的第一束光落在窗边。雾气沿着河面缓缓升起，一座小城从沉睡中醒来。
 [00:08.00]At dawn, the first light falls by the window. Mist rises above the river, and a small town wakes from sleep.
@@ -68,7 +69,7 @@ def prepare(data, original):
             continue
         identities.add(str(path))
         models.append({**candidate, "id": f"demo-model-{len(models)}", "name": "默认模型设置",
-            "reference_audio": "", "reference_text": "", "voice_description": "", "voice_mode": "auto", "emotion": ""})
+            "reference_audio": "", "reference_text": "", "voice_description": "", "voice_mode": "auto", "emotion": "", **EMOTION_DEFAULTS})
     vox = next((voice for voice in models if voice.get("family") == "voxcpm2"), None)
     qwen = next((voice for voice in models if voice.get("family") == "qwen3_tts" and model_ui(voice)["variant"] == "custom_voice"), None)
     kokoro = next((voice for voice in models if voice.get("family") == "kokoro_tts"), None)
@@ -205,6 +206,19 @@ def main():
             window.clip_title.click()
             capture("generation-list")
             window.clip_list.hide()
+            index_model = next((v for v in window.voices if v.get("family") == "index_tts2"), None)
+            if not index_model:
+                raise RuntimeError("README 情绪面板截图需要已安装的 IndexTTS 模型。")
+            from voice_workbench.index_emotion import EMOTION_PRESETS
+            window.refresh_generation_models(index_model["id"])
+            window.model_controls.bind({**index_model, "emotion_mode": "vector",
+                "emotion_vector": EMOTION_PRESETS["温柔"], "emotion_strength": .6,
+                "reference_audio": str(data / "voices/demo-reference.wav")}, preserve_edits=False)
+            window.model_controls.index_emotion.tune_toggle.setChecked(True)
+            window.resize(1280, 1200)
+            window.inspector_scroll.verticalScrollBar().setValue(0)
+            capture("index-emotion")
+            window.resize(1280, 820)
             window.selected_job = dialogue_job
             window.render_jobs(client.get("/jobs").json())
             window.open_job_data(client.get("/jobs/" + dialogue_job).json())
@@ -246,6 +260,7 @@ def main():
             app.processEvents()
     assert args.profile.read_bytes() == before
     report = {"version": __version__, "size": [1280, 820], "images": screenshots,
+              "image_sizes": {"index-emotion": [1280, 1200]},
               "demo_data": True, "inference_started": False, "user_profile_unchanged": True}
     (staging / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))

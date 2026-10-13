@@ -12,6 +12,7 @@ import shutil
 from .errors import VoiceError
 from .runtime import project_root
 from .data_paths import default_data_dir
+from .index_emotion import EMOTION_DEFAULTS, EMOTION_FIELDS, emotion_mode
 
 PROJECT_ROOT = project_root()
 DEFAULT_DATA = default_data_dir()
@@ -44,7 +45,23 @@ def file_digest(path: str) -> str:
 
 
 def voice_fingerprint(voice: dict) -> str:
-    value = {k: v for k, v in voice.items() if k not in ("name", "id")}
+    value = {k: v for k, v in voice.items() if k not in ("name", "id", *EMOTION_FIELDS)}
+    mode = emotion_mode(voice)
+    # Default fields must not invalidate the version tags of existing presets.
+    if mode == "speaker":
+        value["emotion"] = ""
+    elif mode in ("reference", "vector") or voice.get("emotion_infer_from_text") or voice.get("emotion_strength", .6) != .6:
+        control = {"mode": mode, "strength": voice.get("emotion_strength", .6)}
+        if mode == "reference":
+            control["reference_digest"] = file_digest(voice.get("emotion_reference_audio", ""))
+        elif mode == "vector":
+            control["vector"] = voice.get("emotion_vector", [0.] * 8)
+        elif voice.get("emotion_infer_from_text"):
+            control["infer_from_text"] = True
+            value["emotion"] = ""
+        if mode != "text":
+            value["emotion"] = ""
+        value["emotion_control"] = control
     if voice.get("reference_audio"):
         value["reference_digest"] = file_digest(voice["reference_audio"])
     # 记录权重文件的大小与修改时间；模型 revision 可用于显式区分同路径的替换版本。
@@ -130,9 +147,10 @@ class ConfigStore:
         from .schemas import VoiceConfig
         parsed = VoiceConfig(**voice).model_dump()
         # Keep incomplete configurations editable; readable imports belong to our data directory.
-        if parsed.get("reference_audio") and Path(parsed["reference_audio"]).is_file():
-            target, _ = self.copy_reference_audio(parsed["reference_audio"])
-            parsed["reference_audio"] = str(target)
+        for field in ("reference_audio", "emotion_reference_audio"):
+            if parsed.get(field) and Path(parsed[field]).is_file():
+                target, _ = self.copy_reference_audio(parsed[field])
+                parsed[field] = str(target)
         with self.lock:
             value = self.read()
             previous = next((v for v in value["voices"] if v["id"] == parsed["id"]), None)
@@ -148,7 +166,7 @@ class ConfigStore:
         templates = value.setdefault("model_templates", [])
         if not any(self.model_identity(v) == identity for v in templates):
             templates.append({**voice, "id": "model-" + hashlib.sha256(identity.encode()).hexdigest()[:20], "name": "默认模型设置",
-                              "reference_audio": "", "reference_text": "", "voice_mode": "auto", "voice_description": "", "emotion": "", "speed": 1})
+                              "reference_audio": "", "reference_text": "", "voice_mode": "auto", "voice_description": "", "emotion": "", "speed": 1, **EMOTION_DEFAULTS})
 
     def delete_voice(self, voice_id):
         with self.lock:
@@ -184,11 +202,12 @@ class ConfigStore:
             references = list(value.get("references", []))
             existing = {r["id"] for r in references} | set(value.get("hidden_references", []))
             for voice in value["voices"]:
-                path = voice.get("reference_audio")
-                if path and (ref_id := self.reference_id(path)) not in existing:
-                    references.append({"id": ref_id, "name": "参考声音 " + str(len(references) + 1),
-                                       "reference_audio": path, "reference_text": voice.get("reference_text", "")})
-                    existing.add(ref_id)
+                for field in ("reference_audio", "emotion_reference_audio"):
+                    path = voice.get(field)
+                    if path and (ref_id := self.reference_id(path)) not in existing:
+                        references.append({"id": ref_id, "name": ("演绎参考 " if field == "emotion_reference_audio" else "参考声音 ") + str(len(references) + 1),
+                                           "reference_audio": path, "reference_text": voice.get("reference_text", "") if field == "reference_audio" else ""})
+                        existing.add(ref_id)
             if references != value.get("references"):
                 atomic_json(self.path, {**value, "references": references})
 

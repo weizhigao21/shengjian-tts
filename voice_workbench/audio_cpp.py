@@ -21,6 +21,7 @@ from .runner import ProcessRunner, check_voice
 from .model_info import KOKORO_LANGUAGES, model_ui, selected_mode
 from .generation_options import compatible_options
 from .native_paths import NativePaths
+from .index_emotion import emotion_mode, native_emotion
 
 
 def build_native_request(voice, text):
@@ -38,8 +39,10 @@ def build_native_request(voice, text):
     family = voice["family"]
     if family == "index_tts2":
         options.update(language=voice["language"], duration_factor=1 / voice["speed"])
-        if voice["emotion"]:
-            options.update(use_emotion_text=True, emotion_text=voice["emotion"], emotion_alpha=0.6)
+        expression, reference = native_emotion(voice)
+        options.update(expression)
+        if reference:
+            request["audio"] = reference
     elif family == "kokoro_tts":
         for key in ("instruct", "reference_text", "emotion_text", "use_emotion_text", "emotion_alpha", "duration_factor"):
             options.pop(key, None)
@@ -154,6 +157,12 @@ class AudioCppRunner:
                         raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符", "设置 TMP 为可写的英文路径后重启程序。", "参考音频准备")
                     shutil.copy2(voice["reference_audio"], staged)
                     native_voice["reference_audio"] = str(staged)
+                if voice["family"] == "index_tts2" and emotion_mode(voice) == "reference":
+                    staged = Path(staging) / "emotion.wav"
+                    if not str(staged).isascii():
+                        raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符", stage="演绎参考准备")
+                    shutil.copy2(voice["emotion_reference_audio"], staged)
+                    native_voice["emotion_reference_audio"] = str(staged)
                 with httpx.Client(trust_env=False, timeout=voice["timeout"]) as client:
                     response = client.post(endpoint + "/v1/tasks/run", json=build_native_request(native_voice, request["text"]))
             if response.status_code != 200:

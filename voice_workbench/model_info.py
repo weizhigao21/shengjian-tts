@@ -8,6 +8,7 @@ import struct
 
 from .errors import VoiceError
 from .generation_options import option_specs, validate_options
+from .index_emotion import emotion_mode
 
 LANGUAGES = {"zh": "中文", "en": "English", "en-us": "英语（美式）", "en-gb": "英语（英式）",
              "ja": "日本語", "es": "Español", "fr": "Français", "fr-fr": "Français",
@@ -217,7 +218,7 @@ def validate_capabilities(voice, info=None):
         raise VoiceError("REFERENCE_TEXT_REQUIRED", "精细克隆需要参考音频原文", "填写与参考音频一致的文字。", "配置检查")
     if not info["speed"] and voice.get("speed", 1) != 1:
         raise VoiceError("UNSUPPORTED_SPEED", "该模型配置未提供语速控制", "将语速恢复为 1。", "配置检查")
-    if not info["emotion"] and voice.get("emotion"):
+    if not info["emotion"] and emotion_mode(voice) != "speaker":
         raise VoiceError("UNSUPPORTED_EMOTION", "该模型不支持情绪描述", "使用支持情绪控制的模型，或清空情绪描述。", "配置检查")
     if voice.get("backend") == "audio_cpp" and mode == "builtin":
         native = voice.get("native_voice")

@@ -108,6 +108,9 @@ class GenerationLayout:
         self.model_controls.changed.connect(self.refresh_main_settings)
         self.model_controls.preview_requested.connect(self.preview_reference)
         self.model_controls.choose_requested.connect(lambda: self.choose_reference(self.model_controls))
+        expression = self.model_controls.index_emotion
+        expression.choose_requested.connect(lambda: self.choose_reference(expression))
+        expression.preview_requested.connect(lambda path: self.preview_reference(path, expression.reference_play))
         self.model_controls.audio_changed.connect(self.stop_reference)
         self.model_controls.engine_download_requested.connect(lambda backend: self.settings.download_engine(backend=backend))
         side.addWidget(self.model_controls)

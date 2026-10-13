@@ -60,7 +60,7 @@ FALLBACK = {
     "kokoro_tts": [number("text_chunk_size", "长文分段字数", 240, 32, 12000), SEED],
 }
 RESERVED = {"language", "speed", "speaker", "instruct", "instruction", "reference_text", "x_vector_only_mode",
-            "duration_factor", "emotion_text", "use_emotion_text", "emotion_alpha", "emotion_vector", "phonemes", "return_timestamps"}
+            "duration_factor", "emotion_text", "use_emotion_text", "emotion_alpha", "emotion_vector", "use_random_emotion", "phonemes", "return_timestamps"}
 
 
 def option_specs(family, declared=None, config=None):

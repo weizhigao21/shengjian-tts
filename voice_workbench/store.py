@@ -379,8 +379,9 @@ class Store:
 
     def reference_audio_paths(self):
         with self.lock:
-            raw = {json.loads(r[0]).get("reference_audio") for r in self.db.execute(
-                "SELECT DISTINCT voice FROM segments WHERE voice IS NOT NULL AND voice!=''")}
+            raw = {voice.get(field) for r in self.db.execute(
+                "SELECT DISTINCT voice FROM segments WHERE voice IS NOT NULL AND voice!=''")
+                for voice in [json.loads(r[0])] for field in ("reference_audio", "emotion_reference_audio")}
             return {Path(value).resolve() for value in raw if value}
 
     def release_workflow_audio(self, records, reason, cache_filenames=()):

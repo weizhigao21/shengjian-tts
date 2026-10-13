@@ -8,6 +8,8 @@
 
 高级生成参数的名称、范围和默认值参考模型包内嵌声明、yovoice 的 `generation-options.json` 及 audio.cpp v0.7.4 的模型请求解析与分段实现；控件和参数校验由 Python 独立实现。
 
+IndexTTS 四种表达方式、八维情绪顺序及参数接口依据 [IndexTTS 官方用法](https://github.com/index-tts/index-tts#-usage) 和 audio.cpp 模型解析。12 个情绪快捷组合改编自 yovoice 的 `web/src/features/create/inspector.tsx`（Apache-2.0，作者 leemysw）；界面、保存和推理适配使用 Python / Qt 实现，未打包其 React 源码。
+
 `voice_workbench/assets/model_catalog.json` 改编自 yovoice 的 `internal/catalog/catalog.json`（Apache-2.0，作者 leemysw），仅保留本程序已有适配的四种语音模型家族。下载地址规则参考 `internal/catalog/catalog.go`，固定默认 revision 为 `6d5436fc85f7a20c2e9f4e472b7f3a532f686444`，单条模型指定的 revision 优先；模型说明、下载器和管理界面由 Python / Qt 实现。
 
 目录中的 GGUF 来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。下载的权重各自遵循其模型许可，目录的 Apache-2.0 许可不替代权重许可。本项目没有打包这些权重。yovoice 的完整 Apache-2.0 许可保存在 `voice_workbench/assets/YOVOICE_LICENSE.txt`。

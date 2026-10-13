@@ -14,6 +14,7 @@ from .config import PROJECT_ROOT
 from .errors import VoiceError
 from .model_info import model_ui, validate_capabilities
 from .runtime import engine_command, external_environment, frozen
+from .index_emotion import emotion_mode, validate_emotion
 
 
 def validate_wave(path: Path):
@@ -27,6 +28,21 @@ def validate_wave(path: Path):
 
 
 def check_voice(voice):
+    is_index = voice["backend"] == "index_tts" or voice["backend"] == "audio_cpp" and voice.get("family") == "index_tts2"
+    if is_index:
+        try:
+            mode = validate_emotion(voice)
+        except ValueError as exc:
+            raise VoiceError("INVALID_EMOTION", str(exc), "调整表达方式或情绪参数。", "配置检查") from exc
+        if mode == "reference":
+            path = Path(voice["emotion_reference_audio"])
+            if not path.is_file():
+                raise VoiceError("FILE_MISSING", "演绎参考音频不存在", "重新选择演绎参考 WAV。", "配置检查")
+            duration = validate_wave(path)["duration"]
+            if not 1 <= duration <= 60:
+                raise VoiceError("REFERENCE_DURATION", "演绎参考需要 1–60 秒的 WAV", stage="配置检查")
+    elif emotion_mode(voice) != "speaker":
+        raise VoiceError("UNSUPPORTED_EMOTION", "该模型不支持 IndexTTS 表达方式", "选择 IndexTTS，或恢复跟随音色。", "配置检查")
     if (not frozen() or voice["backend"] == "index_tts") and not Path(voice["python"]).is_file():
         raise VoiceError("PYTHON_MISSING", f"Python 不存在：{voice['python']}", "选择模型环境里的 python.exe。", "配置检查")
     if voice["backend"] == "audio_cpp":

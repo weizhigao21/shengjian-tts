@@ -83,12 +83,13 @@ def _relink_reference_copies(original, updated, source, target):
     # Older copied packages can retain absolute references to the build folder.
     # Prefer a byte-identical local copy, so those presets no longer depend on it.
     if isinstance(original, dict):
-        audio = original.get('reference_audio')
-        if audio:
-            previous = Path(audio)
-            local = source / 'voices' / previous.name
-            if local.is_file() and previous.is_file() and (previous.resolve() == local.resolve() or _digest(local) == _digest(previous)):
-                updated['reference_audio'] = str(target / 'voices' / previous.name)
+        for field in ('reference_audio', 'emotion_reference_audio'):
+            audio = original.get(field)
+            if audio:
+                previous = Path(audio)
+                local = source / 'voices' / previous.name
+                if local.is_file() and previous.is_file() and (previous.resolve() == local.resolve() or _digest(local) == _digest(previous)):
+                    updated[field] = str(target / 'voices' / previous.name)
         for key, item in original.items():
             if isinstance(item, (dict, list)):
                 _relink_reference_copies(item, updated[key], source, target)

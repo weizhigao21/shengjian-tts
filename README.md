@@ -9,7 +9,7 @@
 本地语音生成 · 声音预设 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/版本-v0.7.25-E87936?style=flat-square" alt="版本 v0.7.25" />
+  <img src="https://img.shields.io/badge/版本-v0.7.26-E87936?style=flat-square" alt="版本 v0.7.26" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <img src="https://img.shields.io/badge/Python-3.10+-505761?style=flat-square" alt="Python 3.10+" />
 </p>
@@ -24,7 +24,7 @@
 
 ![声笺语音创作界面：文本编辑、模型参数与底部音频播放器](docs/images/workbench.png)
 
-<p align="center"><sub>v0.7.25 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
+<p align="center"><sub>v0.7.26 实际界面 · 截图使用演示文本与数据，生成耗时仅作界面示例。</sub></p>
 
 ## 可以做什么
 
@@ -32,6 +32,7 @@
 | :--- | :--- |
 | **语音创作** | 新建时选择文章或对话，类型创建后固定；文章支持 TXT / LRC / SRT / VTT，按片段生成。 |
 | **按模型配置** | 根据模型实际能力显示音色、克隆、声音设计和高级参数，支持固定随机种子。 |
+| **IndexTTS 情绪控制** | 2.0 / 2.5 支持跟随音色、参考演绎、情绪调节和文字引导，提供 12 个预设、八维微调与强度设置。 |
 | **对话模式** | 输入 `@` 选择音色，每框有固定 ID 和独立参数；点击框后，播放器和生成列表只显示它的音频。 |
 | **声音库** | 保存声音预设、导入参考音频；生成音频也可右键加入参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
@@ -41,6 +42,15 @@
 ## 界面预览
 
 点击图片查看原图。
+
+<details>
+<summary>查看 IndexTTS 情绪面板</summary>
+
+![IndexTTS 表达方式：情绪预设、八维微调与强度](docs/images/index-emotion.png)
+
+音色与演绎参考分开选择；情绪设置可保存为声音预设，也可单独用于每条对白。
+
+</details>
 
 ![对话模式：音色标签、独立文本框和逐条生成操作](docs/images/dialogue.png)
 

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Language = Literal["zh", "en", "en-us", "en-gb", "ja", "es", "ar", "fr", "fr-fr", "hi", "it", "pt", "pt-br", "ko", "de", "ru"]
+
+
+EmotionMode = Literal["auto", "speaker", "reference", "vector", "text"]
+EmotionWeight = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+EmotionVector = Annotated[list[EmotionWeight], Field(min_length=8, max_length=8)]
 
 
 class VoiceConfig(BaseModel):
@@ -20,6 +25,11 @@ class VoiceConfig(BaseModel):
     revision: str = "1"
     speed: float = Field(default=1, ge=0.5, le=2)
     emotion: str = Field(default="", max_length=500)
+    emotion_mode: EmotionMode = "auto"
+    emotion_strength: EmotionWeight = .6
+    emotion_vector: EmotionVector = Field(default_factory=lambda: [0.] * 8)
+    emotion_reference_audio: str = Field(default="", max_length=4096)
+    emotion_infer_from_text: bool = False
     language: Language = "zh"
     timeout: int = Field(default=600, ge=10, le=3600)
     engine_executable: str = ""
@@ -73,6 +83,11 @@ class GenerationOverrides(BaseModel):
     voice_description: str | None = Field(default=None, max_length=500)
     speed: float | None = Field(default=None, ge=.5, le=2)
     emotion: str | None = Field(default=None, max_length=500)
+    emotion_mode: EmotionMode | None = None
+    emotion_strength: EmotionWeight | None = None
+    emotion_vector: EmotionVector | None = None
+    emotion_reference_audio: str | None = Field(default=None, max_length=4096)
+    emotion_infer_from_text: bool | None = None
     language: Language | None = None
     reference_audio: str | None = Field(default=None, max_length=4096)
     reference_text: str | None = Field(default=None, max_length=5000)

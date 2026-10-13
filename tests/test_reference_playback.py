@@ -157,6 +157,26 @@ def test_controls_and_dialog_preview_do_not_mark_shared_library_cards(previews, 
     assert not errors
 
 
+def test_emotion_preview_is_distinct_from_speaker_preview_with_same_file(previews, qtbot):
+    window, errors = previews
+    first = ticket(window, "first")
+    window.use_library_voice(first.item)
+    expression = window.model_controls.index_emotion
+    expression.select_reference({"name":"演绎", "reference_audio":first.item['reference_audio']})
+    expression.set_mode('reference')
+    expression.reference_play.click()
+    playing(qtbot, window)
+    assert window.reference_preview_origin is expression.reference_play
+    assert expression.reference_play.toolTip() == '停止试听'
+    assert window.model_controls.reference_play.toolTip() == '试听参考声音'
+    window.model_controls.reference_play.click()
+    playing(qtbot, window)
+    assert window.reference_preview_origin is window.model_controls.reference_play
+    assert expression.reference_play.toolTip() == '试听参考声音'
+    assert not any(item.cover.playing for item in window.library.tickets)
+    assert not errors
+
+
 def test_natural_completion_resets_playback_indicators(previews, qtbot):
     window, errors = previews
     first = ticket(window, "first")

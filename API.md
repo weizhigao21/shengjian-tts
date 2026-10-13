@@ -44,6 +44,21 @@
 
 ## 生成与工作流
 
+### IndexTTS 表达方式
+
+v0.7.26 起，IndexTTS 2.0 / 2.5 的预设、全局 `overrides` 和对白 `overrides` 支持以下可选字段，旧预设无需迁移。
+
+| 字段 | 说明 |
+| --- | --- |
+| `emotion_mode` | `speaker` 跟随音色、`reference` 参考演绎、`vector` 情绪调节、`text` 文字引导；默认 `auto` 按旧 `emotion` 是否为空选择跟随音色或文字引导 |
+| `emotion_strength` | 0–1，默认 0.6；跟随音色模式不使用此值 |
+| `emotion_reference_audio` | 演绎参考 WAV 路径，1–60 秒；与 `reference_audio` 的音色参考分开 |
+| `emotion_vector` | 八个 0–1 的值，顺序为高兴、愤怒、悲伤、恐惧、厌恶、低落、惊讶、平静 |
+| `emotion` | 文字引导中的情绪描述，最多 500 字 |
+| `emotion_infer_from_text` | 文字引导中从当前片段正文推断情绪，默认 `false`；开启时忽略 `emotion` |
+
+四种模式互斥，仅发送当前模式的参数；12 个按钮是八维组合的快捷预设。正文推断需要模型包内的情绪语言模型。演绎参考在提交时复制到数据目录并参与缓存校验，排队后移动原文件不影响生成；切换模式不会覆盖音色参考。
+
 普通创作提交示例；`voice_id` 来自 `/voices`：
 
 ```json

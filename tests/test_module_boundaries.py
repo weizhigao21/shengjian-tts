@@ -29,6 +29,10 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     # New editors add optional metadata and per-segment presets. Keep the
     # v0.7.20 fixture frozen to protect every previously published field/route.
     schemas = actual['components']['schemas']
+    from voice_workbench.index_emotion import EMOTION_FIELDS
+    for name in ('VoiceConfig', 'GenerationOverrides'):
+        for field in EMOTION_FIELDS:
+            schemas[name]['properties'].pop(field)
     for name in ('ScriptMention', 'DialogueEntry', 'EditorState'):
         schemas.pop(name)
     for name, field in [('SegmentInput', 'voice_id'), ('SegmentInput', 'source_id'),

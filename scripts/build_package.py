@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md")
 DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md")
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
-    "app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library", "workflow", "models", "engine-settings", "audio-manager"))
+    "app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library", "index-emotion", "workflow", "models", "engine-settings", "audio-manager"))
 
 
 def copy_documentation(candidate):
@@ -99,7 +99,7 @@ def main():
     candidate = work / "dist" / "声笺"
     for name in ("声笺.exe", "声笺服务.exe", "_internal/voice_workbench/assets/app.ico",
                  "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py",
-                 "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
+                 "_internal/voice_workbench/index_emotion.py", "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
         if not (candidate / name).is_file():
             raise RuntimeError(f"产物不完整：{candidate / name}")
     result = subprocess.run([str(candidate / "声笺服务.exe"), "--version"], capture_output=True,

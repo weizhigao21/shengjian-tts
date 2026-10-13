@@ -8,6 +8,7 @@ from ..model_info import model_ui, selected_mode
 from ..generation_options import compatible_options
 from ..schemas import VoiceConfig
 from ..errors import VoiceError
+from ..index_emotion import emotion_mode
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,8 @@ def prepare_generation(config: ConfigStore, model_name: str, overrides=None, use
     Presets remain unchanged. Random seeds and reference copies belong to this
     submission snapshot, which can also be prepared for individual dialogue rows.
     """
-    voice, _ = config.resolve(model_name, allow_missing_reference=overrides is not None and "reference_audio" in overrides)
+    voice, _ = config.resolve(model_name, allow_missing_reference=bool(overrides and
+        any(k in overrides for k in ("reference_audio", "emotion_reference_audio", "emotion_mode"))))
     if overrides and "request_options" in overrides:
         changed_model = any(name in overrides and overrides[name] != voice.get(name) for name in ("family", "model_dir", "engine_executable"))
         previous = {} if changed_model else voice.get("request_options", {})
@@ -74,6 +76,18 @@ def prepare_generation(config: ConfigStore, model_name: str, overrides=None, use
         options, _ = compatible_options(value, info)
         value["request_options"] = {**defaults, **options}
         value["voice_mode"] = selected_mode(value, info)
+        if info["emotion"]:
+            mode = value["emotion_mode"] = emotion_mode(value)
+            if mode != "text" or value["emotion_infer_from_text"]:
+                value["emotion"] = ""
+            if mode != "text":
+                value["emotion_infer_from_text"] = False
+            if mode != "vector":
+                value["emotion_vector"] = [0.] * 8
+            if mode != "reference":
+                value["emotion_reference_audio"] = ""
+            if mode == "speaker":
+                value["emotion_strength"] = .6
     changed_model = config.model_identity(base) != config.model_identity(voice)
     changed_mode = selected_mode(base, model_ui(base)) != selected_mode(voice, info)
     preset_used = use_preset and not base.get("is_template", False) and not changed_model and not changed_mode
@@ -88,5 +102,8 @@ def prepare_generation(config: ConfigStore, model_name: str, overrides=None, use
         # A queued job must remain runnable after the caller moves its original audio.
         target, _ = config.copy_reference_audio(voice["reference_audio"])
         voice["reference_audio"] = str(target)
+    if info["emotion"] and emotion_mode(voice) == "reference":
+        target, _ = config.copy_reference_audio(voice["emotion_reference_audio"])
+        voice["emotion_reference_audio"] = str(target)
     fingerprint = voice_fingerprint(voice)
     return PreparedGeneration(voice, fingerprint, provenance)

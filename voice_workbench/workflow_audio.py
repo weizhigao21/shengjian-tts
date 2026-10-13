@@ -70,9 +70,10 @@ class WorkflowAudio:
         while pending:
             value = pending.pop()
             if isinstance(value, dict):
-                reference = value.get("reference_audio")
-                if isinstance(reference, str) and reference:
-                    raw.add(reference)
+                for field in ("reference_audio", "emotion_reference_audio"):
+                    reference = value.get(field)
+                    if isinstance(reference, str) and reference:
+                        raw.add(reference)
                 pending.extend(v for v in value.values() if isinstance(v, (dict, list)))
             elif isinstance(value, list):
                 pending.extend(value)

@@ -26,8 +26,9 @@ class VoiceLibraryController:
             state = self.reference_player.playbackState()
         playing = state == QMediaPlayer.PlaybackState.PlayingState
         origin = self.reference_preview_origin if playing else None
-        buttons = [self.model_controls.reference_play]
-        buttons.extend(dialog.preview_button for dialog in self.dialogs if hasattr(dialog, "preview_button"))
+        buttons = [self.model_controls.reference_play, self.model_controls.index_emotion.reference_play]
+        for dialog in self.dialogs:
+            buttons.extend(getattr(dialog, "preview_buttons", [dialog.preview_button] if hasattr(dialog, "preview_button") else []))
         for button in buttons:
             active = origin is button
             button.setToolTip("停止试听" if active else "试听参考声音")
