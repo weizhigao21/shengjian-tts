@@ -26,7 +26,7 @@ def create_app(data_dir: Path = DEFAULT_DATA, runner=None):
 
     @app.exception_handler(VoiceError)
     async def voice_error(request, exc):
-        return JSONResponse(status_code=404 if exc.code in ("JOB_NOT_FOUND", "VOICE_NOT_FOUND", "REFERENCE_NOT_FOUND", "WORKFLOW_AUDIO_NOT_FOUND", "EDIT_PROJECT_NOT_FOUND", "EDIT_AUDIO_NOT_FOUND") else 400,
+        return JSONResponse(status_code=404 if exc.code in ("JOB_NOT_FOUND", "VOICE_NOT_FOUND", "REFERENCE_NOT_FOUND", "WORKFLOW_AUDIO_NOT_FOUND", "EDIT_PROJECT_NOT_FOUND", "EDIT_AUDIO_NOT_FOUND", "PARAMETER_PRESET_NOT_FOUND") else 400,
                             content={"msg": exc.message, "error": exc.as_dict()})
 
     @app.exception_handler(RequestValidationError)

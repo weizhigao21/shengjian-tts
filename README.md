@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.35-E87936?style=flat-square" alt="源码版本 v0.7.35" />
+  <img src="https://img.shields.io/badge/源码-v0.7.36-E87936?style=flat-square" alt="源码版本 v0.7.36" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.35。** 生成记录列表新增右键「保存到声音库…」，自动带入音频和原文，命名后保存为独立参考声音。文章与对话均可使用，删除原生成记录后，已保存的声音仍保留。详见[更新记录](CHANGELOG.md)。程序内检查、下载与安装重启见[程序更新说明](docs/APP_UPDATES.md)，WAV 处理及 Vevo2 适配见[音频编辑说明](docs/AUDIO_EDITING.md)。
+**当前源码：v0.7.36。** 高级设置新增参数预设，支持命名保存、选择套用、更新、重命名和删除。按模型筛选，仅保存生成参数，不改变音色和参考声音。详见[更新记录](CHANGELOG.md)。程序内检查、下载与安装重启见[程序更新说明](docs/APP_UPDATES.md)，WAV 处理及 Vevo2 适配见[音频编辑说明](docs/AUDIO_EDITING.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.35 的本地构建包尚未上传发行页。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.36 的本地构建包尚未上传发行页。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -163,7 +163,7 @@ python -m voice_workbench serve --port 8765
 | **Qwen3-TTS** | Base：克隆；CustomVoice：内置音色与风格指令；VoiceDesign：声音设计 |
 | **Kokoro** | 模型内置音色 |
 
-高级设置支持随机或固定种子。切换模型或生成方式后重新选择声音；修改预设参数后保存，工作流才会使用新配置。具体功能与性能取决于模型、精度和计算设备。
+高级设置支持随机或固定种子。调整参数后点击「参数预设 → 保存」并命名；下拉选择已保存的预设即可套用，旁边的管理按钮可更新、重命名、删除或刷新。预设仅保存当前模型的高级生成参数，不包含音色、参考声音、语速、情绪与运行环境；更换模型会筛选对应预设，不会自动套用。随机种子仍按每次随机保存，固定种子保存其具体值。参数变动会标记「已调整」；使用「恢复默认参数」可回到模型默认值。切换模型或生成方式后重新选择声音；修改预设参数后保存，工作流才会使用新配置。具体功能与性能取决于模型、精度和计算设备。
 
 ## 双语工作流联动
 
@@ -326,6 +326,8 @@ flowchart LR
 │  ├─ ui.py                        通用组件、浮层、波形、图标与样式
 │  ├─ model_controls.py            模型、生成方式、参考声音与运行环境控件
 │  ├─ generation_controls.py       根据参数定义构建高级设置控件
+│  ├─ parameter_preset_controls.py 参数预设选择、保存与管理控件
+│  ├─ parameter_presets.py         参数持久化、模型范围与兼容性校验
 │  ├─ library.py                   预设、参考声音列表与编辑弹窗
 │  ├─ settings.py                  旧设置面板的兼容入口
 │  ├─ api.py                       FastAPI 装配、生命周期、错误与访问处理

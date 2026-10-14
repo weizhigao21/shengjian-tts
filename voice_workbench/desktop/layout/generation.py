@@ -105,6 +105,7 @@ class GenerationLayout:
         self.voice_combo.currentIndexChanged.connect(self.update_voice_summary)
         side.addWidget(self.voice_combo)
         self.model_controls = ModelControls()
+        self.model_controls.parameter_presets.set_owner(self)
         self.model_controls.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.model_controls.changed.connect(self.refresh_main_settings)
         self.model_controls.preview_requested.connect(self.preview_reference)

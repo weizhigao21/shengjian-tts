@@ -388,6 +388,7 @@ class PresetDialog(PaperDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.controls = ModelControls()
+        self.controls.parameter_presets.set_owner(owner)
         self.controls.set_references(owner.references)
         self.preview_button = self.controls.reference_play
         self.controls.preview_requested.connect(lambda path: owner.preview_reference(path, self.preview_button))

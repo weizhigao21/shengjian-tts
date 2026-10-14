@@ -152,6 +152,9 @@ class ModelControls(QWidget):
         advanced_layout.setSpacing(12)
         self.generation_controls = GenerationControls()
         self.generation_controls.changed.connect(self.changed)
+        from .parameter_preset_controls import ParameterPresetControls
+        self.parameter_presets = ParameterPresetControls(self)
+        advanced_layout.addWidget(self.parameter_presets)
         advanced_layout.addWidget(self.generation_controls)
         self.compatibility_hint = label("", "hint")
         self.compatibility_hint.setWordWrap(True)
@@ -222,6 +225,7 @@ class ModelControls(QWidget):
         info = voice.get("model_ui") or model_ui(voice)
         key = (voice.get("model_name", voice["id"]), json.dumps(info, sort_keys=True))
         if preserve_edits and key == self.key:
+            self.parameter_presets.bind()
             return
         preset = voice
         keep_editing = False
@@ -267,6 +271,7 @@ class ModelControls(QWidget):
         self.apply_visibility()
         self.blockSignals(False)
         self.show()
+        self.parameter_presets.bind()
 
     def apply_visibility(self):
         if not self.info:
@@ -458,6 +463,7 @@ class ModelControls(QWidget):
         self.bind_generation_options(voice if old_family == info["family"] else {**voice, "request_options": {}}, info)
         self.apply_visibility()
         self.blockSignals(False)
+        self.parameter_presets.bind()
         self.changed.emit()
 
     def overrides(self):

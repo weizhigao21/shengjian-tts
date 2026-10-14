@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.35 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.36 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -53,6 +53,8 @@ v0.7.29 将待存草稿提取为 `desktop/draft_saves.py`：按任务保存独�
 v0.7.30 的 `model_scan.py` 独立管理引擎声明、后台仓库扫描和缓存；`model_updates.py` 复用远程元数据校验。`model_management.py` 负责目录合并、下载及安装记录，桌面端只筛选和显示状态。引擎声明不等于配音适配：单文件待适配模型下载后只登记文件，多文件包不进入自动安装。扫描生命周期随管理器关闭，模型声明按文件签名缓存。详见 [MODEL_DISCOVERY.md](MODEL_DISCOVERY.md)。
 
 v0.7.31 的 `model_dates.py` 负责 GGUF 文件版本日期的批量查询、UTC 校验和缓存回退。日期绑定文件校验值与安装记录，更新目录不会改变仍在使用的旧文件日期；Qt 设置页负责转换为本地时间显示。
+
+v0.7.36 的 `parameter_presets.py` 管理独立的高级参数预设，复用 `generation_options.py` 的兼容处理与严格校验。`http_api/parameter_presets.py` 提供管理接口，`parameter_preset_controls.py` 由主检查器和声音预设编辑窗口复用。预设写入 `config.json` 的可选 `parameter_presets` 列表，与其他配置共用锁和原子替换；仅保存高级参数与模型关联信息。读取时重新计算模型标识，以兼容数据目录迁移；选择时再按当前模型契约校验，异步回调固定保存时的模型和参数快照。
 
 ## 验证
 

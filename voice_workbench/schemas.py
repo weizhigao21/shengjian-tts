@@ -42,6 +42,18 @@ class VoiceConfig(BaseModel):
     request_options: dict = Field(default_factory=dict)
 
 
+class ParameterPresetInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=100)
+    model: VoiceConfig
+    request_options: dict = Field(min_length=1, max_length=128)
+
+
+class ParameterPresetRename(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=100)
+
+
 class SegmentInput(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     timestamp: str = Field(default="", max_length=50)

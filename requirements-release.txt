@@ -1,4 +1,4 @@
-# Windows x64 / CPython 3.10.11; build environment for v0.7.35
+# Windows x64 / CPython 3.10.11; build environment for v0.7.36
 altgraph==0.17.5
 annotated-doc==0.0.5
 annotated-types==0.8.0

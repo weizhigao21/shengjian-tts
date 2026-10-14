@@ -26,6 +26,8 @@
 | `GET /health` | 服务版本、数据目录、能力、队列与引擎状态 |
 | `GET /workflow` | 工作流接入信息、可用声音预设及配置版本 |
 | `GET /voices`、`PUT /voices/{id}` | 查询、保存声音预设 |
+| `GET /parameter-presets`、`POST /parameter-presets` | 查询、创建高级参数预设（创建返回 201） |
+| `PUT /parameter-presets/{identity}`、`PATCH /parameter-presets/{identity}`、`DELETE /parameter-presets/{identity}` | 更新参数、仅重命名、删除参数预设 |
 | `DELETE /voices/{id}`、`POST /voices/{id}/restore` | 删除、恢复预设 |
 | `GET /references`、`POST /references`、`PATCH /references/{id}` | 查询、导入、编辑参考声音 |
 | `DELETE /references/{id}`、`POST /references/{id}/restore` | 删除、恢复参考声音 |
@@ -56,6 +58,12 @@
 | `POST /engine/release` | 释放空闲推理引擎 |
 
 引擎操作使用 `{"backend":"cuda"}` 或 `{"backend":"cpu"}`。`GET /models` 中的 `engine.options` 提供分项下载与验证状态。
+
+## 高级参数预设
+
+创建 / 更新请求包含 `name`（1–100 字）、`model`（现有 `VoiceConfig` 结构，用于读取当前模型能力）和 `request_options`（当前模型支持的高级参数）。服务仅存储名称、ID、生成参数及模型关联描述，不保存传入的音色、参考声音或运行配置，也不会更新声音预设。响应包含 `id`、`name`、`model`、`model_key`、`request_options`、`created` 和 `updated`。重命名请求仅含 `name`；删除返回 `{"deleted":"参数预设 ID"}`。
+
+预设按后端、模型家族、模型路径、模型变体及官方 IndexTTS 版本区分，与音色 ID、引擎路径和计算设备无关。同一模型的名称不区分大小写且不能重复；更新不能改变模型关联。查询返回全部预设，客户端按 `model_key` 筛选。参数预设不存在返回 404，非法值 / 不支持的参数或重复名称返回 400，请求结构错误返回 422。保存预设不启动推理，套用由客户端明确操作，并按当前模型的参数契约再次检查；生成时仍使用现有 `overrides.request_options`。
 
 ## 引擎与模型版本
 

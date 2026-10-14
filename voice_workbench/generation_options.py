@@ -140,7 +140,7 @@ def validate_options(voice, info):
             valid = isinstance(value, str) and value in spec["values"]
         else:
             valid = type(value) is int if type_ == "int" else type(value) in (int, float)
-            valid = valid and math.isfinite(value) and spec["min"] <= value <= spec["max"]
+            valid = valid and spec["min"] <= value <= spec["max"] and math.isfinite(value)
         if not valid:
             raise VoiceError("INVALID_GENERATION_OPTION", f"{spec['label']}的值无效：{value}", "按高级设置中的取值范围调整。", "参数检查")
     if options.get("min_tokens", 0) > options.get("max_tokens", specs.get("max_tokens", {}).get("default", 4096)):
