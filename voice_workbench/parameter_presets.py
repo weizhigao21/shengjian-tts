@@ -94,4 +94,3 @@ class ParameterPresets:
             if not any(p['id'] == identity for p in items):
                 raise VoiceError('PARAMETER_PRESET_NOT_FOUND', '参数预设不存在', stage='参数预设')
             atomic_json(self.config.path, {**data, 'parameter_presets': [p for p in items if p['id'] != identity]})
-
