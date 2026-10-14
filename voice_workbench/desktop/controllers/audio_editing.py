@@ -4,9 +4,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 from PyQt6.QtCore import QTimer, QUrl
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem
 from ..api_client import checked
+from ..audio_output import SystemAudioOutput
 from ..draft_saves import DraftSaveQueue
 
 OPERATIONS = {"import": "原音频", "render": "裁剪 / 调整", "append": "拼接", "vc": "更换音色", "edit": "修改台词"}
@@ -30,7 +31,7 @@ class AudioEditController:
         self.last_refresh = 0
 
     def connect(self):
-        self.output = QAudioOutput(self.panel)
+        self.output = SystemAudioOutput(self.panel)
         self.player = QMediaPlayer(self.panel)
         self.player.setAudioOutput(self.output)
         self.player.positionChanged.connect(self.position_changed)

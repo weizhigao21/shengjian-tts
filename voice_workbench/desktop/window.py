@@ -7,13 +7,14 @@ import httpx
 from pathlib import Path
 from PyQt6.QtCore import QLibraryInfo, QLocale, QTimer, QTranslator, QUrl
 from PyQt6.QtGui import QFont, QFontDatabase
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QMainWindow, QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
 )
 from .. import __version__
 from ..ui import application_icon
 from .api_client import ApiWorker, checked
+from .audio_output import SystemAudioOutput
 from .draft_saves import DraftSaveQueue
 from .voice_checks import VoiceCheckCache
 from .controllers.documents import DocumentController
@@ -73,10 +74,10 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.document_timer.timeout.connect(self.save_document)
         self.setWindowTitle(f"声笺 v{__version__} · 本地配音工作台")
         self.setWindowIcon(application_icon())
-        self.audio_output = QAudioOutput(self)
+        self.audio_output = SystemAudioOutput(self)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
-        self.reference_output = QAudioOutput(self)
+        self.reference_output = SystemAudioOutput(self)
         self.reference_player = QMediaPlayer(self)
         self.reference_player.setAudioOutput(self.reference_output)
         self.reference_preview_origin = None

@@ -2,10 +2,11 @@
 import json
 from PyQt6.QtCore import QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 from ...ui import ElidedLabel, button, label
 from ...runtime import resource_root
+from ..audio_output import SystemAudioOutput
 from .common import SettingsComponents
 from .models import ModelSettings
 from .engine import EngineSettings
@@ -26,7 +27,7 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.performance_dirty = False
         self.engine_catalog = json.loads((resource_root() / "voice_workbench/assets/engine_catalog.json").read_text(encoding="utf-8"))
         self.engine_release_url = self.engine_catalog["release"]
-        self.output = QAudioOutput(self)
+        self.output = SystemAudioOutput(self)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.output)
         self.player.playbackStateChanged.connect(self.update_play_buttons)
