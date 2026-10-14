@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.34 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.35 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -55,6 +55,8 @@ v0.7.30 的 `model_scan.py` 独立管理引擎声明、后台仓库扫描和缓�
 v0.7.31 的 `model_dates.py` 负责 GGUF 文件版本日期的批量查询、UTC 校验和缓存回退。日期绑定文件校验值与安装记录，更新目录不会改变仍在使用的旧文件日期；Qt 设置页负责转换为本地时间显示。
 
 ## 验证
+
+v0.7.35 的生成记录右键菜单由 `desktop/controllers/playback.py` 捕获点击条目的音频、原文和作品名称，使用现有参考声音导入窗口及保存接口。菜单期间刷新或切换对白不改变待保存来源，源文件在打开保存窗口前再次检查；复制和引用生命周期仍由配置 / 文件管理层负责，不增加重复存储接口。
 
 v0.7.34 的 `desktop/audio_output.py` 统一管理系统默认输出跟随。`QMediaDevices` 监视器属于各自的 `QAudioOutput`，收到默认输出 / 插拔通知后比较设备 ID，只在改变时重新绑定；四处播放器复用此策略，Qt 对象释放时自动断开通知，不需要轮询或重新创建播放器。通知依据 [Qt 默认输出契约](https://doc.qt.io/qt-6/qmediadevices.html#defaultAudioOutput-prop)。
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from PyQt6.QtCore import QUrl, Qt, QPoint
 from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtWidgets import QFileDialog
+from PyQt6.QtWidgets import QFileDialog, QMenu
 from ...ui import generation_elapsed, sorted_audio, icon
 from ...subtitles import normalize_timestamp
 from ...runner import validate_wave
@@ -18,6 +18,32 @@ from ...naming import display_title
 
 
 class PlaybackController:
+    def clip_context_menu(self, position):
+        row = self.segments_table.rowAt(position.y())
+        if not self.job_data or not 0 <= row < len(self.visible_segments):
+            return
+        # Polling, sorting or a different selected row must not change the source.
+        item = dict(self.visible_segments[row], work_title=display_title(self.job_data))
+        folder = (self.data_dir / 'audio').resolve()
+        path = (folder / item['audio']).resolve() if item.get('audio') else None
+        available = bool(item['status'] == 'done' and path and path.parent == folder and path.is_file())
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        save = menu.addAction(icon('voices'), '保存到声音库…')
+        save.setEnabled(available and self.ready and not self.closing and not self.settings.deleting)
+        save.setToolTip('仅已完成的音频可以保存。' if item['status'] != 'done' else
+                        '音频文件已不存在，请刷新生成记录。' if not available else
+                        '本地服务未连接，请连接后再保存。' if not self.ready else
+                        '保存到声音库 → 参考声音，自动带入生成文本；参考音频需 1–60 秒。')
+        chosen = menu.exec(self.segments_table.viewport().mapToGlobal(position))
+        menu.deleteLater()
+        if chosen is save and save.isEnabled() and not self.closing:
+            if not self.ready:
+                self.statusBar().showMessage('本地服务未连接，请连接后再保存。', 5000)
+                return
+            self.clip_list.hide()
+            self.settings.add_audio_reference(item)
+
     def edit_current_audio(self):
         item = self.current_segment()
         if item and item["status"] == "done" and item.get("audio"):
@@ -302,9 +328,9 @@ class PlaybackController:
         self.retry_button.setVisible(self.editor_mode == "article")
         self.cancel_button.setVisible(self.editor_mode == "article")
         self.segments_table.setColumnHidden(5, not counts["failed"])
-        self.result_hint.setText("双击失败片段，查看具体原因、修复建议和原始异常。" if counts["failed"] else
-            "仅显示当前对白框的音频 · 上一个 / 下一个切换本框历史版本" if self.editor_mode == "dialogue" else
-            "点击片段播放 · 上一个 / 下一个切换 · 每次生成保留在当前作品")
+        self.result_hint.setText("双击失败片段查看原因 · 已完成音频可右键保存到声音库" if counts["failed"] else
+            "仅显示当前对白框的音频 · 右键保存到声音库" if self.editor_mode == "dialogue" else
+            "点击片段播放 · 右键保存到声音库 · 每次生成保留在当前作品")
         for row, item in enumerate(self.visible_segments):
             color = "#ad5427" if item["status"] == "failed" else "#3c7a51" if item["status"] == "done" else "#88888e"
             cell = self.segments_table.item(row, 4)
