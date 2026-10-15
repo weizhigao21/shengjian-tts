@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.38-E87936?style=flat-square" alt="源码版本 v0.7.38" />
+  <img src="https://img.shields.io/badge/源码-v0.7.39-E87936?style=flat-square" alt="源码版本 v0.7.39" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.38。** 修复语音识别的重复重试、忙碌状态回滚、与 AI 音频编辑互斥、后台刷新播放和语言保存问题。非 WAV 音频使用随程序打包的解码器，支持 MP3 / M4A / FLAC 等常见格式。使用方式见[语音识别说明](docs/SPEECH_RECOGNITION.md)，详见[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.39。** 最近作品加入音频编辑、语音识别任务与独立图标，点击回到对应记录。识别与对齐模型旁新增下载 / 管理入口；拖入音频后立即显示文件名、导入状态和任务记录。使用方式见[语音识别说明](docs/SPEECH_RECOGNITION.md)，详见[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.38 的本地构建包尚未上传发行页。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.39 的本地构建包尚未上传发行页。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -124,7 +124,7 @@
 | :--- | :--- |
 | **文章** | 输入长文或导入 TXT / LRC / SRT / VTT，在右侧统一配置声音与参数，点击「开始生成」。 |
 | **对话** | 输入 `@` 选择已保存的音色预设，自动创建对白框；Enter 新增下一条，Shift+Enter 换行。点击对白框调整它的参数，逐条生成或整批生成。 |
-| **语音识别** | 拖入音频或点击「导入音频」，选择识别模型与语言后开始识别；完成后点击左侧任一行播放该行音频，可勾选连续播放或导出字幕。 |
+| **语音识别** | 拖入音频立即显示文件名和导入状态；模型旁可下载识别 / 对齐模型，完成后点行播放或导出字幕，最近作品可回到记录。 |
 
 文章 / 对话在创建后固定。对白左上角可填写角色名称；命名后隐藏短 ID，悬停约 1.2 秒可查看完整 ID、音色、模型与音频数量。修改名字保留原 ID 和历史音频，修改文本或参数后可点击回转箭头重新生成。
 
@@ -325,6 +325,7 @@ flowchart LR
 │  │  ├─ dialogue.py              对白内容与声音配置版本
 │  │  ├─ script_voices.py         行首音色解析与逐段生成配置
 │  │  └─ service_lock.py          数据目录服务实例锁
+│  ├─ recent_works.py             四类创作任务的只读最近作品摘要
 │  ├─ speech_recognition/          语音识别：分行、引擎调用与会话存储
 │  │  ├─ lines.py                 时间戳换算、标点回填与分行
 │  │  ├─ runner.py                同一引擎进程内的识别与对齐请求

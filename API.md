@@ -34,6 +34,7 @@
 | `POST /jobs/draft`、`PATCH /jobs/{id}/document` | 创建作品、保存标题与草稿 |
 | `POST /jobs`、`POST /jobs/{id}/generate` | 提交生成、向作品追加批次，返回 202 |
 | `GET /jobs`、`GET /jobs/{id}` | 普通作品列表、片段进度与错误 |
+| `GET /recent-works` | 最近 100 个文章、对话、音频编辑和识别任务的只读摘要，按创建时间倒序 |
 | `DELETE /jobs/{id}`、`POST /jobs/{id}/restore`、`PATCH /jobs/{id}` | 删除、恢复、重命名作品 |
 | `POST /jobs/{id}/retry`、`POST /jobs/{id}/cancel` | 重试失败片段、取消生成 |
 | `POST /jobs/{id}/generations/{generation}/cancel` | 取消指定批次 |
@@ -84,6 +85,8 @@
 `installed` 的模型记录提供 `catalog_id`、`revision`、`new_revision`、`update_available`、`update_status`、`can_rollback`。新版保存在 `models/versions/<摘要前缀>/`，校验包内模型能力后更新预设路径；旧文件保留，历史任务的旧路径仍可使用。回退需要旧文件仍存在，生成或下载期间拒绝回退。
 
 ## 语音识别
+
+侧栏使用 `GET /recent-works` 汇总各模式。文章 / 对话保留原作品 ID；音频编辑与识别摘要分别使用 `audio:<id>`、`recognition:<id>` 作为列表 ID，并通过 `source_id` 返回原 ID、`task_type` 返回模式。外部任务的详情仍从 `/audio-editor/projects/{source_id}` 或 `/recognition/sessions/{source_id}` 读取。汇总只读现有数据库，不迁移或合并数据库，不返回工作流临时记录；原 `/jobs` 结构不变。
 
 识别复用统一引擎：`GET /recognition/options` 按引擎的 `model_specs` 任务声明把已安装模型分为 `asr` 与 `align` 两组，并返回 `runtime`、`selection`、`languages` 和当前是否 `active`。`POST /recognition/selection` 的全部字段可选，只覆盖传入项，`asr_model` / `align_model` 已不存在的路径会被剔除。
 

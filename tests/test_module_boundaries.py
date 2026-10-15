@@ -40,6 +40,7 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
         actual['components']['schemas'].pop(name)
     # Model discovery adds an endpoint without changing the published routes.
     assert actual['paths'].pop('/models/scan')['post']['responses'].get('202')
+    assert actual['paths'].pop('/recent-works')['get']['responses'].get('200')
     assert actual['paths'].pop('/parameter-presets')['post']['responses'].get('201')
     assert set(actual['paths'].pop('/parameter-presets/{identity}')) == {'put', 'patch', 'delete'}
     for name in ('ParameterPresetInput', 'ParameterPresetRename'):

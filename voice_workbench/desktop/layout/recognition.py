@@ -1,7 +1,7 @@
 """Speech recognition page: drop audio in, read the transcript, play one line at a time."""
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                            QListWidget, QScrollArea, QVBoxLayout, QWidget)
+                            QListWidget, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from ...ui import button, label
 from ..controllers.recognition import RecognitionController
@@ -39,11 +39,14 @@ class RecognitionPanel(QWidget):
         self.title.setMaxLength(200)
         self.title.textChanged.connect(lambda _: self.controller.name_timer.start(900))
         header.addWidget(self.title, 1)
+        content.addLayout(header)
+        actions = QHBoxLayout()
         self.import_button = button("导入音频", self.controller.import_audio, "import")
         self.recognize_button = button("重新识别", self.controller.recognize, "retry", "ghost")
-        header.addWidget(self.import_button)
-        header.addWidget(self.recognize_button)
-        content.addLayout(header)
+        actions.addWidget(self.import_button)
+        actions.addWidget(self.recognize_button)
+        actions.addStretch()
+        content.addLayout(actions)
 
         recent = QHBoxLayout()
         recent.addWidget(label("识别记录", "muted"))
@@ -55,6 +58,10 @@ class RecognitionPanel(QWidget):
         self.remove_button = button("移出记录", self.controller.remove, "trash", "ghost")
         recent.addWidget(self.remove_button)
         content.addLayout(recent)
+
+        self.audio_name = label("尚未导入音频", "muted")
+        self.audio_name.setWordWrap(True)
+        content.addWidget(self.audio_name)
 
         self.info = label("把音频拖到下方区域，或点击「导入音频」。", "hint")
         self.info.setWordWrap(True)
@@ -68,6 +75,7 @@ class RecognitionPanel(QWidget):
         drop.setSpacing(6)
         drop.addStretch()
         self.drop_title = label("把音频拖到这里", "section")
+        self.drop_title.setWordWrap(True)
         self.drop_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         drop.addWidget(self.drop_title)
         self.drop_hint = label("WAV / FLAC / MP3 / M4A / OGG 等；导入后自动识别文字并按标点换行。", "hint")
@@ -92,16 +100,21 @@ class RecognitionPanel(QWidget):
         self.cancel_button = button("取消识别", self.controller.cancel, "close", "ghost")
         self.copy_button = button("复制文字", self.controller.copy_text, "copy", "ghost")
         self.export_button = button("导出字幕", self.controller.export_subtitles, "export", "ghost")
-        for control in (self.toggle, self.cancel_button, self.copy_button, self.export_button):
+        for control in (self.toggle, self.cancel_button):
             transport.addWidget(control)
-        self.continuous = QCheckBox("播完自动下一行")
-        self.continuous.setToolTip("连续播放时不打断；取消后每行播放完自动停止。")
-        self.continuous.toggled.connect(self.set_continuous)
-        transport.addWidget(self.continuous)
         transport.addStretch()
         self.clock = label("00:00.00", "muted")
         transport.addWidget(self.clock)
         content.addLayout(transport)
+        result_actions = QHBoxLayout()
+        for control in (self.copy_button, self.export_button):
+            result_actions.addWidget(control)
+        result_actions.addStretch()
+        self.continuous = QCheckBox("播完自动下一行")
+        self.continuous.setToolTip("连续播放时不打断；取消后每行播放完自动停止。")
+        self.continuous.toggled.connect(self.set_continuous)
+        result_actions.addWidget(self.continuous)
+        content.addLayout(result_actions)
 
         content_scroll = QScrollArea()
         content_scroll.setWidgetResizable(True)
@@ -121,6 +134,8 @@ class RecognitionPanel(QWidget):
         side.setSpacing(12)
         side.addWidget(label("识别设置", "section"))
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.asr = QComboBox()
         self.asr.setMinimumContentsLength(10)
         self.asr.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -132,11 +147,24 @@ class RecognitionPanel(QWidget):
         self.language = QComboBox()
         self.language.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.language.currentIndexChanged.connect(self.controller.apply_selection)
-        form.addRow("识别模型", self.asr)
-        form.addRow("时间对齐", self.aligner)
+        self.asr_download = button("下载", lambda: self.controller.open_model_download("asr"), "import", "ghost")
+        self.aligner_download = button("下载", lambda: self.controller.open_model_download("align"), "import", "ghost")
+        for title, combo, download in (("识别模型", self.asr, self.asr_download),
+                                       ("时间对齐", self.aligner, self.aligner_download)):
+            row = QWidget()
+            controls = QHBoxLayout(row)
+            controls.setContentsMargins(0, 0, 0, 0)
+            controls.setSpacing(6)
+            combo.setMinimumWidth(0)
+            combo.setMinimumContentsLength(6)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            download.setFixedWidth(65)
+            controls.addWidget(combo, 1)
+            controls.addWidget(download)
+            form.addRow(title, row)
         form.addRow("音频语言", self.language)
         side.addLayout(form)
-        self.setup_button = button("下载模型 / 管理引擎", lambda: owner.set_page(3), "import", "ghost")
+        self.setup_button = button("模型 / 引擎管理", lambda: self.controller.open_model_download(), "settings", "ghost")
         side.addWidget(self.setup_button)
         side.addSpacing(10)
         side.addWidget(label("怎么用", "section"))

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QFileDialog
 from ..api_client import checked
 from ..audio_output import SystemAudioOutput
 from ...subtitles import normalize_timestamp
+from ...recent_works import external_work
 
 AUDIO_FILES = "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma *.aiff *.aif)"
 # Formats the native reader and the Qt player both accept; kept in step with the service.
@@ -39,6 +40,7 @@ class RecognitionController:
         self.rendered_lines = None
         self.selection_sequence = 0
         self.save_sequence = 0
+        self.importing = None
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -116,6 +118,12 @@ class RecognitionController:
 
     def failure(self, message):
         self.submitting = False
+        if self.importing:
+            self.importing = None
+            self.rendered_session = None
+            self.render_sessions()
+            self.render_session()
+            self.owner.render_jobs(self.owner.jobs)
         self.panel.status.setText(str(message))
         self.update_actions()
 
@@ -147,12 +155,15 @@ class RecognitionController:
         self.fill(self.panel.asr, [(f"{m['name']} · {m['family']}", m["path"]) for m in self.options.get("asr", [])],
                   "未安装识别模型，请到设置 → 模型下载中获取", selection.get("asr_model"))
         self.fill(self.panel.aligner, [(f"{m['name']} · {m['family']}", m["path"]) for m in self.options.get("align", [])],
-                  "未安装对齐器：每行时间将按标点估算", selection.get("align_model"))
+                  "未安装对齐器（时间估算）", selection.get("align_model"))
         language = ((self.panel.language.currentData() or self.state().get("language")) if self.session and self.session["id"] == self.rendered_session
                     else selection.get("language"))
         self.fill(self.panel.language, list(self.options.get("languages") or []), preferred=language)
 
     def render_sessions(self):
+        if self.importing and self.importing.get("preview", True):
+            self.fill(self.panel.history, [(self.importing["name"] + " · 导入中", None)])
+            return
         choices = [(s["name"] + " · " + STATUSES.get(s["status"], s["status"]), s["id"]) for s in self.sessions]
         self.fill(self.panel.history, [("选择识别记录", None)] + choices,
                   preferred=self.session["id"] if self.session else None)
@@ -174,18 +185,21 @@ class RecognitionController:
     # ------------------------------------------------------------------- session
 
     def render_session(self):
+        if self.importing and self.importing.get("preview", True):
+            self.render_importing()
+            return
         state = self.state()
         lines = state.get("lines") or []
         self.panel.drop_zone.setVisible(not lines)
         self.panel.lines.setVisible(bool(lines))
         identity = self.session["id"] if self.session else None
         switched = identity != self.rendered_session
-        if switched:
+        if switched or self.session is None:
             self.applying = True
+            self.panel.title.blockSignals(True)
+            self.panel.title.setText(state.get("name") or "未命名音频")
+            self.panel.title.blockSignals(False)
             if self.session:
-                self.panel.title.blockSignals(True)
-                self.panel.title.setText(state.get("name") or "未命名音频")
-                self.panel.title.blockSignals(False)
                 self.fill(self.panel.language, list(self.options.get("languages") or []), preferred=state.get("language"))
             self.applying = False
         signature = tuple((line["index"], line["start"], line["end"], line["text"]) for line in lines)
@@ -198,6 +212,9 @@ class RecognitionController:
             self.panel.lines.blockSignals(False)
             self.panel.clock.setText("00:00.00")
         self.rendered_session, self.rendered_lines = identity, signature
+        self.panel.drop_title.setText(state.get("name") or "把音频拖到这里")
+        self.panel.drop_hint.setText("正在识别音频，请稍候…" if state.get("status") in BUSY else
+                                    "拖入音频后自动识别文字并按标点换行。")
         self.render_details()
         self.panel.drop_zone.setEnabled(not self.busy())
 
@@ -214,10 +231,15 @@ class RecognitionController:
     def render_details(self):
         state = self.state()
         if not self.session:
+            self.panel.audio_name.setText("尚未导入音频")
+            self.panel.audio_name.setToolTip("")
             self.panel.info.setText("把音频拖到下方区域，或点击「导入音频」。支持 WAV / FLAC / MP3 / M4A / OGG 等格式。")
             self.panel.status.setText("导入后会自动识别；识别完成后点击任意一行即可播放那一段。")
             return
         duration = state.get("duration") or 0.0
+        source = state.get("source_path") or state.get("audio") or ""
+        self.panel.audio_name.setText("当前音频：" + Path(source).name)
+        self.panel.audio_name.setToolTip(source)
         details = f"{duration:.2f} 秒"
         if state.get("recognized_language"):
             details += f" · 识别语言 {state['recognized_language']}"
@@ -260,6 +282,30 @@ class RecognitionController:
 
     # -------------------------------------------------------------------- actions
 
+    def open_model_download(self, task=None):
+        """Use the existing verified downloader, focused on this mode's models."""
+        settings = self.owner.settings
+        settings.model_filter.setCurrentIndex(settings.model_filter.findData("stt"))
+        settings.model_search.setText({"asr": "qwen3_asr", "align": "qwen3_forced_aligner"}.get(task, ""))
+        self.owner.set_page(3)
+        settings.set_section(0)
+
+    def render_importing(self):
+        value = self.importing
+        self.panel.title.blockSignals(True)
+        self.panel.title.setText(value["name"])
+        self.panel.title.blockSignals(False)
+        self.panel.audio_name.setText("当前音频：" + Path(value["path"]).name)
+        self.panel.audio_name.setToolTip(value["path"])
+        self.panel.info.setText("正在导入音频…")
+        self.panel.drop_title.setText(Path(value["path"]).name)
+        self.panel.drop_hint.setText("正在读取音频并准备识别，请稍候…")
+        self.panel.drop_zone.show()
+        self.panel.drop_zone.setEnabled(False)
+        self.panel.lines.hide()
+        self.panel.clock.setText("00:00.00")
+        self.panel.status.setText("正在导入音频，完成后自动识别。")
+
     def import_audio(self, path=None):
         if not self.owner.ready:
             self.panel.status.setText("请先连接本地服务。")
@@ -280,17 +326,30 @@ class RecognitionController:
         self.save_name()
         body = {"path": str(path), "name": Path(path).stem[:200],
                 "language": self.panel.language.currentData() or "auto"}
+        work = external_work("recognition", "importing-" + str(sequence), body["name"], time.time(), status="importing")
+        work["pending_import"] = True
+        self.stop()
+        self.importing = {"path": str(path), "name": body["name"], "work": work}
         self.submitting = True
+        self.render_sessions()
+        self.render_importing()
         self.update_actions()
+        self.owner.render_jobs(self.owner.jobs)
 
         def done(session):
             self.submitting = False
+            self.importing = None
             if sequence == self.open_sequence:
+                self.sessions = [{"id": session["id"], "name": session["state"]["name"], "status": session["state"]["status"]},
+                                 *[s for s in self.sessions if s["id"] != session["id"]]]
                 self.open_session(session, force=True)
             else:
+                self.render_session()
                 self.update_actions()
+            state = session["state"]
+            work = external_work("recognition", session["id"], state["name"], session["created"], session["updated"], state["status"])
+            self.owner.render_jobs([work, *[j for j in self.owner.jobs if j["id"] != work["id"]]])
 
-        self.panel.status.setText("已导入，正在识别…")
         self.owner.call(lambda c: checked(c.post("/recognition/sessions", json=body, timeout=150)), done, self.failure)
 
     def open_selected(self):
@@ -310,6 +369,7 @@ class RecognitionController:
         self.name_timer.stop()
         self.stop()
         self.session = session
+        self.render_sessions()
         self.render_session()
         self.update_actions()
         if force or self.state().get("status") in BUSY:
@@ -487,17 +547,24 @@ class RecognitionController:
         ready = self.owner.ready
         state = self.state()
         busy = self.busy()
+        importing = bool(self.importing and self.importing.get("preview", True))
         lines = state.get("lines") or []
+        self.panel.title.setReadOnly(importing)
+        self.panel.history.setEnabled(ready and not importing)
         self.panel.import_button.setEnabled(ready and not busy)
         self.panel.recognize_button.setEnabled(bool(ready and self.session and self.options.get("asr") and not busy))
         self.panel.cancel_button.setEnabled(bool(busy and self.options.get("active")
                                                  and self.session and self.options["active"]["session_id"] == self.session["id"]))
         self.panel.remove_button.setEnabled(bool(ready and self.session and not busy))
-        self.panel.export_button.setEnabled(bool(lines))
-        self.panel.copy_button.setEnabled(bool(lines))
-        self.panel.toggle.setEnabled(bool(lines))
-        self.panel.continuous.setEnabled(bool(lines))
-        self.panel.setup_button.setVisible(ready and not self.options.get("asr"))
+        self.panel.export_button.setEnabled(bool(lines) and not importing)
+        self.panel.copy_button.setEnabled(bool(lines) and not importing)
+        self.panel.toggle.setEnabled(bool(lines) and not importing)
+        self.panel.continuous.setEnabled(bool(lines) and not importing)
+        self.panel.setup_button.setEnabled(ready and not importing)
+        for button, key in ((self.panel.asr_download, "asr"), (self.panel.aligner_download, "align")):
+            button.setEnabled(ready and not importing)
+            button.setText("管理" if self.options.get(key) else "下载")
+            button.setToolTip("打开对应模型的下载列表，可选择精度、来源并查看下载进度。")
         for control in (self.panel.asr, self.panel.aligner, self.panel.language):
             control.setEnabled(ready and not busy)
 

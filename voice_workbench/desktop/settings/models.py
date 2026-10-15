@@ -8,6 +8,15 @@ from ...ui import ElidedLabel, ModelDescriptionDelegate, button, label
 from .common import size_text, publication_text, DOWNLOAD_STATES
 
 
+def recognition_usage(model):
+    purposes = [name for key, name in (("recognition_adapted", "语音识别"), ("align_adapted", "时间对齐")) if model.get(key)]
+    return " / ".join(purposes)
+
+
+def adapted_model(model):
+    return bool(model.get("adapted", True) or model.get("edit_adapted") or recognition_usage(model))
+
+
 class ModelSettings:
     def _models_page(self):
         self.models_scroll, layout = self.scroll_page("modelManagementContent")
@@ -96,7 +105,7 @@ class ModelSettings:
         recognition = {"stt", "asr", "align", "forced_align"}
         def included(m):
             tasks = set(m.get("tasks", ["tts"] if m.get("adapted", True) else []))
-            return (choice == "all" or choice == "adapted" and (m.get("adapted", True) or m.get("edit_adapted")) or
+            return (choice == "all" or choice == "adapted" and adapted_model(m) or
                     choice == "tts" and bool(tasks & speech) or choice == "stt" and bool(tasks & recognition) or
                     choice == "edit" and bool(tasks & {"edit", "vc", "svc", "s2s"}) or
                     choice == "other" and not bool(tasks & (speech | recognition)))
@@ -113,7 +122,7 @@ class ModelSettings:
             notice = scan["error"]
         elif scan.get("checked"):
             total = self.model_data["catalog"]
-            notice = f"识别 {len(families)} 个模型家族 · {sum(m['downloadable'] for m in total)} 个可下载 · {sum(bool(m.get('adapted', True) or m.get('edit_adapted')) for m in total)} 个已适配"
+            notice = f"识别 {len(families)} 个模型家族 · {sum(m['downloadable'] for m in total)} 个可下载 · {sum(adapted_model(m) for m in total)} 个已适配"
             if scan.get("warnings"):
                 notice += " · 部分仓库未连接，保留已知目录"
         else:
@@ -137,7 +146,7 @@ class ModelSettings:
             self.cell(table, row, 1, "目录模型" if m.get("is_directory") else size_text(m["size"]) if m["exists"] else "文件缺失")
             self.cell(table, row, 2, *publication_text(m))
             status = m.get("update_status")
-            summary = DOWNLOAD_STATES.get(status, status) if status else "音频编辑" if m.get("edit_adapted") else "待适配" if not m.get("adapted", True) else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型"
+            summary = DOWNLOAD_STATES.get(status, status) if status else recognition_usage(m) or ("音频编辑" if m.get("edit_adapted") else "待适配" if not m.get("adapted", True) else "可更新" if m.get("update_available") else "已更新" if m.get("can_rollback") else "本地模型")
             if status in ("downloading", "paused", "verifying", "pausing"):
                 summary += f" · {min(100,m.get('update_received',0)*100/(m.get('update_size') or 1)):.0f}%"
             self.cell(table, row, 3, summary, m.get("update_error") or m["path"])
@@ -159,7 +168,7 @@ class ModelSettings:
             status = m["status"]
             summary = DOWNLOAD_STATES.get(status, status)
             if not m.get("adapted", True) and status == "available":
-                summary = "音频编辑" if m.get("edit_adapted") else "待适配"
+                summary = recognition_usage(m) or ("音频编辑" if m.get("edit_adapted") else "待适配")
             if status in ("downloading", "paused", "pausing", "verifying"):
                 summary += f" · {min(100, m.get('received', 0) * 100 / m['size']):.0f}%"
             if m.get("error"):
@@ -173,7 +182,7 @@ class ModelSettings:
                 action = self.action_cell(table, row, 5, m["id"] + "-download", lambda v=m: button("下载", lambda: self.download_model(v), "import", "ghost"))
                 action.setText(caption)
                 action.setEnabled(m["downloadable"])
-                action.setToolTip("下载后可在音频编辑模式使用。" if m.get("edit_adapted") else "可以下载保存；声笺尚未适配，暂不能用于配音。" if m["downloadable"] and not m.get("adapted", True) else "此模型需要配套文件，暂不支持自动安装。" if m.get("discovered") and not m["downloadable"] else caption)
+                action.setToolTip("下载后可用于" + recognition_usage(m) + "。" if recognition_usage(m) else "下载后可在音频编辑模式使用。" if m.get("edit_adapted") else "可以下载保存；声笺尚未适配，暂不能用于配音。" if m["downloadable"] and not m.get("adapted", True) else "此模型需要配套文件，暂不支持自动安装。" if m.get("discovered") and not m["downloadable"] else caption)
             table.setRowHeight(row, 66)
         table.fit_rows()
         table.setUpdatesEnabled(True)
@@ -255,7 +264,9 @@ class ModelSettings:
     def download_model(self, model):
         source = self.source_combo.currentData()
         message = "模型开始下载，可在列表中暂停和查看进度。"
-        if model.get("edit_adapted"):
+        if recognition_usage(model):
+            message += " 下载后可在语音识别模式使用。"
+        elif model.get("edit_adapted"):
             message += " 下载后可在音频编辑模式选择 Vevo2。"
         elif not model.get("adapted", True):
             message += " 此模型尚未适配，下载后仅保存文件，暂不能用于配音。"
@@ -266,7 +277,7 @@ class ModelSettings:
 
     def download_details(self, row, _):
         m = self.visible_catalog[row]
-        support = "可用于音频编辑：换声、修改台词" if m.get("edit_adapted") else "可用于配音" if m.get("adapted", True) else "尚未适配，下载后仅保存文件"
+        support = "可用于" + recognition_usage(m) if recognition_usage(m) else "可用于音频编辑：换声、修改台词" if m.get("edit_adapted") else "可用于配音" if m.get("adapted", True) else "尚未适配，下载后仅保存文件"
         self.owner.show_details(m["name"] + "\n" + m["description"] +
             "\n" + publication_text(m)[1] +
             f"\n适配：{support}\n精度：{m['precision']}\n大小：{size_text(m['size'])}" +

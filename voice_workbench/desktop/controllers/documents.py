@@ -9,13 +9,13 @@ from ...ui import icon
 from ..api_client import checked
 from ..constants import STATES
 from ..model_labels import model_key
+from ...recent_works import read_recent, task_type, WORK_NAMES
 
 
 class DocumentController:
     def load_saved_jobs(self):
-        from ...store import Store
         try:
-            self.render_jobs(Store.read_recent(self.data_dir))
+            self.render_jobs(read_recent(self.data_dir))
         except Exception as exc:
             self.service_log.append("启动时读取作品记录失败，服务连接后将重试：" + str(exc))
 
@@ -35,17 +35,21 @@ class DocumentController:
         return cell
 
     def render_jobs(self, jobs):
-        jobs = [j for j in jobs if j["id"] not in self.deleted_job_ids]
+        jobs = [j for j in jobs if j["id"] not in self.deleted_job_ids and not j.get("pending_import")]
+        importing = self.recognition.controller.importing
+        if importing:
+            jobs = [importing["work"], *jobs]
         self.jobs_empty.setVisible(not jobs)
         self.jobs_table.blockSignals(True)
         if jobs != self.jobs:
             self.jobs_table.setUpdatesEnabled(False)
             self.jobs_table.setRowCount(len(jobs))
             for row, value in enumerate(jobs):
-                category = "对话" if work_type(value) == "dialogue" else "文章"
+                category = WORK_NAMES.get(task_type(value), "文章")
                 stamp = datetime.fromtimestamp(value["created"]).strftime("%Y-%m-%d %H:%M:%S")
-                tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{STATES[value['status']]} · {value['completed']}/{value['total']}"
-                for col, text in enumerate((display_title(value), STATES[value["status"]], f"{value['completed']}/{value['total']}")):
+                status = "导入中" if value["status"] == "importing" else STATES.get(value["status"], value["status"])
+                tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{status} · {value['completed']}/{value['total']}"
+                for col, text in enumerate((display_title(value), status, f"{value['completed']}/{value['total']}")):
                     cell = self.update_table_cell(self.jobs_table, row, col, text, tooltip)
                     if cell.data(256) != value["id"]:
                         cell.setData(256, value["id"])
@@ -53,7 +57,8 @@ class DocumentController:
                         cell.setData(257, value)
             self.jobs = jobs
             self.jobs_table.setUpdatesEnabled(True)
-        selected_row = next((row for row, value in enumerate(jobs) if value["id"] == self.selected_job), -1)
+        selected = self.active_recent_key()
+        selected_row = next((row for row, value in enumerate(jobs) if value["id"] == selected), -1)
         if self.jobs_table.currentRow() != selected_row:
             if selected_row >= 0:
                 self.jobs_table.selectRow(selected_row)
@@ -62,11 +67,72 @@ class DocumentController:
                 self.jobs_table.setCurrentCell(-1, -1)
         self.jobs_table.blockSignals(False)
 
+    def active_recent_key(self):
+        if getattr(self, "recent_requested", None):
+            return self.recent_requested
+        mode = self.creation_pages.currentIndex()
+        recognition = self.recognition.controller
+        if mode == 3:
+            if recognition.importing and recognition.importing.get("preview", True):
+                return recognition.importing["work"]["id"]
+            if recognition.session:
+                return "recognition:" + recognition.session["id"]
+        if mode == 2 and self.audio_editor.controller.project:
+            return "audio:" + self.audio_editor.controller.project["id"]
+        return self.selected_job
+
+    def open_other_recent(self, value):
+        if value.get("pending_import"):
+            return
+        kind, identity = task_type(value), value["source_id"]
+        if kind == "recognition":
+            controller = self.recognition.controller
+            if not controller.importing or not controller.importing.get("preview", True):
+                controller.name_timer.stop()
+                controller.save_name()
+            controller.open_sequence += 1
+            if controller.importing:
+                controller.importing["preview"] = False
+                controller.rendered_session = None
+            self.open_recognition()
+            endpoint, panel_index = "/recognition/sessions/", 3
+        else:
+            self.audio_editor.controller.save()
+            self.audio_editor.controller.open_sequence += 1
+            self.open_audio_editor()
+            endpoint, panel_index = "/audio-editor/projects/", 2
+        self.recent_sequence = getattr(self, "recent_sequence", 0) + 1
+        sequence = self.recent_sequence
+        self.recent_requested = value["id"]
+        def done(record):
+            if sequence != self.recent_sequence:
+                return
+            self.recent_requested = None
+            if self.tabs.currentIndex() == 0 and self.creation_pages.currentIndex() == panel_index:
+                controller = self.recognition.controller if kind == "recognition" else self.audio_editor.controller
+                if kind == "recognition":
+                    controller.open_session(record)
+                else:
+                    controller.open_project(record)
+            self.render_jobs(self.jobs)
+        def failed(message):
+            if sequence == self.recent_sequence:
+                self.recent_requested = None
+                self.render_jobs(self.jobs)
+                self.show_error(message)
+        self.call(lambda c: checked(c.get(endpoint + identity)), done, failed)
+
     def select_job(self):
         if self.submitting:
             return
         row = self.jobs_table.currentRow()
         if row >= 0 and self.jobs_table.item(row, 0):
+            value = self.jobs_table.item(row, 0).data(257)
+            if task_type(value) in ("audio", "recognition"):
+                self.open_other_recent(value)
+                return
+            self.recent_sequence = getattr(self, "recent_sequence", 0) + 1
+            self.recent_requested = None
             selected = self.jobs_table.item(row, 0).data(256)
             if selected != self.selected_job:
                 self.save_document()
@@ -128,6 +194,8 @@ class DocumentController:
             self.jobs_table.blockSignals(False)
             self.select_job()
         menu.addAction(icon("pen"), "打开任务", open_task)
+        if task_type(value) in ("audio", "recognition"):
+            return menu
         menu.addAction(icon("pen"), "重命名", lambda: self.rename_job(value))
         menu.addSeparator()
         action = menu.addAction(icon("trash", "#b24932"), "取消并删除任务" if value["status"] in ("running", "queued") else "删除任务",

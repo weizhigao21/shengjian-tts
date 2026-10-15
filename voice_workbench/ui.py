@@ -70,7 +70,7 @@ ICONS = {
     "pen": '<path d="m15 4 5 5M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',
     "article": '<path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h6"/>',
     "dialogue": '<path d="M3 4h18v13H9l-6 4zM7 8h10M7 12h7"/>',
-    "recognize": '<path d="M4 10v4M8 6v12M12 3v18M16 6v12M20 10v4"/>',
+    "recognize": '<path d="M3 8v8m4-12v16m4-13v10m4-11h6m-6 6h6m-6 6h6"/>',
     "back": '<path d="M19 12H5m6-6-6 6 6 6"/>',
     "voices": '<rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
     "link": '<path d="m10 13 4-4m-6 7-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m2 1 2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 -1)"/>',
@@ -308,20 +308,21 @@ class RecentJobDelegate(QStyledItemDelegate):
             painter.setBrush(QColor("#ebebe9" if selected else "#ffffff"))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(rectangle, 6, 6)
-        color = {"done": "#829581", "failed": "#c26344", "running": "#e0651c", "queued": "#b7a178"}.get(value.get("status"), "#b5b5b3")
+        color = {"done": "#829581", "failed": "#c26344", "running": "#e0651c", "importing": "#e0651c", "queued": "#b7a178"}.get(value.get("status"), "#b5b5b3")
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(color))
         painter.drawEllipse(rectangle.left() + 9, rectangle.center().y() - 2, 4, 4)
         painter.setPen(QColor("#282829" if selected else "#777778"))
         painter.setFont(option.font)
-        from .naming import work_type
-        category = work_type(value)
-        icon(category, "#967248" if category == "dialogue" else "#85858a", 16).paint(
+        from .recent_works import task_type, WORK_ICONS
+        category = task_type(value)
+        colors = {"dialogue": "#967248", "audio": "#5c8f8a", "recognition": "#6b719d"}
+        icon(WORK_ICONS.get(category, "article"), colors.get(category, "#85858a"), 16).paint(
             painter, rectangle.left() + 20, rectangle.center().y() - 8, 16, 16)
-        text_rect = rectangle.adjusted(43, 0, -30, 0)
+        text_rect = rectangle.adjusted(43, 0, -30 if category in ("article", "dialogue") else -12, 0)
         text = option.fontMetrics.elidedText(str(index.data() or ""), Qt.TextElideMode.ElideRight, text_rect.width())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter, text)
-        if selected or hover:
+        if (selected or hover) and category in ("article", "dialogue"):
             icon("trash", "#8d8d8b", 14).paint(painter, rectangle.right() - 23, rectangle.center().y() - 7, 14, 14)
         painter.restore()
 
@@ -337,7 +338,9 @@ class RecentTasks(QTableWidget):
     def mousePressEvent(self, event):
         row = self.rowAt(int(event.position().y()))
         item = self.item(row, 0) if row >= 0 else None
-        if item and event.button() == Qt.MouseButton.LeftButton and event.position().x() > self.viewport().width() - 32:
+        from .recent_works import task_type
+        deletable = item is not None and task_type(item.data(257) or {}) in ("article", "dialogue")
+        if deletable and event.button() == Qt.MouseButton.LeftButton and event.position().x() > self.viewport().width() - 32:
             self.delete_requested.emit(item.data(256))
             event.accept()
             return

@@ -8,6 +8,12 @@ from .context import manager, get_job
 router = APIRouter()
 
 
+@router.get("/recent-works")
+def recent_works(request: Request):
+    from ..recent_works import read_recent
+    return read_recent(manager(request).root)
+
+
 @router.get("/jobs")
 def jobs(request: Request):
     return manager(request).store.list()

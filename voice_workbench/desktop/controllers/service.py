@@ -113,7 +113,10 @@ class ServiceController:
                 raise RuntimeError("语音服务版本过旧，请关闭旧窗口及独立运行的旧服务后重新启动。")
             response = client.get(f"/jobs/{selected}") if selected else None
             job = checked(response) if response and response.status_code != 404 else None
-            return health, checked(client.get("/voices")), checked(client.get("/jobs")), job, checked(client.get("/references"))
+            recent = client.get("/recent-works")
+            if recent.status_code == 404:
+                recent = client.get("/jobs")
+            return health, checked(client.get("/voices")), checked(recent), job, checked(client.get("/references"))
         def failed(message):
             self.polling = False
             if self.owns_service and self.process and self.process.poll() is not None:
