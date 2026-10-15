@@ -2,6 +2,31 @@
 import hashlib
 import os
 import re
+from collections import deque
+from time import monotonic
+
+
+class TransferRate:
+    """Recent network throughput; resumed bytes never enter the measurement."""
+    def __init__(self, received):
+        self.samples = deque([(monotonic(), received)])
+
+    def sample(self, received):
+        now = monotonic()
+        while len(self.samples) > 1 and now - self.samples[1][0] >= 2:
+            self.samples.popleft()
+        start, previous = self.samples[0]
+        self.samples.append((now, received))
+        return max(0, (received - previous) / (now - start)) if now > start else 0
+
+
+def transfer_state(state):
+    """Public progress snapshot, including a zero rate after a stalled transfer."""
+    result = state.copy()
+    sampled_at = result.pop("speed_sampled_at", 0)
+    result["speed_bps"] = (result.get("speed_bps", 0) if result.get("status") == "downloading"
+                           and monotonic() - sampled_at < 3 else 0)
+    return result
 
 
 class DownloadPaused(Exception):
@@ -28,14 +53,14 @@ def download_file(target, entry, url, event, client_factory, progress):
     if event.is_set():
         raise DownloadPaused()
     if target.is_file():
-        progress(status="verifying", received=entry["size"])
+        progress(status="verifying", received=entry["size"], speed_bps=0)
         verify_file(target, entry, event)
         return
     offset = part.stat().st_size if part.exists() else 0
     if offset > entry["size"]:
         part.unlink()
         offset = 0
-    progress(status="downloading", received=offset)
+    progress(status="downloading", received=offset, speed_bps=0)
     if offset < entry["size"]:
         with client_factory() as client:
             with client.stream("GET", url, headers={"Range": f"bytes={offset}-"} if offset else {}, follow_redirects=True) as response:
@@ -50,7 +75,8 @@ def download_file(target, entry, url, event, client_factory, progress):
                     raise ValueError(f"下载服务器返回 HTTP {response.status_code}")
                 if response.headers.get("content-length") and int(response.headers["content-length"]) != entry["size"] - offset:
                     raise ValueError("下载服务器返回的文件大小与下载目录不一致")
-                progress(resumed_from=offset)
+                rate = TransferRate(offset)
+                progress(received=offset, resumed_from=offset, speed_bps=0)
                 with part.open("ab" if offset else "wb") as stream:
                     for chunk in response.iter_bytes(chunk_size=262144):
                         if event.is_set():
@@ -59,8 +85,8 @@ def download_file(target, entry, url, event, client_factory, progress):
                             raise ValueError("下载数据超过文件大小")
                         stream.write(chunk)
                         offset += len(chunk)
-                        progress(received=offset)
-    progress(status="verifying")
+                        progress(received=offset, speed_bps=rate.sample(offset), speed_sampled_at=monotonic())
+    progress(status="verifying", speed_bps=0)
     verify_file(part, entry, event)
     if event.is_set():
         raise DownloadPaused()

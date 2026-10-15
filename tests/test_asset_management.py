@@ -368,12 +368,17 @@ def test_settings_multi_selection_search_and_buttons_keep_state_on_refresh(tmp_p
     qtbot.mouseClick(settings.delete_all, Qt.MouseButton.LeftButton)
     assert captured[0][1] == {"ids": [a["id"] for a in settings.visible_audio]}
     assert len(captured[0][1]["ids"]) == 1  # Search/category clearing never deletes hidden audio.
-    # Download progress updates retain the same action widget and current scroll position.
+    # Failed transfers move to the independent task area; refresh keeps its action widget.
     settings.pages.setCurrentIndex(0)
-    first = settings.catalog_table.cellWidget(0, 5)
+    identity = settings.visible_catalog[0]["id"]
     settings.model_data = deepcopy(models)
-    next(m for m in settings.model_data["catalog"] if m["id"] == settings.visible_catalog[0]["id"]).update(status="failed", error="具体失败原因")
+    next(m for m in settings.model_data["catalog"] if m["id"] == identity).update(status="failed", error="具体失败原因")
     settings.render_models()
-    assert settings.catalog_table.cellWidget(0, 5) is first
-    assert "具体失败原因" in settings.catalog_table.item(0, 4).toolTip()
+    assert settings.model_downloads.isVisible()
+    assert identity not in [m["id"] for m in settings.visible_catalog]
+    row = settings.downloads_table.record_ids.index(identity)
+    first = settings.downloads_table.cellWidget(row, 4)
+    settings.render_models()
+    assert settings.downloads_table.cellWidget(row, 4) is first
+    assert "具体失败原因" in settings.downloads_table.item(row, 3).toolTip()
     window.close()

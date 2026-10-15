@@ -285,7 +285,7 @@ class RecognitionController:
     def open_model_download(self, task=None):
         """Use the existing verified downloader, focused on this mode's models."""
         settings = self.owner.settings
-        settings.model_filter.setCurrentIndex(settings.model_filter.findData("stt"))
+        settings.model_filter.setCurrentIndex(settings.model_filter.findData("align" if task == "align" else "stt"))
         settings.model_search.setText({"asr": "qwen3_asr", "align": "qwen3_forced_aligner"}.get(task, ""))
         self.owner.set_page(3)
         settings.set_section(0)

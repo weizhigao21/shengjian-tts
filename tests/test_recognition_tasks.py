@@ -101,7 +101,7 @@ def test_model_download_buttons_stay_available_and_open_the_matching_catalog(pag
     button.click()
     assert window.tabs.currentIndex() == 3
     assert window.settings.pages.currentIndex() == 0
-    assert window.settings.model_filter.currentData() == 'stt'
+    assert window.settings.model_filter.currentData() == ('align' if task == 'align' else 'stt')
     assert window.settings.model_search.text() == search
 
 
@@ -269,7 +269,7 @@ def test_aligner_can_be_downloaded_and_becomes_selectable_without_creating_a_voi
         window.timer.stop(); window.settings.timer.stop(); window.document_timer.stop()
         panel = window.settings
         panel.model_data = manager.models.listing()
-        panel.model_filter.setCurrentIndex(panel.model_filter.findData('stt'))
+        panel.model_filter.setCurrentIndex(panel.model_filter.findData('align'))
         panel.model_search.setText('qwen3_forced_aligner')
         panel.render_models()
         assert panel.catalog_table.rowCount() == 1

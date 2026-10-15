@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.39 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.40 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -61,6 +61,8 @@ v0.7.37 新增 `speech_recognition/`：`runner.py` 在一个统一引擎进程�
 v0.7.38 将识别的启动检查、状态提交与失败回滚放入管理器锁，`require_idle_engine` 供识别和 AI 编辑双向复用；耗时的音频解码在锁外完成，入库前再次检查占用。`audio_import.py` 调用独立的 `decode-audio` 服务入口，`decode_worker.py` 在子进程主线程运行 Qt 解码器，后端导入仍不加载 Qt。界面按会话与分行内容增量刷新，保留本地名称 / 语言编辑与播放状态。
 
 v0.7.39 的 `recent_works.py` 只读汇总四类创作任务，供 HTTP 与桌面启动共用。外部任务使用带模式前缀的列表 ID，导航时用 `source_id` 访问独立模式 API，原作品接口与工作流过滤不变。识别控制器在发起导入请求前创建临时显示状态，成功替换、失败回滚；导航序号阻止迟到响应覆盖已切换的任务。模型入口复用设置页下载器与原文件校验。
+
+v0.7.40 将模型目录分类放入 `desktop/settings/model_categories.py`，下载任务展示与操作放入 `model_transfers.py`，页面装配仍由 `models.py` 负责。`downloads.py` 统一计算本次传输的近期速度，下载状态快照清除过期速度；`model_management.py` 以 `speed_bps` / `update_speed_bps` 提供下载与更新速率。分类不影响独立任务区域，完成后移除展示，不改变文件校验与续传路径。
 
 ## 验证
 

@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import (
 )
 from ...ui import ElidedLabel, ModelDescriptionDelegate, button, label
 from .common import size_text, publication_text, DOWNLOAD_STATES
+from .model_categories import ModelCategories, adapted_model, included_model
+from .model_transfers import ModelTransfers
 
 
 def recognition_usage(model):
@@ -13,11 +15,7 @@ def recognition_usage(model):
     return " / ".join(purposes)
 
 
-def adapted_model(model):
-    return bool(model.get("adapted", True) or model.get("edit_adapted") or recognition_usage(model))
-
-
-class ModelSettings:
+class ModelSettings(ModelTransfers):
     def _models_page(self):
         self.models_scroll, layout = self.scroll_page("modelManagementContent")
         self.engine_panel = self._engine_panel()
@@ -44,6 +42,7 @@ class ModelSettings:
         self.model_scan_button = button("扫描支持模型", self.scan_models, "retry", "ghost")
         scan_head.addWidget(self.model_scan_button)
         layout.addLayout(scan_head)
+        layout.addWidget(self._model_downloads_area())
         installed_head = QHBoxLayout()
         self.installed_label = label("已下载 · 正在读取", "hint")
         installed_head.addWidget(self.installed_label)
@@ -66,18 +65,15 @@ class ModelSettings:
         self.catalog_label = label("可下载 · 正在读取", "hint")
         available_head.addWidget(self.catalog_label)
         available_head.addStretch()
-        self.model_filter = QComboBox()
-        for title, value in (("全部模型", "all"), ("已适配", "adapted"), ("语音生成", "tts"), ("音频编辑 / 换声", "edit"), ("语音识别 / 对齐", "stt"), ("其他音频模型", "other")):
-            self.model_filter.addItem(title, value)
-        self.model_filter.setMaximumWidth(155)
-        self.model_filter.currentIndexChanged.connect(self.render_models)
-        available_head.addWidget(self.model_filter)
+        self.model_filter = ModelCategories()
+        self.model_filter.currentChanged.connect(self.render_models)
         self.model_search = QLineEdit()
         self.model_search.setPlaceholderText("搜索名称、精度或用途")
         self.model_search.setMaximumWidth(240)
         self.model_search.textChanged.connect(self.render_models)
         available_head.addWidget(self.model_search)
         layout.addLayout(available_head)
+        layout.addWidget(self.model_filter)
         self.catalog_table = self.table(("模型 / 功能", "精度", "文件大小", "发布时间", "状态", "操作"), whole_page=True)
         self.catalog_table.setItemDelegateForColumn(0, ModelDescriptionDelegate(self.catalog_table))
         self.catalog_table.horizontalHeader().hide()
@@ -101,15 +97,9 @@ class ModelSettings:
         matches = lambda m: not text or text in " ".join(str(m.get(k, "")) for k in ("name", "description", "precision", "family")).casefold()
         installed = [m for m in self.model_data["installed"] if matches(m)]
         choice = self.model_filter.currentData()
-        speech = {"tts", "clone", "design", "vdes"}
-        recognition = {"stt", "asr", "align", "forced_align"}
-        def included(m):
-            tasks = set(m.get("tasks", ["tts"] if m.get("adapted", True) else []))
-            return (choice == "all" or choice == "adapted" and adapted_model(m) or
-                    choice == "tts" and bool(tasks & speech) or choice == "stt" and bool(tasks & recognition) or
-                    choice == "edit" and bool(tasks & {"edit", "vc", "svc", "s2s"}) or
-                    choice == "other" and not bool(tasks & (speech | recognition)))
-        catalog = [m for m in self.model_data["catalog"] if matches(m) and not m["installed"] and included(m)]
+        downloading = self.render_model_downloads()
+        catalog = [m for m in self.model_data["catalog"] if matches(m) and not m["installed"]
+                   and m["id"] not in downloading and included_model(m, choice)]
         scan = self.model_data.get("scan", {})
         scanning = scan.get("scanning", False)
         self.model_scan_button.setEnabled(not scanning)
@@ -205,7 +195,7 @@ class ModelSettings:
         from ...model_scan import TASK_NAMES
         families = (self.model_data or {}).get("scan", {}).get("families", [])
         states = {"supported": "已支持", "community": "社区支持", "experimental": "实验性", "testing": "测试中", "wip": "开发中"}
-        rows = ["当前引擎随附的模型声明；‘已适配’筛选中的模型可用于配音。其他单文件 GGUF 可下载保存，多文件包暂不支持自动安装。"]
+        rows = ["当前引擎随附的模型声明；‘已适配’中的模型可在对应创作模式使用。其他单文件 GGUF 可下载保存，多文件包暂不支持自动安装。"]
         for f in families:
             tasks = "、".join(dict.fromkeys(TASK_NAMES.get(t, t) for t in f["tasks"]))
             rows.append(f"{f['name']} · {tasks or '音频处理'} · {states.get(f['status'], f['status'])} ({f['family']})")

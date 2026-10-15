@@ -30,7 +30,7 @@ v0.7.33 起，Windows 完整包提供独立的 `声笺更新器.exe`。在「设
 运行 `打包.bat`，同时构建 GUI / 服务和独立的一文件更新器。构建目录内生成 `program-files.json`，记录版本与每个程序文件的 SHA-256，随后输出：
 
 ```text
-dist/shengjian-v0.7.39-windows-x64.zip
+dist/shengjian-v0.7.40-windows-x64.zip
 dist/SHA256SUMS.txt
 dist/声笺/声笺.exe
 dist/声笺/声笺服务.exe

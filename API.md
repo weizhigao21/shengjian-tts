@@ -84,6 +84,8 @@
 
 `installed` 的模型记录提供 `catalog_id`、`revision`、`new_revision`、`update_available`、`update_status`、`can_rollback`。新版保存在 `models/versions/<摘要前缀>/`，校验包内模型能力后更新预设路径；旧文件保留，历史任务的旧路径仍可使用。回退需要旧文件仍存在，生成或下载期间拒绝回退。
 
+`GET /models` 的 `catalog` 条目增加 `speed_bps`（字节 / 秒），模型更新的已安装条目提供 `update_speed_bps`。它们按本次下载实际传输的字节计算，断点续传的已有文件不计入；暂停、校验、完成或停滞三秒后为零。下载状态仍使用原 `status` / `received` 与暂停、下载、更新接口，界面据此构建独立任务区域。
+
 ## 语音识别
 
 侧栏使用 `GET /recent-works` 汇总各模式。文章 / 对话保留原作品 ID；音频编辑与识别摘要分别使用 `audio:<id>`、`recognition:<id>` 作为列表 ID，并通过 `source_id` 返回原 ID、`task_type` 返回模式。外部任务的详情仍从 `/audio-editor/projects/{source_id}` 或 `/recognition/sessions/{source_id}` 读取。汇总只读现有数据库，不迁移或合并数据库，不返回工作流临时记录；原 `/jobs` 结构不变。

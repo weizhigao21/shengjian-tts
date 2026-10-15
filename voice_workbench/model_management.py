@@ -15,7 +15,7 @@ import httpx
 
 from .config import atomic_json
 from .errors import VoiceError
-from .downloads import DownloadPaused, download_file, verify_file
+from .downloads import DownloadPaused, download_file, verify_file, transfer_state
 from .model_info import model_ui
 from .model_updates import fetch_model_updates
 from .model_scan import ModelScanner, TASK_NAMES
@@ -176,7 +176,7 @@ class ModelManager:
             entry = self.catalog.get(file_version.get("catalog_id"), {}) or next((e for e in self.catalog.values() if Path(e.get("remotePath", "")).name == path.name and e.get("remotePath") and e["family"] == voice.get("family")), {})
             update = self.updates.get(entry.get("id"), {})
             update_available = bool(update and update["sha256"] != file_version.get("sha256", entry.get("sha256")))
-            state = self.downloads.get(entry.get("id"), {}) if self.downloads.get(entry.get("id"), {}).get("update") else {}
+            state = transfer_state(self.downloads.get(entry.get("id"), {})) if self.downloads.get(entry.get("id"), {}).get("update") else {}
             try:
                 size = path.stat().st_size if path.is_file() else 0
             except OSError:
@@ -190,6 +190,7 @@ class ModelManager:
                 "description": model_description(entry or voice), "update_available": update_available,
                 **installed_publication(update or entry, file_version),
                 "update_status": state.get("status"), "update_received": state.get("received", 0),
+                "update_speed_bps": state.get("speed_bps", 0),
                 "update_error": state.get("error", ""), "update_size": update.get("size", 0),
                 "revision": file_version.get("revision", entry.get("revision") or REVISION) if entry else "",
                 "new_revision": update.get("revision", ""), "can_rollback": bool(file_version.get("previous_path") and Path(file_version["previous_path"]).is_file())}
@@ -249,7 +250,7 @@ class ModelManager:
                     state = {"status": "available", "received": 0}
                 effective = self.updates.get(identity, entry)
                 adapted = effective.get("adapted", effective.get("family") in FAMILIES)
-                available.append({**effective, **publication_metadata(effective), "description": model_description(effective), **state,
+                available.append({**effective, **publication_metadata(effective), "description": model_description(effective), **transfer_state(state),
                                   "installed": identity in present, "adapted": adapted,
                                   "edit_adapted": effective["family"] == "vevo2" and effective.get("single_file", True),
                                   "recognition_adapted": "asr" in (effective.get("tasks") or []) and effective.get("single_file", True),
