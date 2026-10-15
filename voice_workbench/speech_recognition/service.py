@@ -11,6 +11,7 @@ from ..errors import VoiceError
 from .audio_import import import_wave
 from .lines import build_lines, extract_units, fallback_lines
 from .runner import RecognitionRunner
+from .languages import ALIGN_LANGUAGES, alignment_language
 from .store import RecognitionStore
 
 # Formats the native reader and the Qt player both accept.
@@ -203,14 +204,27 @@ class SpeechRecognizer:
             transcript = self.runner.transcribe(voices, audio, state.get("language", "auto"), cancelled)
             if cancelled.is_set():
                 raise VoiceError("CANCELLED", "识别已取消")
-            text = str(transcript.get("text", "")).strip()
+            text = str(transcript.get("text") or "").strip()
+            language = alignment_language(state.get("language"), transcript.get("language"))
             warning = ""
             units = []
-            if align_voice:
-                payload = self.runner.align(voices, audio, text, state.get("language", "auto"), cancelled)
-                units = extract_units(payload)
-                if not units:
-                    warning = "对齐器没有返回时间点，已按标点估算每行时间；建议改用更短的音频重试。"
+            if not text:
+                warning = "未识别到文字，可能是静音或没有清晰语音；请检查音频后重试。"
+            elif align_voice:
+                if not language:
+                    warning = "已识别文字，但引擎未返回语言，已按标点估算时间；请选择音频语言后重新识别以获得精确时间。"
+                elif language not in ALIGN_LANGUAGES:
+                    warning = f"已识别文字，但对齐器不支持语言 {language}，已按标点估算每行时间。"
+                else:
+                    try:
+                        payload = self.runner.align(voices, audio, text, language, cancelled)
+                        units = extract_units(payload)
+                        if not units:
+                            warning = "对齐器没有返回时间点，已按标点估算每行时间；建议改用更短的音频重试。"
+                    except Exception as exc:
+                        if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
+                            raise
+                        warning = "文字识别已完成，时间对齐失败，已按标点估算每行时间：" + str(exc)[:500]
             else:
                 warning = "未安装强制对齐器，每行时间按标点估算；安装 Qwen3 对齐器后可精确到词。"
             lines = (build_lines(units, state.get("duration"), text=text) if units
@@ -219,7 +233,7 @@ class SpeechRecognizer:
                 raise VoiceError("CANCELLED", "识别已取消")
             outcome = {"status": "done", "error": None, "text": text, "lines": lines,
                        "warning": warning, "processing_seconds": time.perf_counter() - started,
-                       "recognized_language": transcript.get("language"),
+                       "recognized_language": language,
                        "timing": transcript.get("timing")}
         except Exception as exc:
             from ..errors import describe_error

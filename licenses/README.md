@@ -1,9 +1,9 @@
 # 分发依赖与许可证
 
-声笺源代码使用 [GPLv3](../LICENSE)。下表记录 v0.7.40 发行包的构建环境，
+声笺源代码使用 [GPLv3](../LICENSE)。下表记录 v0.7.41 发行包的构建环境，
 包含运行依赖与构建工具；后者不一定进入 EXE。许可文本从该版本已安装的分发包原样复制。
 
-- 对应源代码：[声笺仓库](https://github.com/weizhigao21/shengjian-tts)，当前 v0.7.40 本地包尚未发布；公开发行页提供 v0.7.28 源码 ZIP。
+- 对应源代码：[声笺仓库](https://github.com/weizhigao21/shengjian-tts)，当前 v0.7.41 本地包尚未发布；公开发行页提供 v0.7.28 源码 ZIP。
 - 可复建环境：[requirements-release.txt](../requirements-release.txt)，构建入口 `打包.bat` 与 `声笺.spec`。
 - CPython 3.10.11：[完整声明](Python-LICENSE.txt)、[源代码](https://www.python.org/downloads/release/python-31011/)。
 - Qt 6.11.2：LGPLv3，动态链接；来源为 PyQt6-Qt6 wheel，

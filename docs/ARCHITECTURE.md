@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.40 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.41 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -63,6 +63,8 @@ v0.7.38 将识别的启动检查、状态提交与失败回滚放入管理器锁
 v0.7.39 的 `recent_works.py` 只读汇总四类创作任务，供 HTTP 与桌面启动共用。外部任务使用带模式前缀的列表 ID，导航时用 `source_id` 访问独立模式 API，原作品接口与工作流过滤不变。识别控制器在发起导入请求前创建临时显示状态，成功替换、失败回滚；导航序号阻止迟到响应覆盖已切换的任务。模型入口复用设置页下载器与原文件校验。
 
 v0.7.40 将模型目录分类放入 `desktop/settings/model_categories.py`，下载任务展示与操作放入 `model_transfers.py`，页面装配仍由 `models.py` 负责。`downloads.py` 统一计算本次传输的近期速度，下载状态快照清除过期速度；`model_management.py` 以 `speed_bps` / `update_speed_bps` 提供下载与更新速率。分类不影响独立任务区域，完成后移除展示，不改变文件校验与续传路径。
+
+v0.7.41 的识别适配优先使用通用任务接口保留语言，路由不可用时回退简化转写接口；两种通用任务复用临时 ASCII 音频路径。`speech_recognition/languages.py` 管理语言名称与对齐能力，服务层在自动识别后解析具体语言，跳过空结果 / 无效语言的对齐请求，并在对齐失败时保留文字与估算行时间。取消优先于降级结果。
 
 ## 验证
 

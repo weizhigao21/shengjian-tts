@@ -2,8 +2,8 @@
 
 Mirrors the audio-editor adapter: reuse :class:`AudioCppRunner`'s process and
 native-path handling, but declare both recognition models in one engine config so
-a single process serves the ASR and the aligner in sequence. Audio travels in the
-request body (multipart), so Unicode user paths never reach the native reader.
+a single process serves the ASR and the aligner in sequence. Generic task requests
+use short-lived ASCII audio paths; multipart compatibility routes upload audio.
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from ..config import atomic_json
 from ..errors import VoiceError
 from ..native_paths import NativePaths
 from ..runtime import external_environment
+from .languages import native_language
 
 # Try the OpenAI-style alignment route first; fall back to the generic task route.
 ALIGN_ENDPOINTS = ("/v1/audio/alignments", "/v1/tasks/run")
@@ -100,14 +101,18 @@ class RecognitionRunner(AudioCppRunner):
     def transcribe(self, voices, audio, language, cancelled, timeout=900):
         """Return the engine's transcript payload for one audio file."""
         _, endpoint = self.start(voices, cancelled)
-        fields = {"model": "asr"}
-        if language and language != "auto":
-            fields["language"] = language
         try:
-            with open(audio, "rb") as handle:
-                files = {"file": (Path(audio).name, handle, "audio/wav")}
-                with httpx.Client(trust_env=False, timeout=timeout) as client:
-                    response = client.post(endpoint + "/v1/audio/transcriptions", files=files, data=fields)
+            with httpx.Client(trust_env=False, timeout=timeout) as client:
+                # v0.9.1's transcription route strips detected language, even with
+                # verbose_json. The generic route retains the complete transcript.
+                response = self._task(client, endpoint, "asr", audio, language=language)
+                if response.status_code in (404, 405, 501):
+                    fields = {"model": "asr", "response_format": "verbose_json"}
+                    if native_language(language):
+                        fields["language"] = native_language(language)
+                    with open(audio, "rb") as handle:
+                        files = {"file": (Path(audio).name, handle, "audio/wav")}
+                        response = client.post(endpoint + "/v1/audio/transcriptions", files=files, data=fields)
             return self._payload(response, "识别")
         except httpx.TimeoutException as exc:
             self.interrupt()
@@ -119,13 +124,15 @@ class RecognitionRunner(AudioCppRunner):
         The aligner is reachable two ways; both were confirmed against the engine:
         ``/v1/audio/alignments`` (OpenAI-style multipart, preferred) and
         ``/v1/tasks/run`` with ``request`` carrying ``audio``/``text``/``language``.
+        Both routes require a concrete transcript language, never ``auto``.
         The returned word times must be read from ``start_sample``/``end_sample``;
         see ``lines.ALIGNER_SAMPLE_RATE``.
         """
+        language = native_language(language)
+        if not text.strip() or not language:
+            raise VoiceError("ALIGN_INPUT_MISSING", "精确对齐需要非空原文和明确的识别语言", stage="字幕对齐")
         _, endpoint = self.start(voices, cancelled)
-        fields = {"model": "align", "text": text}
-        if language and language != "auto":
-            fields["language"] = language
+        fields = {"model": "align", "text": text, "language": language}
         last = ""
         try:
             for position, route in enumerate(ALIGN_ENDPOINTS):
@@ -135,18 +142,7 @@ class RecognitionRunner(AudioCppRunner):
                             files = {"file": (Path(audio).name, handle, "audio/wav")}
                             response = client.post(endpoint + route, files=files, data=fields)
                     else:
-                        # The native reader needs an ASCII path; the audio copy may live
-                        # under a Unicode data directory.
-                        with tempfile.TemporaryDirectory(prefix="shengjian-align-") as folder:
-                            if not folder.isascii():
-                                raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符",
-                                                 "设置 TMP 为可写的英文路径后重启程序。", "字幕对齐")
-                            staged = Path(folder) / (Path(audio).name if Path(audio).name.isascii() else "align-input.wav")
-                            shutil.copyfile(audio, staged)
-                            request = {"audio": str(staged), "text": text}
-                            if language and language != "auto":
-                                request["language"] = language
-                            response = client.post(endpoint + route, json={"model": "align", "request": request})
+                        response = self._task(client, endpoint, "align", audio, text=text, language=language)
                 if response.status_code == 200:
                     return response.json()
                 last = response.text[:2000]
@@ -157,6 +153,23 @@ class RecognitionRunner(AudioCppRunner):
         except httpx.TimeoutException as exc:
             self.interrupt()
             raise VoiceError("INFERENCE_TIMEOUT", f"对齐超过 {timeout} 秒", "缩短音频后重试。", "字幕对齐") from exc
+
+    @staticmethod
+    def _task(client, endpoint, model, audio, *, text=None, language=None):
+        # Native readers cannot open Unicode paths. This short-lived audio copy is
+        # independent of user files and is removed after the synchronous response.
+        with tempfile.TemporaryDirectory(prefix="shengjian-recognition-") as folder:
+            if not folder.isascii():
+                raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符",
+                                 "设置 TMP 为可写的英文路径后重启程序。", "语音识别")
+            staged = Path(folder) / "input.wav"
+            shutil.copyfile(audio, staged)
+            request = {"audio": str(staged)}
+            if text is not None:
+                request["text"] = text
+            if native_language(language):
+                request["language"] = native_language(language)
+            return client.post(endpoint + "/v1/tasks/run", json={"model": model, "request": request})
 
     @staticmethod
     def _payload(response, stage):

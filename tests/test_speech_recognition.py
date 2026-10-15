@@ -508,7 +508,7 @@ def test_recognition_engine_serves_both_models_from_ascii_paths(tmp_path, monkey
         body = seen['body']
         assert body['model'] == 'align'
         assert body['request']['text'] == '你好，世界'
-        assert body['request']['language'] == 'zh'
+        assert body['request']['language'] == 'Chinese'
         assert body['request']['audio'].isascii() and 'options' not in body['request']
     finally:
         runner.interrupt()          # also releases the ASCII aliases it hard-linked
