@@ -21,7 +21,7 @@ else:
 
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt")
 DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md", "docs/MODEL_DISCOVERY.md",
-                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md")
+                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md", "docs/SPEECH_RECOGNITION.md")
 DOCUMENTATION_LICENSES = tuple(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "licenses").rglob("*"))
                               if path.is_file() and not path.is_symlink())
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (

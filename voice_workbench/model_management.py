@@ -29,8 +29,14 @@ FAMILIES = {"index_tts2", "voxcpm2", "kokoro_tts", "qwen3_tts"}
 
 def model_description(entry):
     family = entry.get("family")
+    tasks = entry.get("tasks") or []
     if family == "vevo2":
         return "音频编辑模式：换声、修改台词；支持中文和英语，使用参考 WAV。"
+    if "asr" in tasks:
+        return ("语音识别模式：拖入音频自动转写文字，按标点断行；"
+                "支持中文、方言和英语等，识别结果可点击播放对应片段。")
+    if "align" in tasks:
+        return "语音识别模式：为文字和音频给出精确的词级时间戳，让每行文字对应到准确的音频范围。"
     if family == "kokoro_tts":
         return "轻量语音模型，使用内置音色；不支持声音克隆或文本设计音色。"
     if family == "index_tts2":
@@ -62,6 +68,15 @@ def download_url(entry, source):
 
 def path_identity(path):
     return os.path.normcase(str(Path(path).resolve()))
+
+
+def declared_tasks(runtime, family):
+    """Tasks the installed engine declares for a family, read from its model_specs."""
+    try:
+        spec = json.loads((Path(runtime or "").parent / "model_specs" / f"{family}.json").read_text(encoding="utf-8"))
+        return [task for task in spec.get("tasks", []) if isinstance(task, str)]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return []
 
 
 class ModelManager:
@@ -171,7 +186,7 @@ class ModelManager:
                 "path": str(path), "size": size, "is_directory": path.is_dir(),
                 "exists": path.exists(), "managed": path.is_relative_to(self.root.resolve()),
                 "can_delete_file": voice["backend"] == "audio_cpp" and path.suffix.lower() == ".gguf",
-                "preset_count": int(not template), "catalog_id": entry.get("id"),
+                "preset_count": int(not template), "catalog_id": entry.get("id"), "tasks": entry.get("tasks", []),
                 "description": model_description(entry or voice), "update_available": update_available,
                 **installed_publication(update or entry, file_version),
                 "update_status": state.get("status"), "update_received": state.get("received", 0),
@@ -190,6 +205,7 @@ class ModelManager:
                 "precision": entry["precision"], "family": entry["family"], "path": str(path), "size": path.stat().st_size,
                 "is_directory": False, "exists": True, "managed": True, "can_delete_file": True, "preset_count": 0,
                 "catalog_id": entry["id"], "description": model_description(entry), "adapted": False,
+                "tasks": entry.get("tasks", []),
                 "update_available": False, "update_status": None, "revision": metadata.get("revision", ""),
                 "can_rollback": False}
             models[identity].update(installed_publication(entry, metadata))
@@ -201,8 +217,23 @@ class ModelManager:
                     "is_directory": False, "exists": True, "managed": False, "can_delete_file": False,
                     "preset_count": 0, "catalog_id": None, "description": model_description({"family": "vevo2"}),
                     "adapted": False, "update_available": False, "update_status": None, "revision": "", "can_rollback": False}
+        for identity, entry in value.get("recognition_models", {}).items():
+            path = Path(entry["path"])
+            if identity in models or not path.is_file() or identity in value.get("removed_models", []):
+                continue
+            tasks = entry.get("tasks") or declared_tasks(self.runtime(), entry.get("family", ""))
+            models[identity] = {"id": hashlib.sha256(identity.encode()).hexdigest()[:24], "name": entry.get("name", path.stem),
+                "precision": "本地", "family": entry.get("family"), "tasks": tasks, "path": str(path),
+                "size": path.stat().st_size, "is_directory": False, "exists": True, "managed": False,
+                "can_delete_file": False, "preset_count": 0, "catalog_id": None,
+                "description": model_description({"family": entry.get("family"), "tasks": tasks}),
+                "adapted": False, "update_available": False, "update_status": None, "revision": "", "can_rollback": False}
         for entry in models.values():
             entry["edit_adapted"] = entry["family"] == "vevo2"
+            # Engine-declared recognition/alignment families feed the recognition mode
+            # directly; they need no voice preset, mirroring the Vevo2 arrangement.
+            entry["recognition_adapted"] = "asr" in (entry.get("tasks") or [])
+            entry["align_adapted"] = "align" in (entry.get("tasks") or [])
         return list(models.values())
 
     def listing(self):
@@ -221,6 +252,8 @@ class ModelManager:
                 available.append({**effective, **publication_metadata(effective), "description": model_description(effective), **state,
                                   "installed": identity in present, "adapted": adapted,
                                   "edit_adapted": effective["family"] == "vevo2" and effective.get("single_file", True),
+                                  "recognition_adapted": "asr" in (effective.get("tasks") or []) and effective.get("single_file", True),
+                                  "align_adapted": "align" in (effective.get("tasks") or []) and effective.get("single_file", True),
                                   "downloadable": bool(entry.get("remotePath")) and effective.get("single_file", True)})
         return {"installed": installed, "catalog": available, "runtime": self.runtime(), "engine": self.engines.listing(),
                 "update_checked": self.update_checked, "update_error": self.update_error,
@@ -248,6 +281,10 @@ class ModelManager:
         if actual == "vevo2" and family in (None, "vevo2"):
             self.manager.audio_editor.import_model(path)
             return {"family": "vevo2", "path": str(path), "edit_adapted": True}
+        tasks = declared_tasks(self.runtime(), actual)
+        if actual not in FAMILIES and ("asr" in tasks or "align" in tasks):
+            # Recognition models serve the recognition mode only; no voice preset.
+            return self.register_recognition(path, actual, tasks)
         if actual not in FAMILIES or (family and family != actual):
             raise VoiceError("MODEL_FAMILY_MISMATCH", "模型内嵌配置不属于支持的语音模型家族", stage="模型导入")
         voice = VoiceConfig(id="imported-model", name="默认模型设置", backend="audio_cpp", python=sys.executable,
@@ -267,6 +304,20 @@ class ModelManager:
             value["removed_models"] = [p for p in value.get("removed_models", []) if p != path_identity(path)]
             atomic_json(self.config.path, value)
         return next(m for m in self.installed() if path_identity(m["path"]) == path_identity(path))
+
+    def register_recognition(self, path, family, tasks):
+        """Register an ASR or aligner GGUF for the recognition mode; no voice preset is made."""
+        path = Path(path).resolve()
+        identity = path_identity(path)
+        with self.manager.lock, self.config.lock:
+            if self.manager.stopping.is_set():
+                raise VoiceError("SERVICE_STOPPING", "服务正在停止，模型文件已保留，重启后可重新添加", stage="模型导入")
+            value = self.config.read()
+            value.setdefault("recognition_models", {})[identity] = {
+                "path": str(path), "name": path.stem, "family": family, "tasks": tasks}
+            value["removed_models"] = [p for p in value.get("removed_models", []) if p != identity]
+            atomic_json(self.config.path, value)
+        return next(m for m in self.installed() if path_identity(m["path"]) == identity)
 
     def remove(self, identity, delete_file=False):
         with self.manager.lock, self.config.lock:
@@ -295,6 +346,7 @@ class ModelManager:
             for group in ("voices", "model_templates"):
                 value[group] = [v for v in value.get(group, []) if not v.get("model_dir") or path_identity(v["model_dir"]) != target]
             value.get("audio_edit_models", {}).pop(target, None)
+            value.get("recognition_models", {}).pop(target, None)
             value["removed_models"] = sorted(set(value.get("removed_models", [])) | {target})
             if delete_file:
                 value.get("model_file_versions", {}).pop(target, None)

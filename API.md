@@ -44,6 +44,12 @@
 | `GET /audio-editor/projects/{id}`、`PATCH /audio-editor/projects/{id}` | 编辑版本列表、保存名称 / 台词 / 当前版本 |
 | `POST /audio-editor/projects/{id}/process`、`POST /audio-editor/projects/{id}/cancel` | 后台音频处理（202）、取消处理 |
 | `GET /audio-editor/audio/{filename}` | 读取管理目录内的编辑版本 WAV |
+| `GET /recognition/options`、`POST /recognition/selection` | 识别可用的 ASR / 对齐器模型、引擎与语言；保存默认选择 |
+| `GET /recognition/sessions`、`POST /recognition/sessions` | 识别记录列表、导入音频并开始识别（返回 201） |
+| `GET /recognition/sessions/{id}`、`PATCH /recognition/sessions/{id}` | 识别状态、文本与分行；保存名称 |
+| `POST /recognition/sessions/{id}/retry`、`POST /recognition/sessions/{id}/cancel` | 重新识别、取消当前识别 |
+| `DELETE /recognition/sessions/{id}` | 删除识别记录及其音频副本 |
+| `GET /recognition/audio/{filename}` | 读取管理目录内的识别音频 |
 | `GET /models`、`POST /models/import` | 模型目录、下载状态、导入 GGUF |
 | `POST /models/scan` | 后台扫描当前引擎声明及官方 GGUF 目录，返回 202；使用 `source` 字段 |
 | `POST /models/{id}/download`、`POST /models/{id}/pause`、`POST /models/{id}/remove` | 下载、暂停、移除模型 |
@@ -76,6 +82,26 @@
 `engine.options` 包含 `installed_version`、`recommended_version`、`update_available`、`can_rollback`，安装状态包含 `target_version` 与 `upgrade`。升级下载、校验和启动检查完成后显示 `waiting`，当前生成结束才切换；暂停等待启用后，可继续安装，重启后也可启用已安装的新引擎。
 
 `installed` 的模型记录提供 `catalog_id`、`revision`、`new_revision`、`update_available`、`update_status`、`can_rollback`。新版保存在 `models/versions/<摘要前缀>/`，校验包内模型能力后更新预设路径；旧文件保留，历史任务的旧路径仍可使用。回退需要旧文件仍存在，生成或下载期间拒绝回退。
+
+## 语音识别
+
+识别复用统一引擎：`GET /recognition/options` 按引擎的 `model_specs` 任务声明把已安装模型分为 `asr` 与 `align` 两组，并返回 `runtime`、`selection`、`languages` 和当前是否 `active`。`POST /recognition/selection` 的全部字段可选，只覆盖传入项，`asr_model` / `align_model` 已不存在的路径会被剔除。
+
+```json
+{
+  "path": "本机音频路径",
+  "name": "显示名称",
+  "language": "zh"
+}
+```
+
+`POST /recognition/sessions` 复制音频到数据目录并返回 201 与会话 ID；未选择或缺少 ASR 模型时返回 400，格式或路径无效时返回 400。会话状态为 `queued` / `running` / `done` / `failed` / `cancelled`，`done` 时包含 `text`、`lines`、`duration`、`warning`、`recognized_language`、`timing` 和 `audio_url`。
+
+`lines` 每项含 `index`（从 1 开始）、`start`、`end`（秒，相对音频开头）与 `text`，可直接用于点击播放；时间戳来自引擎的 16 kHz 采样帧号换算，分行按句末、从句、长度、时长与停顿综合判断。未安装强制对齐器时按标点估算每行时间，并通过 `warning` 说明。`language` 可取 `auto` 或 `recognition/options` 中给出的代码。
+
+识别与音频编辑共用管理器的推理互斥，`GET /health` 的 `recognition` 字段显示当前会话 ID；识别期间 `POST /engine/release` 和 `PUT /models/runtime` 返回 400。删除会话会同时删除该音频副本，重新识别沿用同一会话并覆盖上一次结果。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)。
+
+语音识别导入时，PCM WAV 保存独立副本，其他支持格式转换为私有 PCM WAV。推理引擎被配音、识别或 AI 编辑占用时拒绝新识别，返回 400，不留下等待记录或音频副本；重试被拒绝时保留原状态。成功提交固定本次模型与语言，取消旧版残留的等待记录会将其标记为已取消。
 
 ## 生成与工作流
 

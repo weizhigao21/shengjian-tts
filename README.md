@@ -6,10 +6,10 @@
 
 **让文字拥有声音，让配音融入你的工作流。**
 
-本地语音生成 · 多角色对话 · 音频编辑 · 双语工作流联动
+本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.36-E87936?style=flat-square" alt="源码版本 v0.7.36" />
+  <img src="https://img.shields.io/badge/源码-v0.7.38-E87936?style=flat-square" alt="源码版本 v0.7.38" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.36。** 高级设置新增参数预设，支持命名保存、选择套用、更新、重命名和删除。按模型筛选，仅保存生成参数，不改变音色和参考声音。详见[更新记录](CHANGELOG.md)。程序内检查、下载与安装重启见[程序更新说明](docs/APP_UPDATES.md)，WAV 处理及 Vevo2 适配见[音频编辑说明](docs/AUDIO_EDITING.md)。
+**当前源码：v0.7.38。** 修复语音识别的重复重试、忙碌状态回滚、与 AI 音频编辑互斥、后台刷新播放和语言保存问题。非 WAV 音频使用随程序打包的解码器，支持 MP3 / M4A / FLAC 等常见格式。使用方式见[语音识别说明](docs/SPEECH_RECOGNITION.md)，详见[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.36 的本地构建包尚未上传发行页。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.38 的本地构建包尚未上传发行页。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
@@ -41,6 +41,7 @@
 | **IndexTTS 情绪控制** | 2.0 / 2.5 支持跟随音色、参考演绎、情绪调节和文字引导，提供 12 个预设、八维微调与强度设置。 |
 | **多角色对话** | 输入 `@` 选择音色，为每框命名角色、调整参数并单独生成；选中框后，播放器和历史列表只显示它的音频。 |
 | **音频编辑** | 导入 PCM WAV 或打开生成记录，拖动选区、裁剪 / 拼接 / 调整音量，保留各次版本；可接入 Vevo2 换声和台词修改。 |
+| **语音识别** | 拖入音频自动转写文字，按标点分行并给出每行时间范围；点击任意一行播放对应片段，结果可导出 SRT / TXT。 |
 | **声音库** | 保存声音预设、导入参考音频；在生成记录列表或音频管理中右键，把生成音频保存为参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
 | **模型与引擎** | 自动扫描引擎模型、补全下载目录，按用途筛选；支持校验、更新、回退及 CPU / NVIDIA CUDA。 |
@@ -123,6 +124,7 @@
 | :--- | :--- |
 | **文章** | 输入长文或导入 TXT / LRC / SRT / VTT，在右侧统一配置声音与参数，点击「开始生成」。 |
 | **对话** | 输入 `@` 选择已保存的音色预设，自动创建对白框；Enter 新增下一条，Shift+Enter 换行。点击对白框调整它的参数，逐条生成或整批生成。 |
+| **语音识别** | 拖入音频或点击「导入音频」，选择识别模型与语言后开始识别；完成后点击左侧任一行播放该行音频，可勾选连续播放或导出字幕。 |
 
 文章 / 对话在创建后固定。对白左上角可填写角色名称；命名后隐藏短 ID，悬停约 1.2 秒可查看完整 ID、音色、模型与音频数量。修改名字保留原 ID 和历史音频，修改文本或参数后可点击回转箭头重新生成。
 
@@ -290,6 +292,7 @@ flowchart LR
 │  │  │  ├─ documents.py          作品列表、编辑、保存与导航
 │  │  │  ├─ generation.py         生成提交与模型参数交互
 │  │  │  ├─ playback.py           记录、试听、播放与导出
+│  │  │  ├─ recognition.py        语音识别采集、拖动导入与点行播放
 │  │  │  ├─ service.py            服务连接、轮询与状态
 │  │  │  └─ voices.py             预设、参考声音与联动配置
 │  │  ├─ layout/
@@ -297,6 +300,7 @@ flowchart LR
 │  │  │  ├─ workspace.py          主框架、侧栏与导航装配
 │  │  │  ├─ generation.py         文本编辑与参数面板
 │  │  │  ├─ player.py             播放器与记录浮层
+│  │  │  ├─ recognition.py        语音识别页面、拖放区与分行列表
 │  │  │  ├─ workflow.py           工作流页面
 │  │  │  └─ common.py             布局辅助组件
 │  │  └─ settings/
@@ -313,6 +317,7 @@ flowchart LR
 │  │  ├─ voices.py                预设与参考声音接口
 │  │  ├─ jobs.py                  作品及生成接口
 │  │  ├─ audio.py                 音频与日志接口
+│  │  ├─ recognition.py           识别模型选项与识别记录接口
 │  │  ├─ workflow.py              发现与临时音频交付
 │  │  └─ legacy.py                旧推理接口
 │  ├─ services/                    可复用应用服务
@@ -320,6 +325,12 @@ flowchart LR
 │  │  ├─ dialogue.py              对白内容与声音配置版本
 │  │  ├─ script_voices.py         行首音色解析与逐段生成配置
 │  │  └─ service_lock.py          数据目录服务实例锁
+│  ├─ speech_recognition/          语音识别：分行、引擎调用与会话存储
+│  │  ├─ lines.py                 时间戳换算、标点回填与分行
+│  │  ├─ runner.py                同一引擎进程内的识别与对齐请求
+│  │  ├─ service.py               模型选择、音频导入、执行与结果
+│  │  ├─ store.py                 识别会话 SQLite 存储
+│  │  └─ schemas.py               识别请求与状态结构
 │  ├─ gui.py                       桌面启动与旧导入的兼容入口
 │  ├─ gui_layout.py                旧布局与模型名称函数的兼容导出
 │  ├─ service_status.py            本地服务启动错误的中文诊断

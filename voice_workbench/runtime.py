@@ -27,6 +27,11 @@ def service_command(port, data_dir):
     return prefix + ["serve", "--port", str(port), "--data-dir", str(data_dir)]
 
 
+def audio_decode_command(source, target):
+    prefix = [str(project_root() / "声笺服务.exe")] if frozen() else [sys.executable, "-u", "-m", "voice_workbench"]
+    return prefix + ["decode-audio", str(source), str(target)]
+
+
 def engine_command(voice):
     if frozen() and voice["backend"] == "windows_sapi":
         return [str(project_root() / "声笺服务.exe"), "engine"]

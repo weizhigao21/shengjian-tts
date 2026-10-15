@@ -9,6 +9,7 @@ class CreationController:
     def open_creation_home(self):
         self.audio_editor.controller.save()
         self.save_document()
+        self.recognition.controller.pause()
         self.text_edit.completer.popup().hide()
         self.dialogue_editor.close_popups()
         self.clip_list.hide()
@@ -23,6 +24,9 @@ class CreationController:
     def start_creation(self, mode):
         if mode == "audio":
             self.open_audio_editor()
+            return
+        if mode == "recognition":
+            self.open_recognition()
             return
         if self.submitting:
             return
@@ -54,11 +58,24 @@ class CreationController:
         if path:
             self.audio_editor.controller.import_audio(str(path), text, name)
 
+    def open_recognition(self):
+        self.audio_editor.controller.save()
+        self.save_document()
+        self.clear_autoplay()
+        self.player.stop()
+        self.reference_player.stop()
+        self.clip_list.hide()
+        self.set_page(0)
+        self.creation_pages.setCurrentIndex(3)
+        self.recognition.controller.resume()
+
     def creation_page_changed(self, index):
         if hasattr(self, "transport"):
-            self.transport.setVisible(index != 2 or self.tabs.currentIndex() != 0)
+            self.transport.setVisible(index not in (2, 3) or self.tabs.currentIndex() != 0)
         if index != 2:
             self.audio_editor.controller.stop()
+        if index != 3:
+            self.recognition.controller.pause()
 
     def choose_creation_mode(self, mode, dirty=True):
         if self.selected_job and not self.loading_document and mode != self.editor_mode:

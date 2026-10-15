@@ -151,6 +151,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.close_timer.stop()
         self.closing = True
         self.audio_editor.controller.close()
+        self.recognition.controller.close()
         self.clear_autoplay()
         self.timer.stop()
         self.document_timer.stop()

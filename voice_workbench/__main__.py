@@ -1,12 +1,17 @@
 import argparse
 from pathlib import Path
 import sqlite3
+import sys
 
 from . import __version__
 from .data_paths import prepare_data_dir
 
 
 def main():
+    if sys.argv[1:2] == ["decode-audio"]:
+        from .speech_recognition.decode_worker import main as decode_main
+        decode_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser(description="本地配音工作台")
     parser.add_argument("--version", action="version", version=f"声笺 {__version__}")
     parser.add_argument("mode", choices=["gui", "serve"], nargs="?", default="gui")

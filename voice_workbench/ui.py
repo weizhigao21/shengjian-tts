@@ -70,6 +70,7 @@ ICONS = {
     "pen": '<path d="m15 4 5 5M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',
     "article": '<path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h6"/>',
     "dialogue": '<path d="M3 4h18v13H9l-6 4zM7 8h10M7 12h7"/>',
+    "recognize": '<path d="M4 10v4M8 6v12M12 3v18M16 6v12M20 10v4"/>',
     "back": '<path d="M19 12H5m6-6-6 6 6 6"/>',
     "voices": '<rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
     "link": '<path d="m10 13 4-4m-6 7-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m2 1 2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 -1)"/>',

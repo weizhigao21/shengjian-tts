@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.36 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.38 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -56,6 +56,10 @@ v0.7.31 的 `model_dates.py` 负责 GGUF 文件版本日期的批量查询、UTC
 
 v0.7.36 的 `parameter_presets.py` 管理独立的高级参数预设，复用 `generation_options.py` 的兼容处理与严格校验。`http_api/parameter_presets.py` 提供管理接口，`parameter_preset_controls.py` 由主检查器和声音预设编辑窗口复用。预设写入 `config.json` 的可选 `parameter_presets` 列表，与其他配置共用锁和原子替换；仅保存高级参数与模型关联信息。读取时重新计算模型标识，以兼容数据目录迁移；选择时再按当前模型契约校验，异步回调固定保存时的模型和参数快照。
 
+v0.7.37 新增 `speech_recognition/`：`runner.py` 在一个统一引擎进程内声明 `asr` 与 `align` 两个模型，识别走 `/v1/audio/transcriptions`，词级时间走 `/v1/audio/alignments`，失败时回退 `/v1/tasks/run`；`lines.py` 把引擎的帧号时间戳与标点整理成可点击的行，`service.py` 负责模型选择、音频导入与执行，`store.py` 用独立的 SQLite 保存会话。识别模型按 `model_specs` 的任务声明登记，只进入该模式的模型列表，不生成声音预设；音频以 multipart 进入请求体，中文模型路径与音频暂存仍沿用 `native_paths.py` 的 ASCII 别名。识别的引擎占用与音频编辑共用管理器的推理互斥，两者的终止状态都在清除占用标记之后再发布。
+
+v0.7.38 将识别的启动检查、状态提交与失败回滚放入管理器锁，`require_idle_engine` 供识别和 AI 编辑双向复用；耗时的音频解码在锁外完成，入库前再次检查占用。`audio_import.py` 调用独立的 `decode-audio` 服务入口，`decode_worker.py` 在子进程主线程运行 Qt 解码器，后端导入仍不加载 Qt。界面按会话与分行内容增量刷新，保留本地名称 / 语言编辑与播放状态。
+
 ## 验证
 
 v0.7.35 的生成记录右键菜单由 `desktop/controllers/playback.py` 捕获点击条目的音频、原文和作品名称，使用现有参考声音导入窗口及保存接口。菜单期间刷新或切换对白不改变待保存来源，源文件在打开保存窗口前再次检查；复制和引用生命周期仍由配置 / 文件管理层负责，不增加重复存储接口。
@@ -66,7 +70,7 @@ v0.7.33 的 `app_updates/` 将发行解析 / 下载、清单校验和独立安�
 
 v0.7.32 新增 `audio_editing/`，分别管理 PCM 处理、版本存储、应用服务和 Vevo2 请求。音频编辑通过单独的 API 和 SQLite 保存项目，复用原生服务启动；AI 处理与原配音队列在管理器锁下互斥。Qt 的页面、控制器和波形组件独立，不把音频编辑任务写入文章 / 对话数据库。
 
-覆盖原服务、模型、任务、播放、界面、文件管理和打包测试；增加后端独立导入、路由注册及生成准备检查。使用隔离目录验证安装包，验证期间不对用户数据库执行生成或迁移。
+覆盖原服务、模型、任务、播放、界面、音频编辑、语音识别、文件管理和打包测试；增加后端独立导入、路由注册及生成准备检查。使用隔离目录验证安装包，验证期间不对用户数据库执行生成或迁移。
 
 ## 实际目录
 
@@ -87,6 +91,7 @@ voice_workbench/
 │  │  ├─ creation.py           模式入口、编辑状态及单条对白操作
 │  │  ├─ documents.py          作品列表、文稿、保存及导航
 │  │  ├─ generation.py         生成提交、模型与预设参数交互
+│  │  ├─ recognition.py        识别采集、拖动导入与点行播放
 │  │  ├─ playback.py           生成记录、播放、波形与导出
 │  │  ├─ service.py            服务连接、轮询和状态更新
 │  │  └─ voices.py             预设、参考声音、试听与联动配置
@@ -95,6 +100,7 @@ voice_workbench/
 │  │  ├─ workspace.py          侧栏与工作区框架
 │  │  ├─ generation.py         文本编辑和参数面板
 │  │  ├─ player.py             播放器和生成记录浮层
+│  │  ├─ recognition.py        语音识别页面、拖放区和分行列表
 │  │  ├─ workflow.py           工作流连接页面
 │  │  └─ common.py             小型布局辅助函数
 │  └─ settings/                设置页
@@ -112,12 +118,19 @@ voice_workbench/
 │  ├─ jobs.py                  作品、提交、批次、取消和重试
 │  ├─ audio.py                 生成音频管理、文件和日志响应
 │  ├─ workflow.py              工作流发现、临时交付与接收确认
+│  ├─ recognition.py           识别模型选项、记录与音频接口
 │  └─ legacy.py                旧 infer_single / infer_bulk 接口
 ├─ services/                   可复用应用服务
 │  ├─ generation.py            PreparedGeneration 与生成配置准备
 │  ├─ dialogue.py              对白内容及声音配置版本计算
 │  ├─ script_voices.py         行首音色解析、UTF-16 位置与逐段配置
 │  └─ service_lock.py          同一数据目录的服务实例锁
+├─ speech_recognition/         语音识别：分行、引擎调用与会话
+│  ├─ lines.py                 时间戳换算、标点回填与分行
+│  ├─ runner.py                同一引擎进程内的识别与对齐请求
+│  ├─ service.py               模型选择、音频导入、执行与结果
+│  ├─ store.py                 识别会话 SQLite 存储
+│  └─ schemas.py               识别请求与状态结构
 ├─ api.py                      应用工厂、生命周期、错误与访问处理
 ├─ manager.py                  队列、锁、推理调度、缓存及恢复
 ├─ config.py / store.py        配置与 SQLite 数据访问
@@ -137,6 +150,7 @@ voice_workbench/
 ## 后续扩展规则
 
 - 对话模式的条目组件放在 `desktop/layout/`，交互控制放在 `desktop/controllers/`；业务用例进入 `services/`。
+- 语音识别的时间戳换算和分行规则放在 `speech_recognition/`，页内拖放与点行播放放在 `desktop/`；识别会话独立存储，不写入作品数据库。
 - `prepare_generation()` 返回声音快照、配置指纹和来源预设，可为多条对白分别准备配置；数据库提交及并发调度仍由应用协调层负责。
 - 新接口增加独立路由模块并显式注册；新增数据通过版本迁移进入数据层。
 - 文件继续增长时按新增职责拆分，不为单个函数建立无必要的包装层；当前内聚的模型、引擎和存储模块沿用现有位置。

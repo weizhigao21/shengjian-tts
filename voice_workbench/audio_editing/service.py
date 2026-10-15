@@ -112,8 +112,7 @@ class AudioEditor:
             parameters["start"], parameters["end"] = first / info["sample_rate"], last / info["sample_rate"]
             ai = parameters["operation"] in ("vc", "edit")
             if ai:
-                if self.manager.active:
-                    raise VoiceError("ENGINE_BUSY", "配音任务正在生成，请完成或取消后处理音频")
+                self.manager.require_idle_engine("音频编辑")
                 if (last - first) / info["sample_rate"] > 60:
                     raise VoiceError("EDIT_SOURCE_TOO_LONG", "第一版 AI 编辑每次最多处理 60 秒，请选择一个短片段")
                 self.validate_model(parameters["model_path"])
@@ -152,6 +151,7 @@ class AudioEditor:
         append = self.root / (version + "-append.wav")
         reference = self.root / (version + "-reference.wav")
         started = time.perf_counter()
+        outcome = None
         try:
             self.store.finish(version, "running")
             if parameters["operation"] in ("vc", "edit"):
@@ -179,19 +179,24 @@ class AudioEditor:
                 if cancelled.is_set() or self.manager.stopping.is_set():
                     raise VoiceError("CANCELLED", "编辑已取消")
                 details["processing_seconds"] = time.perf_counter() - started
-                self.store.finish(version, "done", audio=output.name, details=details)
+                outcome = {"status": "done", "audio": output.name, "details": details}
         except Exception as exc:
             output.unlink(missing_ok=True)
-            self.store.finish(version, "cancelled" if cancelled.is_set() else "failed", error=str(exc))
+            outcome = {"status": "cancelled" if cancelled.is_set() else "failed", "error": str(exc)}
         finally:
             for path in (staging, append, reference):
                 path.unlink(missing_ok=True)
-            # Release Vevo2 after a task so article generation need not share VRAM.
-            self.runner.interrupt()
-            with self.manager.lock:
-                self.gpu_busy = False
-                self.active = None
-                self.manager.wake.set()
+            try:
+                # Release Vevo2 after a task so article generation need not share VRAM.
+                self.runner.interrupt()
+            finally:
+                # Clear the flags first and publish the terminal state last, so a version can
+                # never look finished while the editor still reports the accelerator busy.
+                with self.manager.lock:
+                    self.gpu_busy = False
+                    self.active = None
+                    self.store.finish(version, **outcome)
+                    self.manager.wake.set()
 
     def cancel(self, identity):
         with self.manager.lock:

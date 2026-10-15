@@ -156,6 +156,9 @@ class GenerationLayout:
         from .audio_editing import AudioEditPanel
         self.audio_editor = AudioEditPanel(self)
         self.creation_pages.addWidget(self.audio_editor)
+        from .recognition import RecognitionPanel
+        self.recognition = RecognitionPanel(self)
+        self.creation_pages.addWidget(self.recognition)
         self.creation_pages.currentChanged.connect(self.creation_page_changed)
         self.creation_pages.setCurrentIndex(1)
         self.tabs.addWidget(self.creation_pages)

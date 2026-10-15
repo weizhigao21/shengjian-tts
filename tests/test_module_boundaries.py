@@ -32,6 +32,12 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
             actual['paths'].pop(path)
     for name in ('AudioImport', 'AudioOperation', 'EditState', 'EditModelImport'):
         actual['components']['schemas'].pop(name)
+    # Speech recognition is another independent mode; it adds routes and schemas only.
+    for path in list(actual['paths']):
+        if path.startswith('/recognition/'):
+            actual['paths'].pop(path)
+    for name in ('RecognizeRequest', 'SessionState', 'SelectionRequest'):
+        actual['components']['schemas'].pop(name)
     # Model discovery adds an endpoint without changing the published routes.
     assert actual['paths'].pop('/models/scan')['post']['responses'].get('202')
     assert actual['paths'].pop('/parameter-presets')['post']['responses'].get('201')
