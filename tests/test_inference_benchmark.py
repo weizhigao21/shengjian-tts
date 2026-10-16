@@ -63,19 +63,23 @@ def test_identical_workload_and_seed_are_measured_without_cache_or_user_task_cha
     reference = Path(voice['reference_audio']).read_bytes()
     manager.benchmark.start('qwen')
     state = finished(manager)
-    assert state['status'] == 'done' and state['completed'] == state['total'] == 16
+    assert state['status'] == 'done' and state['completed'] == state['total'] == 80
     report = state['result']
-    assert not report['cache_used'] and len(native.calls) == 8
-    assert [len(call['items']) for call in batch.calls] == [2, 2, 2, 2]
-    assert [r['text'] for r in native.calls[:4]] == [r['text'] for call in batch.calls[:2] for r in call['items']]
+    assert report['sample_count'] == 20
+    assert not report['cache_used'] and len(native.calls) == 40
+    assert [len(call['items']) for call in batch.calls] == [2]*20
+    assert [r['text'] for r in native.calls[:20]] == [r['text'] for call in batch.calls[:10] for r in call['items']]
     assert all(r['voice']['request_options']['seed'] == 1234 for r in native.calls)
     assert all(call['seed'] == 1234 for call in batch.calls)
     assert all(raw == reference for raw in native.references)
-    assert [i['language'] for call in batch.calls[:2] for i in call['items']] == ['Chinese', 'English', 'Chinese', 'English']
+    assert [i['language'] for call in batch.calls[:10] for i in call['items']] == ['Chinese', 'English']*10
     a, b = report['results']
-    assert a['cold']['calls'] == 4 and b['cold']['calls'] == 2
-    assert a['warm']['audio_seconds'] == b['warm']['audio_seconds'] == 4
-    assert a['warm']['rtf'] == a['warm']['seconds']/4
+    assert a['cold']['calls'] == 20 and b['cold']['calls'] == 10
+    assert a['warm']['audio_seconds'] == b['warm']['audio_seconds'] == 20
+    assert a['warm']['rtf'] == a['warm']['seconds']/20
+    for backend in (a, b):
+        for phase in ('cold', 'warm'):
+            assert backend[phase]['seconds_per_item'] == backend[phase]['seconds']/20
     assert report['speedup']['warm'] == a['warm']['seconds']/b['warm']['seconds']
     assert not queue.calls and not manager.store.list() and not manager.generated_audio()
     assert manager.config.path.read_bytes() == before
@@ -92,11 +96,12 @@ def test_warm_round_average_and_configured_batch_limit_are_respected(benchmark):
     manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 3})
     manager.benchmark.start('qwen', 'en', 3)
     result = finished(manager)['result']
-    assert len(native.calls) == 16 and [len(c['items']) for c in batch.calls] == [3, 1]*4
+    assert len(native.calls) == 80 and [len(c['items']) for c in batch.calls] == ([3]*6+[2])*4
     for backend in result['results']:
         rounds = backend['warm_rounds']
         assert len(rounds) == 3
         assert backend['warm']['seconds'] == sum(r['seconds'] for r in rounds)/3
+        assert backend['warm']['seconds_per_item'] == sum(r['seconds'] for r in rounds)/60
     assert all(item['language'] == 'English' for call in batch.calls for item in call['items'])
 
 
@@ -110,8 +115,8 @@ def test_backend_failure_keeps_other_result_and_never_reports_fallback_as_batch_
     results = {r['backend']: r for r in state['result']['results']}
     key = 'native' if backend == 'native' else 'qwen3_batch'
     assert results[key]['status'] == 'failed' and results[key]['error']['message']
-    assert len(native.calls) == (1 if backend == 'native' else 8)
-    assert len(batch.calls) == (4 if backend == 'native' else 1)
+    assert len(native.calls) == (1 if backend == 'native' else 40)
+    assert len(batch.calls) == (20 if backend == 'native' else 1)
 
 
 @pytest.mark.parametrize('backend', ['native', 'batch'])
@@ -217,13 +222,34 @@ def test_ui_updates_results_speedup_progress_and_retains_voice_choice(benchmark,
     finished(manager)
     controls.bind(manager.benchmark.options())
     assert controls.table.rowCount() == 2 and '倍率' in controls.summary.text()
+    assert controls.table.columnCount() == 7
+    for index, result in enumerate(controls.result['results']):
+        assert controls.table.item(index, 3).text() == f"{result['warm']['seconds_per_item']:.2f}"
+    old = manager.benchmark.options()
+    old['result'].pop('sample_count')
+    old['result']['workload'] = old['result']['workload'][:4]
+    for result in old['result']['results']:
+        result['warm'].pop('seconds_per_item')
+        result['warm']['seconds'] = 8
+    controls.bind(old)
+    assert '每组 4 条' in controls.summary.text()
+    assert controls.table.item(0, 3).text() == '2.00'
     controls.copy()
     from PyQt6.QtWidgets import QApplication
     assert json.loads(QApplication.clipboard().text())['cache_used'] is False
     assert not controls.timer.isActive()
     data = manager.benchmark.options()
-    data.update(busy=True, status='running', completed=4, total=16)
+    data.update(busy=True, status='running', completed=20, total=80)
     controls.bind(data)
-    assert controls.timer.isActive() and controls.progress.value() == 4
+    assert controls.timer.isActive() and controls.progress.value() == 20
     assert not controls.start_button.isEnabled() and not panel.automatic.isEnabled()
     window.close()
+
+
+@pytest.mark.parametrize('name,languages', [('zh', {'zh'}), ('en', {'en'}), ('bilingual', {'zh', 'en'})])
+def test_workload_has_twenty_distinct_sentences(name, languages):
+    rows = workload(name)
+    assert len(rows) == len({row['text'] for row in rows}) == 20
+    assert {row['language'] for row in rows} == languages
+    if name == 'bilingual':
+        assert [row['language'] for row in rows] == ['zh', 'en']*10

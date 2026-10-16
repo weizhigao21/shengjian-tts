@@ -15,14 +15,14 @@ class BenchmarkControls(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.addWidget(label('速度对比测试', 'section'))
-        hint = label('用同一音色和 4 条短句对比原生单实例逐条生成与批量生成。首组包含进程启动和模型加载，后续测试热模型速度；不读取成品缓存，也不加入作品。测试会占用推理引擎，结束后释放。', 'muted')
+        hint = label('用同一音色和每组 20 条短句对比原生单实例逐条生成与批量生成。首组包含进程启动和模型加载，后续测试热模型速度；默认共生成 80 段测试音频，不读取成品缓存，也不加入作品。测试结束后释放引擎。', 'muted')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         form = QFormLayout()
         self.voice = QComboBox()
         self.voice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.workload = QComboBox()
-        for title, key in (('中英双语 · 4 条', 'bilingual'), ('中文 · 4 条', 'zh'), ('英文 · 4 条', 'en')):
+        for title, key in (('中英双语 · 20 条', 'bilingual'), ('中文 · 20 条', 'zh'), ('英文 · 20 条', 'en')):
             self.workload.addItem(title, key)
         self.rounds = QSpinBox()
         self.rounds.setRange(1, 3); self.rounds.setValue(1); self.rounds.setSuffix(' 组')
@@ -44,8 +44,9 @@ class BenchmarkControls(QWidget):
         self.status = label('完成批量环境配置后即可测试。', 'hint')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(['后端', '首组 / 秒', '热模型 / 秒', '音频 / 秒', 'RTF', '状态'])
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(['后端', '首组 / 秒', '热模型 / 秒', '每条 / 秒', '音频 / 秒', 'RTF', '状态'])
+        self.table.horizontalHeaderItem(3).setToolTip('热模型每条平均耗时 = 总耗时 / 总条数')
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -56,7 +57,7 @@ class BenchmarkControls(QWidget):
         self.summary = label('', 'hint')
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
-        note = label('热模型用时、音频时长均按每组统计。RTF 越小越快；两种模型的量化与采样实现不同，音频时长和质量可能不同。固定种子 1234，每条最多 256 tokens；“冷启动”指新进程，不清空系统文件缓存。', 'muted')
+        note = label('热模型用时、音频时长按每组统计，每条平均 = 热模型整组耗时 ÷ 每组条数，不代表单条延迟。RTF 越小越快；两种模型的量化与采样实现不同，音频时长和质量可能不同。固定种子 1234，每条最多 256 tokens；“冷启动”指新进程，不清空系统文件缓存。', 'muted')
         note.setWordWrap(True)
         layout.addWidget(note)
         self.timer = QTimer(self)
@@ -94,21 +95,27 @@ class BenchmarkControls(QWidget):
 
     def render_result(self):
         rows = (self.result or {}).get('results', [])
+        count = (self.result or {}).get('sample_count') or len((self.result or {}).get('workload', []))
         self.table.setVisible(bool(rows))
         self.table.setRowCount(len(rows))
         for index, result in enumerate(rows):
             cold, warm = result.get('cold', {}), result.get('warm', {})
+            # Reports saved before v0.7.47 have four rows and no per-item metric.
+            mean = warm.get('seconds_per_item')
+            if mean is None and count and warm.get('seconds') is not None:
+                mean = warm['seconds']/count
             number = lambda v: f'{v:.2f}' if v is not None else '—'
             state = {'done': '完成', 'failed': '失败', 'cancelled': '取消', 'running': '测试中'}.get(result['status'], result['status'])
             values = ['原生 GGUF' if result['backend'] == 'native' else 'Qwen 批量', number(cold.get('seconds')),
-                      number(warm.get('seconds')), number(warm.get('audio_seconds')), number(warm.get('rtf')), state]
+                      number(warm.get('seconds')), number(mean), number(warm.get('audio_seconds')), number(warm.get('rtf')), state]
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setToolTip(result.get('error', {}).get('message', text))
                 self.table.setItem(index, column, item)
         speed = (self.result or {}).get('speedup')
         total = (self.result or {}).get('total_seconds')
-        text = f'测试总耗时 {total:.2f} 秒' if total is not None else ''
+        text = f'每组 {count} 条' if count else ''
+        if total is not None: text += f' · 测试总耗时 {total:.2f} 秒'
         if speed:
             text += f" · 首组倍率 {speed['cold']:.2f}× · 热模型倍率 {speed['warm']:.2f}×（大于 1 表示批量更快）"
         self.summary.setText(text.lstrip(' ·'))

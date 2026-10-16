@@ -16,22 +16,40 @@ from ..runner import check_voice, validate_wave
 from .policy import LANGUAGES, PARAMETERS, model_signature, options, unsupported
 from .process import BatchProcess
 
+SAMPLE_COUNT = 20
 ZH = ['今天我们一起测试语音生成的速度。', '相同的音色可以重复使用参考特征。',
-      '每个字幕片段都会生成对应的声音。', '现在开始处理下一组简短的文字。']
+      '每个字幕片段都会生成对应的声音。', '现在开始处理下一组简短的文字。',
+      '清晨的阳光洒在安静的窗边。', '请把这份文件放在桌子上。',
+      '我们下午一起去公园散步。', '这段故事需要自然的语气。',
+      '系统会按顺序保存每一条结果。', '不同语言也能使用同一个音色。',
+      '远处传来了轻轻的脚步声。', '下一班列车即将到达车站。',
+      '慢慢来，把每个细节说清楚。', '听完这句话再继续下一段。',
+      '窗外的雨已经渐渐停了。', '今晚我们准备一道简单的晚餐。',
+      '请检查所有音频是否生成完整。', '一杯热茶让这个下午更加温暖。',
+      '测试结果会显示平均处理时间。', '谢谢收听，我们下次再见。']
 EN = ['Today we are testing speech generation speed.', 'The same voice can reuse its reference features.',
-      'Each subtitle segment gets its own audio.', 'Now we can process the next group of short sentences.']
+      'Each subtitle segment gets its own audio.', 'Now we can process the next group of short sentences.',
+      'Morning sunlight falls across the quiet window.', 'Please put this document on the desk.',
+      'We will take a walk in the park this afternoon.', 'This story needs a calm and natural voice.',
+      'The system saves each result in its original order.', 'Different languages can share the same voice.',
+      'Soft footsteps could be heard in the distance.', 'The next train will arrive at the station soon.',
+      'Take your time and explain every detail clearly.', 'Listen to this sentence before moving on.',
+      'The rain outside has finally stopped.', 'We are making a simple dinner this evening.',
+      'Please check that every audio clip is complete.', 'A cup of hot tea makes the afternoon warmer.',
+      'The test results include the average processing time.', 'Thank you for listening, and see you next time.']
 
 
 def workload(name):
     if name == 'zh': return [{'text': t, 'language': 'zh'} for t in ZH]
     if name == 'en': return [{'text': t, 'language': 'en'} for t in EN]
-    return [{'text': text, 'language': lang} for text, lang in
-            ((ZH[0], 'zh'), (EN[0], 'en'), (ZH[1], 'zh'), (EN[1], 'en'))]
+    return [row for zh, en in zip(ZH[:SAMPLE_COUNT//2], EN[:SAMPLE_COUNT//2])
+            for row in ({'text': zh, 'language': 'zh'}, {'text': en, 'language': 'en'})]
 
 
 def metrics(seconds, audio_seconds, count):
     return {'seconds': seconds, 'audio_seconds': audio_seconds,
-            'rtf': seconds / audio_seconds, 'items_per_second': count / seconds}
+            'rtf': seconds / audio_seconds, 'items_per_second': count / seconds,
+            'seconds_per_item': seconds / count}
 
 
 class InferenceBenchmark:
@@ -182,7 +200,7 @@ class InferenceBenchmark:
                   'native_model': voice['model_dir'], 'batch_model': settings.model_dir, 'device': settings.device,
                   'dtype': settings.dtype, 'max_batch_size': settings.max_batch_size,
                   'seed': 1234, 'generation_options': voice['request_options'], 'workload': rows,
-                  'warm_rounds': warm_rounds, 'cache_used': False, 'cache_scope': 'generated_audio',
+                  'warm_rounds': warm_rounds, 'sample_count': len(rows), 'cache_used': False, 'cache_scope': 'generated_audio',
                   'results': [], 'versions': versions}
         logs = self.manager.root / 'logs/benchmarks' / report['id']
         cpu_threads = self.manager.config.performance()['cpu_threads'] or min(8, max(1, os.cpu_count() or 4))
