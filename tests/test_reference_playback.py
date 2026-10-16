@@ -217,3 +217,79 @@ def test_preview_stops_generated_audio_player(previews, qtbot):
     first.cover.click()
     playing(qtbot, window)
     assert window.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState
+
+
+def test_reference_dialog_waveform_follows_only_its_own_preview(previews, qtbot):
+    window, errors = previews
+    source = {'reference_audio': ticket(window, 'first').item['reference_audio'], 'name': '待入库声音'}
+    first = window.import_reference(source=source)
+    second = window.import_reference(source=source)
+    idle = first.waveform.grab().toImage()
+    first.preview_button.click()
+    playing(qtbot, window)
+    qtbot.waitUntil(lambda: first.waveform.progress > .1)
+    assert first.waveform.grab().toImage() != idle
+    assert first.preview_button.text() == '停止试听'
+    assert second.waveform.progress == 0
+    window.reference_player.pause()
+    progress = first.waveform.progress
+    qtbot.wait(120)
+    assert first.waveform.progress == progress
+    second.preview_button.click()
+    playing(qtbot, window)
+    qtbot.waitUntil(lambda: second.waveform.progress > .1)
+    assert first.waveform.progress == 0 and first.preview_button.text() == '试听参考声音'
+    second.preview_button.click()
+    assert second.waveform.progress == 0 and second.preview_button.text() == '试听参考声音'
+    first.reject(); second.reject()
+    assert not errors
+
+
+@pytest.mark.parametrize('ending', ['finished', 'error', 'close'])
+def test_reference_dialog_waveform_resets_on_completion_error_and_close(previews, qtbot, ending):
+    window, errors = previews
+    dialog = window.import_reference(source={'reference_audio': ticket(window, 'first').item['reference_audio']})
+    dialog.preview_button.click()
+    playing(qtbot, window)
+    qtbot.waitUntil(lambda: dialog.waveform.progress > .05)
+    if ending == 'finished':
+        qtbot.waitUntil(lambda: window.reference_player.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia, timeout=5000)
+    elif ending == 'error':
+        window.reference_player.errorOccurred.emit(QMediaPlayer.Error.ResourceError, '测试播放失败')
+    else:
+        dialog.reject()
+    assert dialog.waveform.progress == 0
+    assert dialog.preview_button.text() == '试听参考声音'
+    assert window.reference_preview_origin is None
+    if ending == 'error':
+        assert errors == ['参考音频播放失败：测试播放失败']
+    else:
+        assert not errors
+    if ending != 'close': dialog.reject()
+    # Deleted dialogs must no longer receive the shared player's signals.
+    qtbot.waitUntil(lambda: not window.dialogs)
+    ticket(window, 'first').cover.click()
+    playing(qtbot, window)
+
+
+def test_browsing_reference_audio_stops_own_preview_and_resets_waveform(previews, qtbot, monkeypatch):
+    window, errors = previews
+    first, third = ticket(window, 'first'), ticket(window, 'third')
+    dialog = window.import_reference(source={'reference_audio': first.item['reference_audio']})
+    dialog.preview_button.click()
+    playing(qtbot, window)
+    qtbot.waitUntil(lambda: dialog.waveform.progress > .05)
+    monkeypatch.setattr('voice_workbench.library.QFileDialog.getOpenFileName',
+                        lambda *args: (third.item['reference_audio'], ''))
+    dialog.browse()
+    assert window.reference_player.playbackState() == QMediaPlayer.PlaybackState.StoppedState
+    assert dialog.waveform.progress == 0 and dialog.preview_button.text() == '试听参考声音'
+    assert dialog.waveform.path == Path(third.item['reference_audio'])
+    # Changing the dialog's file must not stop a different preview entry.
+    first.cover.click()
+    playing(qtbot, window)
+    dialog.browse()
+    assert window.reference_preview_origin == first.preview_origin
+    assert window.reference_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+    dialog.reject()
+    assert not errors

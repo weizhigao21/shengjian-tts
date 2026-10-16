@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 from PyQt6.QtCore import QTimer, Qt, QUrl
 from PyQt6.QtGui import QContextMenuEvent
+from PyQt6.QtMultimedia import QAudioBufferOutput, QMediaPlayer
 from PyQt6.QtWidgets import QApplication, QLabel, QMenu
 
 from voice_workbench.api import create_app
@@ -143,6 +144,25 @@ def test_current_audio_name_offers_the_entire_recording(page, qtbot, monkeypatch
     monkeypatch.setattr('voice_workbench.library.QFileDialog.getOpenFileName', lambda *args: (str(replacement), ''))
     dialog.browse()
     assert dialog.path == str(replacement) and dialog.source_hint.isHidden()
+    assert not errors
+
+
+def test_recognition_context_reference_preview_animates_and_stops_cleanly(page, qtbot):
+    window, controller, _, errors = page
+    window.reference_player.setAudioOutput(None)
+    window.reference_player.setAudioBufferOutput(QAudioBufferOutput(window))
+    assert context(controller, qtbot) == [True]
+    dialog = next(d for d in window.dialogs if isinstance(d, ReferenceDialog))
+    clip = Path(dialog.path)
+    dialog.preview_button.click()
+    qtbot.waitUntil(lambda: window.reference_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
+    qtbot.waitUntil(lambda: dialog.waveform.progress > .1)
+    assert dialog.preview_button.text() == '停止试听'
+    assert not window.waveform.progress
+    dialog.preview_button.click()
+    assert dialog.waveform.progress == 0
+    dialog.reject()
+    qtbot.waitUntil(lambda: not clip.exists(), timeout=3000)
     assert not errors
 
 

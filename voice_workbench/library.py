@@ -5,8 +5,9 @@ from pathlib import Path
 import uuid
 import wave
 
-from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
+from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, QUrl
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF, QRadialGradient
+from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QLineEdit, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
@@ -467,10 +468,27 @@ class ReferenceDialog(PaperDialog):
         self.content.addWidget(self.preview_button)
         self.confirm.clicked.connect(self.save)
         self.finished.connect(owner.stop_reference)
+        owner.reference_player.positionChanged.connect(self.update_preview)
+        owner.reference_player.durationChanged.connect(self.update_preview)
+        owner.reference_player.playbackStateChanged.connect(self.update_preview)
+        owner.reference_player.sourceChanged.connect(self.update_preview)
+
+    def update_preview(self):
+        player = self.owner.reference_player
+        state = player.playbackState()
+        active = (self.owner.reference_preview_origin is self.preview_button
+                  and player.source() == QUrl.fromLocalFile(str(Path(self.path).resolve()))
+                  and state != QMediaPlayer.PlaybackState.StoppedState)
+        duration = player.duration()
+        self.waveform.set_progress(player.position() / duration if active and duration else 0)
+        playing = active and state == QMediaPlayer.PlaybackState.PlayingState
+        self.preview_button.setText("停止试听" if playing else "试听参考声音")
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(self, "导入参考声音", "", "WAV 音频 (*.wav)")
         if path:
+            if self.owner.reference_preview_origin is self.preview_button:
+                self.owner.stop_reference()
             self.path = path
             if self.source_hint:
                 self.source_hint.hide()

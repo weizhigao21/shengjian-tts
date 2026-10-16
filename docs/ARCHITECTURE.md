@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.42 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.43 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -69,6 +69,8 @@ v0.7.41 的识别适配优先使用通用任务接口保留语言，路由不可
 v0.7.42 的识别入库由 `desktop/controllers/recognition_references.py` 固定右键内容、安排后台裁剪并复用 `ReferenceDialog` 与 `/references`；`speech_recognition/reference_clip.py` 校验识别目录和选区，复用 PCM 渲染生成临时片段，原文件只读。对话框结束时释放预览源并清理临时音频，已有参考声音导入负责持久化独立副本。`RecognitionLines` 将右键选择与左键播放分开，现有识别 API 与数据库不变。
 
 ## 验证
+
+v0.7.43 的 `ReferenceDialog` 以绑定方法订阅共享参考播放器的位置、时长、状态与音源信号，并同时校验试听来源按钮和文件路径。每个窗口只显示自己的进度，销毁时由 Qt 自动断开连接，不新增动画定时器或播放器。
 
 v0.7.35 的生成记录右键菜单由 `desktop/controllers/playback.py` 捕获点击条目的音频、原文和作品名称，使用现有参考声音导入窗口及保存接口。菜单期间刷新或切换对白不改变待保存来源，源文件在打开保存窗口前再次检查；复制和引用生命周期仍由配置 / 文件管理层负责，不增加重复存储接口。
 
