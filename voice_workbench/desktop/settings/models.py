@@ -223,6 +223,11 @@ class ModelSettings(ModelTransfers):
         if model.get("can_rollback"):
             menu.addAction("回退到上个版本", lambda: self.mutate(lambda c: c.post(f"/models/{model['id']}/rollback"), "模型已回退，预设参数保留。"))
         more.setMenu(menu)
+        if model.get('family') == 'qwen3_tts':
+            def batch_setup():
+                self.batch_inference.automatic.selected = model['path']
+                self.set_section(2)
+            menu.addAction('配置批量环境与关联模型', batch_setup)
         more.setToolTip("模型详情与版本回退")
         layout.addWidget(more)
         return row

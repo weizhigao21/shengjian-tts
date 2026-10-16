@@ -180,7 +180,9 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /inference/backends` | 后端能力、是否就绪、未就绪原因、是否驻留。 |
-| `GET /settings/batch-inference` | 配置、运行库版本、上批阶段耗时 / 音色缓存状态和近期回退。 |
+| `GET /settings/batch-inference` | 配置、运行库版本、上批统计和近期回退；v0.7.45 新增 `setup`（本地候选、目录、大小、安装任务阶段 / 速度 / 状态），仅自动检测，不下载。 |
+| `POST /inference/setup` | v0.7.45 异步安装 / 关联，202。`action: all / runtime / model / detect`（默认 all），`source_model` 为已导入 Base GGUF 路径（空值自动选），`device: cuda / cpu`、`source: mirror / huggingface`。 |
+| `POST /inference/setup/pause` | 暂停专用安装，已下载文件保留；再次提交 setup 可复用 / 续传。 |
 | `PUT /settings/batch-inference` | 设置独立 `python`、原始 `model_dir`、关联 GGUF `source_model`、`enabled`、`device`、`dtype`、`max_batch_size`、`max_batch_chars`、`prompt_cache_slots`、`idle_seconds`。活动推理时拒绝修改。 |
 | `POST /inference/plan` | `{ "voice_id": "qwen-preset", "texts": ["第一句", "第二句"] }`，只读预览，不创建任务、复制参考音频或加载模型。 |
 

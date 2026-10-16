@@ -43,3 +43,5 @@ GGUF 默认来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp
 模型权重遵循各自模型许可，目录数据的 Apache-2.0 许可不替代权重许可。
 
 音频编辑的 Vevo2 适配依据 audio.cpp 的公开服务协议。Vevo2 官方权重使用 [CC-BY-NC-ND-4.0](https://huggingface.co/RMSnow/Vevo2)，另行下载，不包含在声笺 GPLv3 发行包中。
+
+自动批量环境按需下载 [Astral python-build-standalone](https://github.com/astral-sh/python-build-standalone/releases/tag/20260901) 的 CPython 3.12.14，保留其分发内附许可证；该环境不包含在声笺 ZIP 中。`qwen_batch_catalog.json` 记录官方 Python 发行 SHA-256 与 Qwen Base 仓库固定提交的文件摘要。

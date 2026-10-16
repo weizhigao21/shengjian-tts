@@ -1,6 +1,6 @@
 """Discover/configure optional batch backends and preview routing without queuing."""
 from fastapi import APIRouter, Request
-from ..batch_inference.schemas import BatchSettings, PlanRequest
+from ..batch_inference.schemas import BatchSettings, PlanRequest, SetupRequest
 from ..errors import VoiceError
 from .context import manager
 
@@ -17,12 +17,24 @@ def backends(request: Request):
 
 @router.get('/settings/batch-inference')
 def settings(request: Request):
-    return manager(request).batch.status()
+    batch = manager(request).batch
+    batch.setup.ensure_scan()
+    return {**batch.status(), 'setup': batch.setup.options()}
 
 
 @router.put('/settings/batch-inference')
 def configure(body: BatchSettings, request: Request):
     return manager(request).batch.configure(body)
+
+
+@router.post('/inference/setup', status_code=202)
+def setup(body: SetupRequest, request: Request):
+    return manager(request).batch.setup.start(**body.model_dump())
+
+
+@router.post('/inference/setup/pause')
+def pause_setup(request: Request):
+    return manager(request).batch.setup.pause()
 
 
 @router.post('/inference/plan')

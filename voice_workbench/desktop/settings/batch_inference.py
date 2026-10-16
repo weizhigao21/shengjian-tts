@@ -18,13 +18,22 @@ class BatchInferenceControls(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
         layout.addWidget(label('Qwen 共享模型批量推理', 'section'))
-        description = label('多条兼容短句共用一份模型和音色特征。需要独立 Qwen 环境及 Base 原始权重；现有 GGUF 继续用于单条或不兼容任务。首次加载可能较慢。', 'muted')
+        description = label('多条兼容短句共用模型和音色特征。自动检测、关联现有文件；可一键下载独立 Python、PyTorch、Qwen SDK 和配套 Base 模型，无需手动安装 Python。', 'muted')
         description.setWordWrap(True)
         layout.addWidget(description)
+        from .batch_setup import BatchSetupControls
+        self.automatic = BatchSetupControls(self)
+        layout.addWidget(self.automatic)
         self.enabled = QCheckBox('符合条件时自动使用批量后端')
         self.enabled.setChecked(True)
         layout.addWidget(self.enabled)
-        form = QFormLayout()
+        self.manual_toggle = QCheckBox('高级手动配置')
+        layout.addWidget(self.manual_toggle)
+        self.manual = QWidget()
+        form = QFormLayout(self.manual)
+        form.setContentsMargins(0, 0, 0, 0)
+        self.manual.hide()
+        self.manual_toggle.toggled.connect(self.manual.setVisible)
         self.python = QLineEdit()
         self.model_dir = QLineEdit()
         self.source_model = QLineEdit()
@@ -45,7 +54,7 @@ class BatchInferenceControls(QWidget):
         form.addRow('计算设备', self.device)
         form.addRow('计算精度', self.dtype)
         form.addRow('每批最多', self.size)
-        layout.addLayout(form)
+        layout.addWidget(self.manual)
         row = QHBoxLayout()
         self.apply = button('检查并应用', self.save, 'check')
         row.addWidget(self.apply)
@@ -94,6 +103,8 @@ class BatchInferenceControls(QWidget):
         if result.get('fallbacks'):
             text += '\n最近回退：' + result['fallbacks'][-1]['reason']
         self.status.setText(text)
+        if 'setup' in result:
+            self.automatic.bind(result['setup'], self.settings)
 
     def refresh(self):
         if self.loading:
@@ -124,4 +135,5 @@ class BatchInferenceControls(QWidget):
             self.setEnabled(True)
             self.apply.setEnabled(True)
             self.bind(result)
+            self.refresh()
         self.owner.call(lambda c: checked(c.put('/settings/batch-inference', json=value)), saved, self.failed)

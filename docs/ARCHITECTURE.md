@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.44 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.45 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -170,3 +170,5 @@ voice_workbench/
 - 新接口增加独立路由模块并显式注册；新增数据通过版本迁移进入数据层。
 - 文件继续增长时按新增职责拆分，不为单个函数建立无必要的包装层；当前内聚的模型、引擎和存储模块沿用现有位置。
 - 原 `Window`、`SettingsPanel`、`create_app`、`ServiceLock` 导入保持可用。新代码优先引用实现模块，兼容文件只维护导出。
+
+v0.7.45 新增 `batch_inference/discovery.py` 与 `provisioning.py`，将本地规格发现和异步环境 / 模型安装从推理解耦；桌面 `batch_setup.py` 管理安装入口、进度和状态刷新。安装只写数据目录，完成后在引擎空闲时应用配置，不在轮询或推理中下载。

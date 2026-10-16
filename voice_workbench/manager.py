@@ -53,6 +53,7 @@ class Manager(BatchExecution):
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
+        self.batch.setup.ensure_scan()
 
     def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None, inference_mode="auto"):
@@ -386,6 +387,7 @@ class Manager(BatchExecution):
                 active["cancelled"].set()
             self.release_runners()
             self.wake.set()
+        self.batch.setup.close()
         self.models.close()
         self.audio_editor.close()
         self.recognition.close()

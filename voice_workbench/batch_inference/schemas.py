@@ -20,3 +20,11 @@ class PlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     voice_id: str = "default"
     texts: list[str] = Field(min_length=1, max_length=10000)
+
+
+class SetupRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    action: Literal['all', 'runtime', 'model', 'detect'] = 'all'
+    source_model: str = Field(default='', max_length=4096)
+    device: Literal['cuda', 'cpu'] = 'cuda'
+    source: Literal['mirror', 'huggingface'] = 'mirror'

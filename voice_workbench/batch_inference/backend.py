@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import time
 
 from ..config import atomic_json
@@ -23,16 +24,18 @@ class BatchBackend:
         self.failures = OrderedDict()
         self.last_result = None
         self.reason, self.versions = self.diagnose()
+        from .provisioning import BatchSetup
+        self.setup = BatchSetup(self)
 
     def diagnose(self, settings=None):
         settings = settings or self.settings
         if not settings.enabled:
             return "自动批量推理已关闭。", {}
         if not all((settings.python, settings.model_dir, settings.source_model)):
-            return "请先选择独立 Python 环境、Qwen Base 原始模型目录及对应 GGUF。", {}
+            return "点击「一键安装并关联」自动准备环境与模型，也可在高级配置中选择已有文件。", {}
         python = Path(settings.python)
         if not python.is_file() or python.name.lower() in ("声笺.exe", "声笺服务.exe"):
-            return "请选择装有 qwen-tts 的独立 Python 解释器。", {}
+            return "独立 Python 不可用，可点击「下载运行环境」自动准备，或在高级配置中重新选择。", {}
         model = Path(settings.model_dir)
         try:
             info = json.loads((model / "config.json").read_text(encoding="utf-8"))
@@ -53,27 +56,39 @@ class BatchBackend:
                 actual = native.get('talker_config', {}).get(key)
                 if expected is not None and actual is not None and expected != actual:
                     return '原始模型与 GGUF 的架构规格不同，请关联相同规格的 Base 模型。', {}
-            code = ("import importlib.util,importlib.metadata as m,json; "
-                    "names=('torch','qwen_tts','soundfile','transformers'); "
-                    "missing=[n for n in names if importlib.util.find_spec(n) is None]; "
-                    "versions={n:m.version('qwen-tts' if n=='qwen_tts' else n) for n in names if n not in missing}; "
-                    "print(json.dumps({'missing':missing,'versions':versions}))")
+            return self.diagnose_python(str(python))
+        except (OSError, ValueError, struct.error, subprocess.TimeoutExpired) as exc:
+            return "批量环境尚未就绪：" + str(exc), {}
+
+    def diagnose_python(self, python):
+        if not python or not Path(python).is_file() or Path(python).name.lower() in ('声笺.exe', '声笺服务.exe'):
+            return '独立 Python 环境尚未安装。', {}
+        code = ("import importlib.util,importlib.metadata as m,json; "
+                "names=('torch','qwen_tts','soundfile','transformers'); "
+                "missing=[n for n in names if importlib.util.find_spec(n) is None]; "
+                "versions={n:m.version('qwen-tts' if n=='qwen_tts' else n) for n in names if n not in missing}; "
+                "print(json.dumps({'missing':missing,'versions':versions}))")
+        try:
             with external_environment() as environment:
-                result = subprocess.run([str(python), "-c", code], capture_output=True, text=True,
-                    encoding="utf-8", timeout=10, env=environment,
+                result = subprocess.run([python, '-c', code], capture_output=True, text=True,
+                    encoding='utf-8', timeout=10, env=environment,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             details = json.loads(result.stdout) if result.returncode == 0 else {'missing': ['环境无法启动']}
             missing = details['missing']
-            return ("独立环境缺少：" + ", ".join(missing) if missing else ""), details.get('versions', {})
+            return ('独立环境缺少：' + ', '.join(missing) if missing else ''), details.get('versions', {})
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-            return "批量环境尚未就绪：" + str(exc), {}
+            return '独立环境检查失败：' + str(exc), {}
 
-    def configure(self, settings):
+    def configure(self, settings, from_setup=False):
         # Validate dependencies outside the scheduler lock; never load weights here.
         with self.manager.lock:
+            if self.setup.busy and not from_setup:
+                raise VoiceError('DOWNLOAD_BUSY', '请先完成或暂停批量安装，再修改高级配置', stage='批量设置')
             self.manager.require_idle_engine("批量推理设置")
         reason, versions = self.diagnose(settings)
         with self.manager.lock:
+            if from_setup:
+                self.setup.check_cancel()
             self.manager.require_idle_engine("批量推理设置")
             self.manager.release_runners()
             with self.manager.config.lock:
@@ -86,8 +101,9 @@ class BatchBackend:
 
     def status(self, compact=False):
         process = self.process.process
-        result = {"backend": "qwen3_batch", "ready": not bool(self.reason),
-                "reason": self.reason, "loaded": bool(process and process.poll() is None and self.process.loaded),
+        reason = '批量环境正在检测或安装，暂时使用原生引擎。' if self.setup.busy else self.reason
+        result = {"backend": "qwen3_batch", "ready": not bool(reason),
+                "reason": reason, "loaded": bool(process and process.poll() is None and self.process.loaded),
                 "last_result": self.last_result}
         if not compact:
             result.update(settings=self.settings.model_dump(), versions=self.versions,
@@ -103,11 +119,11 @@ class BatchBackend:
     def native_metadata(self, job_id, item):
         reason = self.failures.get((job_id, item["generation"]))
         if not reason and item.get('inference_mode') == 'batch':
-            reason = self.reason or unsupported(item['voice'], item['text'], self.settings) or '没有足够的兼容文本可合批。'
+            reason = self.status()['reason'] or unsupported(item['voice'], item['text'], self.settings) or '没有足够的兼容文本可合批。'
         return {"backend": "native", "fallback_reason": reason} if reason else {"backend": "native"}
 
     def select(self, store, job, item):
-        if (self.reason or item.get("inference_mode") == "native"
+        if (self.reason or self.setup.busy or item.get("inference_mode") == "native"
                 or (job["id"], item["generation"]) in self.failures):
             return []
         try:
@@ -132,7 +148,7 @@ class BatchBackend:
             self.process.interrupt()
 
     def plan(self, voice, texts):
-        reason = self.reason or next((r for text in texts if (r := unsupported(voice, text, self.settings))), "")
+        reason = self.status()['reason'] or next((r for text in texts if (r := unsupported(voice, text, self.settings))), "")
         if len(texts) < 2 and not self.status()['loaded']:
             reason = "单条文本使用现有引擎。"
         sizes, size, chars = [], 0, 0
@@ -149,4 +165,4 @@ class BatchBackend:
                 reason = '当前长度限制下无法合并两条文本，使用现有引擎。'
         return {"backend": "native" if reason else "qwen3_batch", "reason": reason,
                 "batch_sizes": sizes, "single_count": sizes.count(1) if not reason else len(texts),
-                "model_loaded": self.status()["loaded"], "requires_setup": bool(self.reason)}
+                "model_loaded": self.status()["loaded"], "requires_setup": bool(self.reason) or self.setup.busy}
