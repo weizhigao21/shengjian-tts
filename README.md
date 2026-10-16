@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.41-E87936?style=flat-square" alt="源码版本 v0.7.41" />
+  <img src="https://img.shields.io/badge/源码-v0.7.42-E87936?style=flat-square" alt="源码版本 v0.7.42" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.41。** 修复语音识别自动判断语言时的强制对齐错误，保留检测语言并传给对齐器；对齐失败保留文字并提示时间估算。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.42。** 语音识别结果支持右键保存到声音库，自动裁剪所选音频并带入原文，可命名、试听后保存；支持连续多行及整段录音。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)与[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.41 的本地构建包尚未上传发行页。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.42 的本地构建包尚未上传发行页。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 

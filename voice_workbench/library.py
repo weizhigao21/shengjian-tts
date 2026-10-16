@@ -441,7 +441,7 @@ class ReferenceDialog(PaperDialog):
             self.file.setText(f"参考音频 · {item.get('duration', 0):.1f} 秒")
             self.file.setEnabled(False)
         elif source:
-            self.file.setText("已选择生成音频 · 点击更换")
+            self.file.setText(initial.get("source_label", "已选择生成音频 · 点击更换"))
         self.file.setToolTip(self.path)
         self.file.setObjectName("audioDrop")
         self.file.setMinimumHeight(64)
@@ -449,6 +449,11 @@ class ReferenceDialog(PaperDialog):
         self.waveform = Waveform()
         self.waveform.load(Path(self.path) if self.path else None)
         self.content.addWidget(self.waveform)
+        self.source_hint = None
+        if initial.get("source_hint"):
+            self.source_hint = label(initial["source_hint"], "hint")
+            self.source_hint.setWordWrap(True)
+            self.content.addWidget(self.source_hint)
         self.name = QLineEdit(initial.get("name", ""))
         self.name.setMaxLength(100)
         self.name.setPlaceholderText("为这段参考声音起个名字")
@@ -467,6 +472,8 @@ class ReferenceDialog(PaperDialog):
         path, _ = QFileDialog.getOpenFileName(self, "导入参考声音", "", "WAV 音频 (*.wav)")
         if path:
             self.path = path
+            if self.source_hint:
+                self.source_hint.hide()
             self.file.setText(Path(path).name)
             self.waveform.load(Path(path))
             if not self.name.text():

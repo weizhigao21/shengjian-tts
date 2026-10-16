@@ -12,6 +12,7 @@ from ..api_client import checked
 from ..audio_output import SystemAudioOutput
 from ...subtitles import normalize_timestamp
 from ...recent_works import external_work
+from .recognition_references import RecognitionReferences
 
 AUDIO_FILES = "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma *.aiff *.aif)"
 # Formats the native reader and the Qt player both accept; kept in step with the service.
@@ -21,7 +22,7 @@ STATUSES = {"queued": "等待识别", "running": "识别中", "done": "识别完
 BUSY = ("queued", "running")
 
 
-class RecognitionController:
+class RecognitionController(RecognitionReferences):
     def __init__(self, owner, panel):
         self.owner, self.panel = owner, panel
         self.options = {}
@@ -41,6 +42,7 @@ class RecognitionController:
         self.selection_sequence = 0
         self.save_sequence = 0
         self.importing = None
+        self.preparing_reference = False
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -239,7 +241,7 @@ class RecognitionController:
         duration = state.get("duration") or 0.0
         source = state.get("source_path") or state.get("audio") or ""
         self.panel.audio_name.setText("当前音频：" + Path(source).name)
-        self.panel.audio_name.setToolTip(source)
+        self.panel.audio_name.setToolTip(source + "\n右键可将整段音频保存到声音库 → 参考声音。")
         details = f"{duration:.2f} 秒"
         if state.get("recognized_language"):
             details += f" · 识别语言 {state['recognized_language']}"

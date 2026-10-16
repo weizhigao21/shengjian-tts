@@ -1,10 +1,11 @@
 """Speech recognition page: drop audio in, read the transcript, play one line at a time."""
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                            QListWidget, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                            QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from ...ui import button, label
 from ..controllers.recognition import RecognitionController
+from ..components.recognition_lines import RecognitionLines
 
 DROP_STYLE = ("QWidget#dropZone { background: #fbfbfa; border: 1px dashed #cfcfcc; border-radius: 10px; }"
               "QWidget#dropZone[dragging=\"true\"] { background: #fff6ef; border: 1px dashed #e0651c; }")
@@ -61,6 +62,10 @@ class RecognitionPanel(QWidget):
 
         self.audio_name = label("尚未导入音频", "muted")
         self.audio_name.setWordWrap(True)
+        self.audio_name.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.audio_name.customContextMenuRequested.connect(
+            lambda position: self.controller.reference_context_menu(self.audio_name, position, whole=True))
+        self.audio_name.setToolTip("右键可将整段音频保存到声音库 → 参考声音。")
         content.addWidget(self.audio_name)
 
         self.info = label("把音频拖到下方区域，或点击「导入音频」。", "hint")
@@ -85,13 +90,17 @@ class RecognitionPanel(QWidget):
         drop.addStretch()
         content.addWidget(self.drop_zone, 1)
 
-        self.lines = QListWidget()
+        self.lines = RecognitionLines()
         self.lines.setObjectName("recognitionLines")
         self.lines.setStyleSheet(LINE_STYLE)
         self.lines.setWordWrap(True)
         self.lines.setUniformItemSizes(False)
         self.lines.setAlternatingRowColors(False)
         self.lines.itemClicked.connect(lambda item: self.controller.play_line(self.lines.row(item)))
+        self.lines.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.lines.customContextMenuRequested.connect(
+            lambda position: self.controller.reference_context_menu(self.lines, position))
+        self.lines.setToolTip("点击播放；右键保存片段到声音库。可按住 Shift 选择连续多行，参考音频需要 1–60 秒。")
         self.lines.hide()
         content.addWidget(self.lines, 1)
 
