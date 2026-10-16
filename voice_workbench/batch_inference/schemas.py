@@ -28,3 +28,10 @@ class SetupRequest(BaseModel):
     source_model: str = Field(default='', max_length=4096)
     device: Literal['cuda', 'cpu'] = 'cuda'
     source: Literal['mirror', 'huggingface'] = 'mirror'
+
+
+class BenchmarkRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    voice_id: str = Field(min_length=1, max_length=500)
+    workload_name: Literal['bilingual', 'zh', 'en'] = 'bilingual'
+    warm_rounds: int = Field(default=1, ge=1, le=3)

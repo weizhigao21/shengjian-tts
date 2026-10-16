@@ -50,6 +50,8 @@ class Manager(BatchExecution):
         from .speech_recognition.service import SpeechRecognizer
         self.recognition = SpeechRecognizer(self)
         self.batch = BatchBackend(self)
+        from .batch_inference.benchmark import InferenceBenchmark
+        self.benchmark = InferenceBenchmark(self)
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
@@ -171,7 +173,8 @@ class Manager(BatchExecution):
 
     @property
     def editing_busy(self):
-        return self.audio_editor.gpu_busy or self.recognition.gpu_busy
+        return (self.audio_editor.gpu_busy or self.recognition.gpu_busy
+                or bool(getattr(self, 'benchmark', None) and self.benchmark.gpu_busy))
 
     def require_idle_engine(self, stage):
         """Call under lock before reserving the engine for editing or recognition."""
@@ -388,6 +391,7 @@ class Manager(BatchExecution):
             self.release_runners()
             self.wake.set()
         self.batch.setup.close()
+        self.benchmark.close()
         self.models.close()
         self.audio_editor.close()
         self.recognition.close()

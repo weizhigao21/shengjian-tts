@@ -65,6 +65,8 @@ class BatchSetup:
         now = time.monotonic()
         if now - self.last_scan < 10 or self.busy or self.closed or self.state['status'] in ('paused', 'failed'):
             return
+        if getattr(self.backend.manager, 'benchmark', None) and self.backend.manager.benchmark.gpu_busy:
+            return
         self.last_scan = now
         candidate, _, _ = discover(self.backend)
         interpreter = Path(candidate.python) if candidate.python else None

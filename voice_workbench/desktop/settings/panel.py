@@ -130,6 +130,7 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
 
     def close_management(self):
         self.batch_inference.automatic.timer.stop()
+        self.batch_inference.benchmark.timer.stop()
         self.app_updates.close_updates()
         self.timer.stop()
         self.stop()

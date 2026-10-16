@@ -65,6 +65,9 @@ class BatchInferenceControls(QWidget):
         self.status = label('尚未配置独立批量后端。', 'hint')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        from .benchmark import BenchmarkControls
+        self.benchmark = BenchmarkControls(self)
+        layout.addWidget(self.benchmark)
         self.enabled.toggled.connect(self.changed)
         self.device.currentIndexChanged.connect(self.changed)
         self.dtype.currentIndexChanged.connect(self.changed)
@@ -105,6 +108,8 @@ class BatchInferenceControls(QWidget):
         self.status.setText(text)
         if 'setup' in result:
             self.automatic.bind(result['setup'], self.settings)
+        if 'benchmark' in result:
+            self.benchmark.bind(result['benchmark'])
 
     def refresh(self):
         if self.loading:

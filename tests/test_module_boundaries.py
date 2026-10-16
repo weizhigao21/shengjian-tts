@@ -42,9 +42,9 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     assert actual['paths'].pop('/models/scan')['post']['responses'].get('202')
     assert actual['paths'].pop('/recent-works')['get']['responses'].get('200')
     for path in ('/inference/backends', '/inference/plan', '/settings/batch-inference',
-                 '/inference/setup', '/inference/setup/pause'):
+                 '/inference/setup', '/inference/setup/pause', '/inference/benchmark', '/inference/benchmark/cancel'):
         actual['paths'].pop(path)
-    for name in ('BatchSettings', 'PlanRequest', 'SetupRequest'):
+    for name in ('BatchSettings', 'PlanRequest', 'SetupRequest', 'BenchmarkRequest'):
         actual['components']['schemas'].pop(name)
     actual['components']['schemas']['JobInput']['properties'].pop('inference_mode')
     assert actual['paths'].pop('/parameter-presets')['post']['responses'].get('201')

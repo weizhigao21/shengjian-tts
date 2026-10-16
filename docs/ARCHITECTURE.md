@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.45 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.46 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -172,3 +172,5 @@ voice_workbench/
 - 原 `Window`、`SettingsPanel`、`create_app`、`ServiceLock` 导入保持可用。新代码优先引用实现模块，兼容文件只维护导出。
 
 v0.7.45 新增 `batch_inference/discovery.py` 与 `provisioning.py`，将本地规格发现和异步环境 / 模型安装从推理解耦；桌面 `batch_setup.py` 管理安装入口、进度和状态刷新。安装只写数据目录，完成后在引擎空闲时应用配置，不在轮询或推理中下载。
+
+v0.7.46 的 `batch_inference/benchmark.py` 使用独立原生 / 批量进程，在管理器引擎保留期间运行固定快照，不进入任务存储或成品缓存。桌面 `settings/benchmark.py` 在原设置轮询中接收进度并呈现冷 / 热报告；模型安装、配置、识别和编辑沿用引擎互斥约束。

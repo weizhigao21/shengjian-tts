@@ -183,6 +183,9 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 | `GET /settings/batch-inference` | 配置、运行库版本、上批统计和近期回退；v0.7.45 新增 `setup`（本地候选、目录、大小、安装任务阶段 / 速度 / 状态），仅自动检测，不下载。 |
 | `POST /inference/setup` | v0.7.45 异步安装 / 关联，202。`action: all / runtime / model / detect`（默认 all），`source_model` 为已导入 Base GGUF 路径（空值自动选），`device: cuda / cpu`、`source: mirror / huggingface`。 |
 | `POST /inference/setup/pause` | 暂停专用安装，已下载文件保留；再次提交 setup 可复用 / 续传。 |
+| `GET /inference/benchmark` | v0.7.46：可选预设、测速状态 / 进度 / 最近报告。`GET /settings/batch-inference` 同时新增 `benchmark` 快照。 |
+| `POST /inference/benchmark` | v0.7.46：202 异步速度对比。`voice_id` 必填，`workload_name: bilingual / zh / en`，`warm_rounds` 为 1–3，默认 1。原生单实例与批量后端使用固定短句、种子 1234、每条不超过 256 tokens，不改预设。 |
+| `POST /inference/benchmark/cancel` | 取消测速，释放引擎并保留部分结果。 |
 | `PUT /settings/batch-inference` | 设置独立 `python`、原始 `model_dir`、关联 GGUF `source_model`、`enabled`、`device`、`dtype`、`max_batch_size`、`max_batch_chars`、`prompt_cache_slots`、`idle_seconds`。活动推理时拒绝修改。 |
 | `POST /inference/plan` | `{ "voice_id": "qwen-preset", "texts": ["第一句", "第二句"] }`，只读预览，不创建任务、复制参考音频或加载模型。 |
 
