@@ -1,0 +1,2 @@
+# Optional external runtime. Never installed into the desktop bundle.
+qwen-tts==0.1.1

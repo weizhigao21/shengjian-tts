@@ -17,8 +17,7 @@ class PreferencesSettings:
         self.pages.addWidget(scroll)
 
     def _performance_page(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
+        page, layout = self.scroll_page("performanceSettings")
         layout.setContentsMargins(0, 8, 0, 0)
         layout.setSpacing(14)
         layout.addWidget(label("双语工作流批量生成", "section"))
@@ -51,6 +50,9 @@ class PreferencesSettings:
         self.performance_notice = label("", "hint")
         self.performance_notice.setWordWrap(True)
         layout.addWidget(self.performance_notice)
+        from .batch_inference import BatchInferenceControls
+        self.batch_inference = BatchInferenceControls(self.owner)
+        layout.addWidget(self.batch_inference)
         layout.addStretch()
         def changed():
             self.performance_dirty = True

@@ -12,8 +12,9 @@ router = APIRouter()
 @router.get("/")
 @router.get("/health")
 def health(request: Request):
-    return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "workflow_record_only", "engine_download", "engine_verification", "engine_updates", "model_updates", "script_voice_mentions", "dialogue_editor", "dialogue_audio_scope", "fixed_creation_type", "index_emotion_controls", "dialogue_role_names", "audio_editor"],
-            "status": "running", "data_dir": str(manager(request).root), "engine": manager(request).models.engines.listing(), **manager(request).status()}
+    return {"service": "local-voice-workbench", "version": __version__, "capabilities": ["async_jobs", "legacy_infer", "reference_library", "task_delete", "generation_options", "work_generations", "asset_management", "voice_discovery", "workflow_grouping", "workflow_parallel", "workflow_record_only", "engine_download", "engine_verification", "engine_updates", "model_updates", "script_voice_mentions", "dialogue_editor", "dialogue_audio_scope", "fixed_creation_type", "index_emotion_controls", "dialogue_role_names", "audio_editor", "batch_inference", "inference_plan"],
+            "status": "running", "inference_api": 1,
+            "data_dir": str(manager(request).root), "engine": manager(request).models.engines.listing(), **manager(request).status()}
 
 
 @router.get("/settings/performance")

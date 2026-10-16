@@ -20,11 +20,14 @@ def test_health_counts_all_active_jobs_without_loading_history(tmp_path, monkeyp
         from types import SimpleNamespace
         manager.audio_editor = SimpleNamespace(active=None)
         manager.recognition = SimpleNamespace(active=None)
+        batch_calls = []
+        manager.batch = SimpleNamespace(status=lambda compact=False: batch_calls.append(compact) or {})
         class Config:
             def performance(self): return {}
         manager.config = Config()
         monkeypatch.setattr(store, "list", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("loaded full histories")))
         assert manager.status()["queue"] == 10005
+        assert batch_calls == [True]
     finally:
         store.close()
 
@@ -43,6 +46,10 @@ def test_settings_only_requests_the_visible_section(tmp_path, qtbot, monkeypatch
     class Client:
         def get(self, path):
             paths.append(path)
+            if path == '/settings/batch-inference':
+                from voice_workbench.batch_inference.schemas import BatchSettings
+                return httpx.Response(200, json={'settings': BatchSettings().model_dump(),
+                    'ready': False, 'reason': '未配置', 'loaded': False, 'last_result': None})
             value = [] if path == "/generated-audio" else {"workflow_workers": 1, "cpu_threads": 0}
             return httpx.Response(200, json=value)
     def call(action, success=None, failure=None):
@@ -53,6 +60,9 @@ def test_settings_only_requests_the_visible_section(tmp_path, qtbot, monkeypatch
     for section, expected in [(0, "/models"), (1, "/generated-audio"), (2, "/settings/performance"), (3, None), (4, "/models")]:
         paths.clear()
         panel.set_section(section)
-        assert paths == ([expected] if expected else [])
+        expected_paths = [expected] if expected else []
+        if section == 2:
+            expected_paths.append('/settings/batch-inference')
+        assert paths == expected_paths
         assert not panel.loading
     window.close()

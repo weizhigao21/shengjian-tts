@@ -7,13 +7,23 @@ from fastapi.testclient import TestClient
 import pytest
 
 from integration.local_voice_client import run_local_job
-from scripts.install_workflow_adapter import prepare
+from scripts.install_workflow_adapter import prepare, ensure_stop_interruption
 from voice_workbench.api import create_app
 from voice_workbench.errors import VoiceError
 from voice_workbench.manager import Manager
 from test_model_capabilities import kokoro
 from test_service import ControlledRunner, make_wave, wait_job
 from test_workflow_client import Session
+
+
+@pytest.mark.parametrize('body', ['        self._stop_flag = True\n        self.requestInterruption()\n',
+                                  '        self._stop_flag = True\n', ''])
+def test_bridge_stop_preserves_existing_flags_and_is_idempotent(body):
+    source = 'class Bridge:\n    def stop(self):\n' + body + '        if self._tts_worker:\n            self._tts_worker.stop()\n'
+    updated = ensure_stop_interruption(source)
+    assert updated.count('self.requestInterruption()') == 1
+    assert ensure_stop_interruption(updated) == updated
+    assert 'self._stop_flag = True' in updated if body else 'self._stop_flag' not in updated
 
 
 def test_micro_batches_share_one_work_and_keep_their_own_results(tmp_path):

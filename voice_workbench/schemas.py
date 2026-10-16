@@ -126,6 +126,7 @@ class JobInput(BaseModel):
     workflow_key: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_.:-]{1,160}$")
     record_only: bool = False
     delivery_ack: bool = False
+    inference_mode: Literal["auto", "native", "batch"] = "auto"
 
 
 class PerformanceSettings(BaseModel):

@@ -28,7 +28,8 @@ def submit(body: JobInput, request: Request):
                           script=body.script, workflow_key=body.workflow_key, use_preset=body.use_preset,
                           record_only=body.record_only, delivery_ack=body.delivery_ack,
                           script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-                          editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
+                          editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None,
+                          inference_mode=body.inference_mode)
         return submitted(m, job_id)
 
 
@@ -55,7 +56,8 @@ def append_generation(job_id: str, body: JobInput, request: Request):
                  job_id=job_id, script=body.script, use_preset=body.use_preset,
                  record_only=body.record_only, delivery_ack=body.delivery_ack,
                  script_mentions=[v.model_dump() for v in body.script_mentions] if body.script_mentions is not None else None,
-                 editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None)
+                 editor_state=body.editor_state.model_dump(exclude_none=True) if body.editor_state else None,
+                 inference_mode=body.inference_mode)
         return submitted(m, job_id)
 
 

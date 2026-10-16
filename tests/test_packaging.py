@@ -158,10 +158,18 @@ def test_distribution_zip_excludes_personal_data_even_in_used_release(tmp_path, 
 def test_copy_documentation_keeps_all_relative_readme_assets(tmp_path, monkeypatch):
     monkeypatch.setattr(build_package, "ROOT", tmp_path)
     for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
-        source = tmp_path / name
+        source = tmp_path / ('scripts/setup_qwen_batch.py' if name == 'docs/setup_qwen_batch.py' else name)
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(name.encode("utf-8"))
     candidate = tmp_path / "build" / "staging" / "声笺"
     build_package.copy_documentation(candidate)
     for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
-        assert (candidate / name).read_bytes() == (tmp_path / name).read_bytes()
+        source = tmp_path / ('scripts/setup_qwen_batch.py' if name == 'docs/setup_qwen_batch.py' else name)
+        assert (candidate / name).read_bytes() == source.read_bytes()
+
+
+def test_optional_installer_stays_inside_the_existing_updater_payload_boundary():
+    from voice_workbench.app_updates.manifest import managed_path
+    assert managed_path('docs/setup_qwen_batch.py')
+    assert not managed_path('scripts/setup_qwen_batch.py')
+    assert not managed_path('requirements-qwen-batch.txt')

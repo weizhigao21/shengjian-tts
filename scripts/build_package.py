@@ -21,7 +21,8 @@ else:
 
 DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt")
 DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md", "docs/MODEL_DISCOVERY.md",
-                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md", "docs/SPEECH_RECOGNITION.md")
+                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md", "docs/SPEECH_RECOGNITION.md",
+                        "docs/BATCH_INFERENCE.md", "docs/setup_qwen_batch.py")
 DOCUMENTATION_LICENSES = tuple(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "licenses").rglob("*"))
                               if path.is_file() and not path.is_symlink())
 DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
@@ -33,7 +34,8 @@ def copy_documentation(candidate):
     for name in (*DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES):
         destination = candidate / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / name, destination)
+        source = ROOT / ("scripts/setup_qwen_batch.py" if name == "docs/setup_qwen_batch.py" else name)
+        shutil.copy2(source, destination)
 
 
 def contained(path, parent):
@@ -92,7 +94,8 @@ def main():
     shutil.copy2(work / "dist" / UPDATER, candidate / UPDATER)
     for name in ("声笺.exe", "声笺服务.exe", "_internal/voice_workbench/assets/app.ico",
                  "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py",
-                 "_internal/voice_workbench/index_emotion.py", "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
+                 "_internal/voice_workbench/index_emotion.py", "_internal/voice_workbench/batch_inference/qwen_worker.py",
+                 "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
         if not (candidate / name).is_file():
             raise RuntimeError(f"产物不完整：{candidate / name}")
     result = subprocess.run([str(candidate / "声笺服务.exe"), "--version"], capture_output=True,

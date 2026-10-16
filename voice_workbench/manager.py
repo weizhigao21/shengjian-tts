@@ -16,9 +16,11 @@ from .store import Store, WORKFLOW_TITLES
 from .model_info import MODES
 from .services.service_lock import ServiceLock
 from .services.generation import prepare_segments
+from .batch_inference.backend import BatchBackend
+from .batch_inference.execution import BatchExecution
 
 
-class Manager:
+class Manager(BatchExecution):
     def __init__(self, data_dir: Path, runner=None, runner_factory=None):
         self.root = Path(data_dir).resolve()
         self.service_lock = ServiceLock(self.root)
@@ -47,12 +49,13 @@ class Manager:
         self.audio_editor = AudioEditor(self)
         from .speech_recognition.service import SpeechRecognizer
         self.recognition = SpeechRecognizer(self)
+        self.batch = BatchBackend(self)
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
 
     def submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-               use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None):
+               use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None, inference_mode="auto"):
         # Validation and enqueue must be atomic with model deletion/reconfiguration.
         with self.lock:
             if self.stopping.is_set():
@@ -64,16 +67,17 @@ class Manager:
                     raise VoiceError("JOB_NOT_FOUND", str(exc), stage="工作流提交") from exc
             record_only = record_only or bool(workflow_key) or title in WORKFLOW_TITLES
             return self._submit(title, model_name, segments, overrides, job_id, script, workflow_key,
-                                use_preset, record_only, delivery_ack, script_mentions, editor_state)
+                                use_preset, record_only, delivery_ack, script_mentions, editor_state, inference_mode)
 
     def _submit(self, title, model_name, segments, overrides=None, job_id=None, script=None, workflow_key=None,
-                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None):
+                use_preset=True, record_only=False, delivery_ack=False, script_mentions=None, editor_state=None, inference_mode="auto"):
         if not segments or any(not s["text"].strip() for s in segments):
             raise VoiceError("EMPTY_TEXT", "文本不能为空", "检查字幕中的空白片段。", "提交")
         if job_id:
             editor_state = self.store.fixed_editor_state(job_id, editor_state)
         prepared, segments = prepare_segments(self.config, model_name, segments, overrides=overrides,
                                               use_preset=use_preset, validator=check_voice)
+        segments = [dict(s, inference_mode=inference_mode) for s in segments]
         voice, fingerprint, provenance = prepared.voice, prepared.fingerprint, prepared.provenance
         with self.lock:
             if job_id:
@@ -103,7 +107,9 @@ class Manager:
             for slot, active in self.active.items():
                 if active["job_id"] == job_id and (generation is None or active["generation"] == generation):
                     active["cancelled"].set()
-                    if slot in self.runners:
+                    if active.get("batch"):
+                        self.batch.process.interrupt()
+                    elif slot in self.runners:
                         self.runners[slot].interrupt()
             self.workflow_audio.cancelled(job_id, generation)
 
@@ -134,11 +140,16 @@ class Manager:
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
                     "audio_editing": self.audio_editor.active,
                     "recognition": self.recognition.active,
-                    "active": [{"job_id": a["job_id"], "index": a["index"]} for a in self.active.values()],
+                    "active": [{"job_id": a["job_id"], "index": a["index"],
+                                "indices": a.get("indices", [a["index"]]),
+                                "backend": "qwen3_batch" if a.get("batch") else "native"} for a in self.active.values()],
+                    "inference": self.batch.status(compact=True),
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
                     "queue": self.store.queued_job_count()}
 
     def release_runners(self):
+        if hasattr(self, "batch"):
+            self.batch.process.interrupt()
         for runner in self.runners.values():
             runner.interrupt()
         # Retry shared Windows aliases only after all replicas have released their mappings.
@@ -169,6 +180,8 @@ class Manager:
             raise VoiceError("ENGINE_BUSY", "推理引擎正在使用，请完成或取消当前配音、识别或 AI 编辑任务", stage=stage)
 
     def _capacity(self, job, item):
+        if (job["id"], item["generation"]) in self.batch.failures:
+            return 1
         if not self.parallel_supported or not item.get("workflow") or item["voice"]["backend"] != "audio_cpp" or job["id"] in self.serial_jobs:
             return 1
         return self.config.performance()["workflow_workers"]
@@ -252,6 +265,8 @@ class Manager:
                             self.workflow_audio.expired()
                             next_cleanup = time.monotonic() + 60
                         cohort = next(iter(self.active.values()), None)
+                        if not cohort:
+                            self.batch.expire()
                         capacity = cohort["capacity"] if cohort else 4
                         if cohort and cohort["job_id"] in self.serial_jobs:
                             capacity = 1
@@ -260,6 +275,15 @@ class Manager:
                                                    admitted=lambda j, s: len(self.active) < self._capacity(j, s))
                             if task:
                                 job, item = task
+                                batch = self.batch.select(self.store, job, item) if not cohort else []
+                                if batch:
+                                    cancelled = threading.Event()
+                                    self.active[0] = {"job_id": job["id"], "index": item["idx"],
+                                        "generation": item["generation"], "capacity": 1, "cancelled": cancelled,
+                                        "batch": True, "indices": [i["idx"] for i in batch]}
+                                    self.current = (job["id"], item["idx"])
+                                    pool.submit(self._execute_batch, 0, job, batch, cancelled)
+                                    continue
                                 capacity = min(capacity, self._capacity(job, item))
                                 # A fallback must release idle replicas before its retry.
                                 if capacity == 1:
@@ -308,12 +332,14 @@ class Manager:
                     except Exception:
                         cached = False
                 if cached and not self.stopping.is_set() and not cancelled.is_set():
-                    self.store.finish(job_id, index, audio=output.name, cached=True, duration=details["duration"], generation_seconds=0.0)
+                    self.store.finish(job_id, index, audio=output.name, cached=True, duration=details["duration"], generation_seconds=0.0,
+                                      inference=self.batch.native_metadata(job_id, item))
                     return
             if not cached:
                 # Include engine/model loading in generate(), but exclude queueing
                 # and persistence. A monotonic clock tolerates system clock changes.
                 inference_started = perf_counter()
+                self.batch.process.interrupt()
                 runner.generate({"voice": voice, "fingerprint": fingerprint,
                                       "text": item["text"], "output": str(temporary),
                                       "job_id": job_id, "index": index}, cancelled)
@@ -325,7 +351,8 @@ class Manager:
                     os.replace(temporary, output)
                     if not transient:
                         self.store.cache_put(key, output, file_digest(str(output)))
-                    self.store.finish(job_id, index, audio=output.name, cached=False, duration=details["duration"], generation_seconds=generation_seconds)
+                    self.store.finish(job_id, index, audio=output.name, cached=False, duration=details["duration"], generation_seconds=generation_seconds,
+                                      inference=self.batch.native_metadata(job_id, item))
         except Exception as exc:
             if inference_started is not None and generation_seconds is None:
                 generation_seconds = max(0.0, perf_counter() - inference_started)
@@ -343,7 +370,8 @@ class Manager:
                         self.performance_notice = "批量并发遇到显存不足，当前任务已降为单实例，失败片段自动重试一次。"
                         self.store.requeue(job_id, index)
                     else:
-                        self.store.finish(job_id, index, error=error, generation_seconds=generation_seconds)
+                        self.store.finish(job_id, index, error=error, generation_seconds=generation_seconds,
+                                          inference=self.batch.native_metadata(job_id, item))
         finally:
             temporary.unlink(missing_ok=True)
             with self.lock:

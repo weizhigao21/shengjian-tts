@@ -9,6 +9,7 @@ a = Analysis(
     binaries=[],
     datas=[(str(assets), "voice_workbench/assets"),
            (str(root / "voice_workbench" / "engine_worker.py"), "voice_workbench"),
+           (str(root / "voice_workbench" / "batch_inference" / "qwen_worker.py"), "voice_workbench/batch_inference"),
            (str(root / "voice_workbench" / "index_emotion.py"), "voice_workbench")],
     hiddenimports=["uvicorn.logging", "uvicorn.loops.asyncio",
                    "uvicorn.protocols.http.h11_impl", "uvicorn.lifespan.on"],

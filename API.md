@@ -173,6 +173,21 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 
 兼容旧 `/infer_single`、`/infer_bulk`、`audio_url` / `audio_urls`。旧请求中已知工作流标题或 `workflow_key` 自动启用只记录模式；没有接收确认的旧适配器完整下载后清理，`HEAD`、`Range` 和断连保留重试机会。
 
+## 批量推理路由 · v0.7.44
+
+现有 `POST /jobs` 和 `POST /jobs/{id}/generate` 新增可选 `inference_mode: "auto" | "native" | "batch"`。默认自动按同任务 / 生成批次的模型、参考音色和参数匹配；`native` 明确走原生后端，`batch` 优先尝试独立后端，不可用时返回原生结果及回退原因。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /inference/backends` | 后端能力、是否就绪、未就绪原因、是否驻留。 |
+| `GET /settings/batch-inference` | 配置、运行库版本、上批阶段耗时 / 音色缓存状态和近期回退。 |
+| `PUT /settings/batch-inference` | 设置独立 `python`、原始 `model_dir`、关联 GGUF `source_model`、`enabled`、`device`、`dtype`、`max_batch_size`、`max_batch_chars`、`prompt_cache_slots`、`idle_seconds`。活动推理时拒绝修改。 |
+| `POST /inference/plan` | `{ "voice_id": "qwen-preset", "texts": ["第一句", "第二句"] }`，只读预览，不创建任务、复制参考音频或加载模型。 |
+
+每条生成结果新增 `inference_mode` 与 `inference`，记录实际后端 / 批大小 / 模型签名 / 缓存命中 / 整批耗时，回退时提供 `fallback_reason`。批量任务的 `generation_seconds` 是整批完成延迟，不是各条独立 GPU 耗时。取消、重试、框 ID、排序与工作流交付接口保留。
+
+首版批量后端为 Qwen3-TTS Base 官方 Python 列表生成接口，需要按需安装独立环境和原始权重，不能直接加载 GGUF。后端发现只报告环境就绪情况，首次加载仍可能报错并回退。配置、安装与行为边界见 [BATCH_INFERENCE.md](docs/BATCH_INFERENCE.md)。
+
 ## 错误与删除
 
 失败响应提供 `error.code`、`stage`、`message` 和 `hint`；片段错误也保存在任务详情与日志中。生成中不能修改性能设置或删除正在使用的模型。

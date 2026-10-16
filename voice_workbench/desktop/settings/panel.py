@@ -94,6 +94,7 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
                         control.setValue(value[key])
                         control.blockSignals(False)
                 self.performance_notice.setText(value.get("notice", ""))
+                self.batch_inference.refresh()
             def performance_failed(message):
                 self.loading = False
                 self.owner.statusBar().showMessage("性能设置读取失败：" + message, 6000)

@@ -38,6 +38,7 @@
 ## 模型与下载引擎
 
 发行 ZIP 不包含 audio.cpp、CUDA 运行库或模型权重。用户通过设置页下载或导入，下载后的目录保留上游许可。
+独立批量后端按需安装 [Qwen3-TTS / qwen-tts](https://github.com/QwenLM/Qwen3-TTS)（Apache-2.0）与 [PyTorch](https://pytorch.org/)。这些运行库及原始模型不包含在发行 ZIP 中，另行安装的依赖保留各自许可；调用适配由本项目实现。
 GGUF 默认来源为 [audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)。
 模型权重遵循各自模型许可，目录数据的 Apache-2.0 许可不替代权重许可。
 

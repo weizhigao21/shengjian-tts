@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.43-E87936?style=flat-square" alt="源码版本 v0.7.43" />
+  <img src="https://img.shields.io/badge/源码-v0.7.44-E87936?style=flat-square" alt="源码版本 v0.7.44" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.43。** 修复识别音频右键入库窗口的试听波形不动，播放进度和试听按钮同步更新，停止或结束后清零。识别结果可保存单行、连续多行及整段录音到声音库。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.44。** 新增独立 Qwen 批量推理模块与自动路由，同模型、同音色的兼容短句共用原始模型和音色提示；环境与原始权重按需安装，未就绪或运行失败时回到现有引擎。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.43 的本地构建包尚未上传发行页。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.44 的本地构建包尚未上传发行页。独立 Qwen 批量后端需要另行安装 Python 运行环境。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 

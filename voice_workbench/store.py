@@ -86,7 +86,8 @@ class Store:
                          "content_type": "TEXT NOT NULL DEFAULT 'article'",
                          "duration": "REAL", "generation_seconds": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0",
                          "audio_storage": "TEXT NOT NULL DEFAULT 'permanent'", "delivery_ack": "INTEGER NOT NULL DEFAULT 0",
-                         "audio_expires": "REAL", "audio_released": "REAL", "audio_release_reason": "TEXT"},
+                         "audio_expires": "REAL", "audio_released": "REAL", "audio_release_reason": "TEXT",
+                         "inference_mode": "TEXT NOT NULL DEFAULT 'auto'", "inference": "TEXT"},
         }.items():
             existing = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for name, declaration in fields.items():
@@ -163,15 +164,15 @@ class Store:
             record_only = self.db.execute("SELECT record_only FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             last, generation = self.db.execute("SELECT COALESCE(MAX(idx),0),COALESCE(MAX(generation),0) FROM segments WHERE job_id=?", (job_id,)).fetchone()
             self.db.executemany("""INSERT INTO segments
-                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack,source_id,source_revision,force_generate,content_type)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
+                (job_id,idx,text,timestamp,status,voice,fingerprint,batch_title,created,generation,provenance,workflow,audio_storage,delivery_ack,source_id,source_revision,force_generate,content_type,inference_mode)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [(job_id, last+i, s["text"], s.get("timestamp", ""),
                 "queued", json.dumps(s["prepared_voice"].voice, ensure_ascii=False) if s.get("prepared_voice") else snapshot,
                 s["prepared_voice"].fingerprint if s.get("prepared_voice") else fingerprint, title, now, generation+1,
                 (json.dumps(s["prepared_voice"].provenance if s.get("prepared_voice") else provenance, ensure_ascii=False)
                  if s.get("prepared_voice") or provenance is not None else None), int(workflow),
                 "temporary" if record_only else "permanent", int(delivery_ack and record_only),
                 s.get("source_id"), s.get("source_revision"), int(s.get("force_generate", False)),
-                "dialogue" if s.get("source_id") else "article") for i, s in enumerate(segments, 1)])
+                "dialogue" if s.get("source_id") else "article", s.get("inference_mode", "auto")) for i, s in enumerate(segments, 1)])
             self.db.execute("UPDATE jobs SET title=?,voice=?,fingerprint=?,script=?,script_mentions=?,editor_state=?,updated=?,auto_named=? WHERE id=?",
                             (title, snapshot, fingerprint, script, json.dumps(script_mentions or [], ensure_ascii=False),
                              json.dumps(editor_state, ensure_ascii=False), now, automatic, job_id))
@@ -226,6 +227,7 @@ class Store:
                 item["voice"] = json.loads(item["voice"]) if item["voice"] else job["voice"]
                 item["fingerprint"] = item["fingerprint"] or job["fingerprint"]
                 item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
+                item["inference"] = json.loads(item["inference"]) if item["inference"] else None
                 if item.get("source_id") in names:
                     item["source_name"] = names[item["source_id"]]
             job["segments"] = items
@@ -271,7 +273,7 @@ class Store:
             item["fingerprint"] = item["fingerprint"] or job["fingerprint"]
             if admitted and not admitted(job, item):
                 return None
-            self.db.execute("UPDATE segments SET status='running',attempts=attempts+1,error=NULL,generation_seconds=NULL WHERE job_id=? AND idx=?", tuple(row))
+            self.db.execute("UPDATE segments SET status='running',attempts=attempts+1,error=NULL,generation_seconds=NULL,inference=NULL WHERE job_id=? AND idx=?", tuple(row))
             self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row[0]))
             job["status"] = item["status"] = "running"
             item["attempts"] += 1
@@ -280,12 +282,37 @@ class Store:
             item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
             return job, item
 
-    def finish(self, job_id, index, *, audio="", error=None, cached=False, duration=None, generation_seconds=None):
+    def claim_batch(self, job, first, compatible, limit, max_chars):
+        """Atomically reserve compatible rows from this generation, with bounded lookahead."""
         with self.lock, self.db:
-            self.db.execute("""UPDATE segments SET status=?,audio=?,error=?,cached=?,duration=?,generation_seconds=?
+            selected, chars = [first], len(first["text"])
+            rows = self.db.execute("""SELECT * FROM segments WHERE job_id=? AND generation=? AND status='queued'
+                ORDER BY idx LIMIT 64""", (job["id"], first["generation"])).fetchall()
+            for row in rows:
+                item = dict(row)
+                item["voice"] = json.loads(item["voice"]) if item["voice"] else job["voice"]
+                item["fingerprint"] = item["fingerprint"] or job["fingerprint"]
+                if chars + len(item["text"]) > max_chars or not compatible(item):
+                    continue
+                item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
+                selected.append(item)
+                chars += len(item["text"])
+                if len(selected) >= limit:
+                    break
+            if len(selected) < 2:
+                return []
+            for item in selected[1:]:
+                self.db.execute("""UPDATE segments SET status='running',attempts=attempts+1,error=NULL,
+                    generation_seconds=NULL,inference=NULL WHERE job_id=? AND idx=? AND status='queued'""", (job["id"], item["idx"]))
+                item.update(status="running", attempts=item["attempts"]+1, error=None)
+            return selected
+
+    def finish(self, job_id, index, *, audio="", error=None, cached=False, duration=None, generation_seconds=None, inference=None):
+        with self.lock, self.db:
+            self.db.execute("""UPDATE segments SET status=?,audio=?,error=?,cached=?,duration=?,generation_seconds=?,inference=?
                 WHERE job_id=? AND idx=? AND status='running'""",
                 ("failed" if error else "done", audio, json.dumps(error, ensure_ascii=False) if error else None,
-                 int(cached), duration, generation_seconds, job_id, index))
+                 int(cached), duration, generation_seconds, json.dumps(inference) if inference else None, job_id, index))
             self._refresh(job_id)
 
     def _refresh(self, job_id):
@@ -351,6 +378,7 @@ class Store:
             for row in rows:
                 item = dict(row)
                 item["id"] = f"{item['job_id']}:{item['idx']}"
+                item["inference"] = json.loads(item["inference"]) if item["inference"] else None
                 item["voice"] = json.loads(item["voice"] or "{}")
                 item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
                 serialized = item.pop("work_editor_state")
@@ -418,7 +446,7 @@ class Store:
             result = []
             for row in rows:
                 item = dict(row)
-                for name in ("voice", "provenance", "error"):
+                for name in ("voice", "provenance", "error", "inference"):
                     item[name] = json.loads(item[name]) if item[name] else None
                 result.append(item)
             return result

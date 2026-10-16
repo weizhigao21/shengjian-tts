@@ -17,6 +17,22 @@ def replace_once(source, old, new):
     return source.replace(old, new, 1)
 
 
+def ensure_stop_interruption(source):
+    """Preserve newer stop flags and recognize an existing interruption request."""
+    stops = [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == 'stop']
+    if len(stops) != 1:
+        raise RuntimeError("工作流停止函数与预期不一致，未修改任何文件。")
+    stop = stops[0]
+    for node in stop.body:
+        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'requestInterruption'
+                and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == 'self'):
+            return source
+    lines = source.splitlines(keepends=True)
+    lines.insert(stop.body[0].lineno-1, ' '*(stop.col_offset+4) + 'self.requestInterruption()\n')
+    return ''.join(lines)
+
+
 def voice_picker_installed(source):
     """Recognize complete discovery wiring independently of panel layout text."""
     tree = ast.parse(source)
@@ -96,8 +112,7 @@ def prepare(target):
                          'from .tts_profile import dir_name\nfrom .local_voice_client import prepare_workflow_config')
     bridge = replace_once(bridge, '        cfg = self.config.tts_cfg\n',
                          '        cfg = prepare_workflow_config(self.config)\n')
-    bridge = replace_once(bridge, '    def stop(self):\n        if self._tts_worker:',
-                         '    def stop(self):\n        self.requestInterruption()\n        if self._tts_worker:')
+    bridge = ensure_stop_interruption(bridge)
     marker = '        cfg = prepare_workflow_config(self.config)\n'
     bridge = replace_once(bridge, marker, marker + '        if self.isInterruptionRequested():\n            self._emit_finished(False, "语音生成已取消")\n            return\n')
     bridge = replace_once(bridge, '        self._tts_worker.log_signal.connect(\n            self.log_signal.emit, Qt.ConnectionType.DirectConnection\n        )',

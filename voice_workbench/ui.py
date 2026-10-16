@@ -420,6 +420,7 @@ QWidget#inspector { background:#fcfcfc; border-left:1px solid #ededee; }
 QWidget#inspectorBody { background:#fcfcfc; }
 QWidget#audioEditContent { background:white; }
 QWidget#modelManagementContent { background:white; }
+QWidget#performanceSettings { background:white; }
 QLabel { background:transparent; border:none; }
 QLabel[role="brand"] { font-size:23px; font-weight:700; }
 QLabel[role="title"] { font-size:24px; font-weight:600; }
