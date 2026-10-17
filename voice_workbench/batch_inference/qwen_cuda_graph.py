@@ -1,4 +1,4 @@
-"""Experimental, bounded CUDA graph cache. Disabled by default pending GPU QA.
+"""Experimental, bounded CUDA graph cache. Opt-in; validated on RTX 2080 Ti.
 
 Record the existing fixed loop as-is, including its RNG operations. Warmup,
 capture and first-use parity checks must not consume the request's RNG stream.

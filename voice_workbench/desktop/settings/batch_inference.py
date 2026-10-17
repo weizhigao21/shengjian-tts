@@ -63,7 +63,7 @@ class BatchInferenceControls(QWidget):
         self.predictor_fastpath.setToolTip('减少固定 15 步编码预测的通用生成开销，不修改模型或采样参数；SDK 或调用不兼容时使用原循环。')
         form.addRow('编码预测加速', self.predictor_fastpath)
         self.predictor_cuda_graph = QCheckBox('GPU 图加速（实验，默认关闭）')
-        self.predictor_cuda_graph.setToolTip('尚未完成本机 GPU 验证。需要先启用编码预测加速；首次准备有额外耗时并增加显存占用。')
+        self.predictor_cuda_graph.setToolTip('已在 RTX 2080 Ti / FP16 验证；其他设备仍需实测。需要先启用编码预测加速，首次准备有额外耗时并增加显存占用。')
         self.predictor_fastpath.toggled.connect(self.predictor_cuda_graph.setEnabled)
         form.addRow('', self.predictor_cuda_graph)
         layout.addWidget(self.manual)
