@@ -21,6 +21,11 @@ def execution_details(item):
     for key, title in (('fallback_reason', '回退原因'), ('route_reason', '调度原因')):
         if item.get(key):
             lines.append(title + '：' + str(item[key]))
+    mode = item.get('predictor_mode')
+    if mode:
+        lines.append('编码预测：' + {'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分调用加速'}.get(mode, mode))
+    if item.get('predictor_reason'):
+        lines.append('编码预测说明：' + item['predictor_reason'])
     return '\n'.join(lines)
 
 
@@ -71,6 +76,8 @@ def status_presentation(health):
         if last.get('fallback_reason'):
             text += '回退'
             color = 'fallback'
+        if not last.get('cached') and last.get('predictor_mode') == 'fixed':
+            text += ' · 预测加速'
         tip += '\n\n本次服务最近一次处理（' + result + '）：\n' + execution_details(last)
     return text, tip, color
 

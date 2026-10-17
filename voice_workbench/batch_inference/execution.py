@@ -71,7 +71,8 @@ class BatchExecution:
                     raise VoiceError('BATCH_MODEL_CHANGED', '批量推理期间原始模型文件发生变化')
             metadata = {"backend": 'qwen3_batch', "batch_size": len(items), "batch_seconds": elapsed,
                         "model_signature": signature, **{k: answer[k] for k in
-                        ('warm_model', 'prompt_cache_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds') if k in answer}}
+                        ('warm_model', 'prompt_cache_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds',
+                         'predictor_mode', 'predictor_revision', 'predictor_calls', 'predictor_fallback_calls', 'predictor_reason') if k in answer}}
             with self.lock:
                 if cancelled.is_set() or self.stopping.is_set():
                     return

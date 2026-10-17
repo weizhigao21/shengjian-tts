@@ -58,6 +58,10 @@ class BatchInferenceControls(QWidget):
         form.addRow('计算精度', self.dtype)
         form.addRow('每批最多', self.size)
         form.addRow('启动至少', self.minimum_size)
+        self.predictor_fastpath = QCheckBox('使用已验证的编码预测专用循环')
+        self.predictor_fastpath.setChecked(True)
+        self.predictor_fastpath.setToolTip('减少固定 15 步编码预测的通用生成开销，不修改模型或采样参数；SDK 或调用不兼容时使用原循环。')
+        form.addRow('编码预测加速', self.predictor_fastpath)
         layout.addWidget(self.manual)
         row = QHBoxLayout()
         self.apply = button('检查并应用', self.save, 'check')
@@ -78,6 +82,7 @@ class BatchInferenceControls(QWidget):
         self.size.valueChanged.connect(self.changed)
         self.size.valueChanged.connect(self.minimum_size.setMaximum)
         self.minimum_size.valueChanged.connect(self.changed)
+        self.predictor_fastpath.toggled.connect(self.changed)
 
     def changed(self, *_):
         self.dirty = True
@@ -101,6 +106,7 @@ class BatchInferenceControls(QWidget):
             controls = [(self.enabled, lambda: self.enabled.setChecked(self.settings['enabled'])),
                         (self.size, lambda: self.size.setValue(self.settings['max_batch_size'])),
                         (self.minimum_size, bind_minimum)]
+            controls.append((self.predictor_fastpath, lambda: self.predictor_fastpath.setChecked(self.settings.get('predictor_fastpath', True))))
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setText(self.settings[k]))
                          for key in ('python', 'model_dir', 'source_model')]
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setCurrentIndex(
@@ -115,6 +121,10 @@ class BatchInferenceControls(QWidget):
             text += f"\n上批 {recent['batch_size']} 条 · {recent['batch_seconds']:.2f} 秒"
             if 'prompt_cache_hit' in recent:
                 text += ' · 音色缓存命中' if recent['prompt_cache_hit'] else ' · 新建音色缓存'
+            if recent.get('predictor_mode'):
+                text += ' · 编码预测：' + {'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分加速'}[recent['predictor_mode']]
+            if recent.get('predictor_reason'):
+                text += '\n' + recent['predictor_reason']
         if result.get('fallbacks'):
             text += '\n最近回退：' + result['fallbacks'][-1]['reason']
         self.status.setText(text)
@@ -144,7 +154,7 @@ class BatchInferenceControls(QWidget):
                  'python': self.python.text().strip(), 'model_dir': self.model_dir.text().strip(),
                  'source_model': self.source_model.text().strip(), 'device': self.device.currentData(),
                  'dtype': self.dtype.currentData(), 'max_batch_size': self.size.value(),
-                 'min_batch_size': self.minimum_size.value()}
+                 'min_batch_size': self.minimum_size.value(), 'predictor_fastpath': self.predictor_fastpath.isChecked()}
         self.setEnabled(False)
         self.loading = True
         self.sequence += 1

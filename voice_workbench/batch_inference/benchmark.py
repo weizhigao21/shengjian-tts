@@ -158,6 +158,7 @@ class InferenceBenchmark:
         started = time.perf_counter()
         audio_seconds, first_seconds, calls = 0., None, 0
         position = 0
+        predictor_modes = set()
         while position < len(rows):
             self.check_cancel()
             count = 1
@@ -185,6 +186,8 @@ class InferenceBenchmark:
                 answer = self.batch.generate(settings, signature, payload, self.cancelled, voice['timeout'])
                 if answer.get('count') != len(group):
                     raise VoiceError('BATCH_RESULT_COUNT', '批量后端返回的音频数量不符', stage='速度测试')
+                if answer.get('predictor_mode'):
+                    predictor_modes.add(answer['predictor_mode'])
             elapsed = time.perf_counter() - before
             self.check_cancel()
             if first_seconds is None: first_seconds = elapsed
@@ -196,13 +199,15 @@ class InferenceBenchmark:
             with self.lock:
                 self.state['completed'] += count
         return {**metrics(time.perf_counter() - started, audio_seconds, len(rows)),
-                'first_call_seconds': first_seconds, 'calls': calls}
+                'first_call_seconds': first_seconds, 'calls': calls,
+                **({'predictor_modes': sorted(predictor_modes)} if predictor_modes else {})}
 
     def _run(self, voice, rows, settings, versions, warm_rounds):
         started = time.perf_counter()
         report = {'id': uuid.uuid4().hex, 'started': time.time(), 'voice_id': voice['id'], 'voice_name': voice['name'],
                   'native_model': voice['model_dir'], 'batch_model': settings.model_dir, 'device': settings.device,
                   'dtype': settings.dtype, 'max_batch_size': settings.max_batch_size,
+                  'predictor_fastpath': settings.predictor_fastpath,
                   'seed': 1234, 'generation_options': voice['request_options'], 'workload': rows,
                   'warm_rounds': warm_rounds, 'sample_count': len(rows), 'cache_used': False, 'cache_scope': 'generated_audio',
                   'results': [], 'versions': versions}

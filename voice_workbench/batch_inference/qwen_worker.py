@@ -13,6 +13,7 @@ class QwenEngine:
     def __init__(self):
         self.model = None
         self.prompts = OrderedDict()
+        self.predictor_path = None
 
     def run(self, message):
         import torch
@@ -35,6 +36,11 @@ class QwenEngine:
             self.model = Qwen3TTSModel.from_pretrained(settings["model_dir"],
                 device_map="cuda:0" if device == "cuda" else "cpu", dtype=getattr(torch, precision),
                 attn_implementation="sdpa", local_files_only=True)
+            try:
+                from .qwen_fastpath import install
+            except ImportError:  # Direct script entry in the external Python environment.
+                from qwen_fastpath import install
+            self.predictor_path = install(self.model, settings.get('predictor_fastpath', True), device=device)
         loaded = time.perf_counter()
         voice = message["voice"]
         key = (hashlib.sha256(Path(voice["reference_audio"]).read_bytes()).hexdigest(), voice["reference_text"])
@@ -51,6 +57,7 @@ class QwenEngine:
             prompt_ready = time.perf_counter()
             if message.get("seed", -1) >= 0:
                 torch.manual_seed(message["seed"])
+            counts = self.predictor_path.calls, self.predictor_path.fallbacks
             wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],
                 language=[i["language"] for i in message["items"]], voice_clone_prompt=prompt,
                 **message["options"])
@@ -59,6 +66,7 @@ class QwenEngine:
             for item, audio in zip(message["items"], wavs):
                 sf.write(item["output"], audio, rate, subtype="PCM_16", format="WAV")
         return {"ok": True, "count": len(wavs), "warm_model": warm, "prompt_cache_hit": hit,
+                **self.predictor_path.status(counts),
                 "load_seconds": loaded-started, "prompt_seconds": prompt_ready-loaded,
                 "inference_seconds": time.perf_counter()-prompt_ready}
 

@@ -10,12 +10,13 @@ a = Analysis(
     datas=[(str(assets), "voice_workbench/assets"),
            (str(root / "voice_workbench" / "engine_worker.py"), "voice_workbench"),
            (str(root / "voice_workbench" / "batch_inference" / "qwen_worker.py"), "voice_workbench/batch_inference"),
+           (str(root / "voice_workbench" / "batch_inference" / "qwen_fastpath.py"), "voice_workbench/batch_inference"),
            (str(root / "voice_workbench" / "index_emotion.py"), "voice_workbench")],
     hiddenimports=["uvicorn.logging", "uvicorn.loops.asyncio",
                    "uvicorn.protocols.http.h11_impl", "uvicorn.lifespan.on"],
     hookspath=[],
     runtime_hooks=[],
-    excludes=["torch", "indextts", "pytest", "IPython", "notebook", "jupyter"],
+    excludes=["torch", "transformers", "qwen_tts", "indextts", "pytest", "IPython", "notebook", "jupyter"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

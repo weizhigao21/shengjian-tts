@@ -105,6 +105,18 @@ def test_warm_round_average_and_configured_batch_limit_are_respected(benchmark):
     assert all(item['language'] == 'English' for call in batch.calls for item in call['items'])
 
 
+def test_report_records_actual_predictor_path_and_option(benchmark, monkeypatch):
+    manager, _, batch, _ = benchmark
+    original = batch.generate
+    monkeypatch.setattr(batch, 'generate', lambda *a, **kw: dict(original(*a, **kw), predictor_mode='fixed'))
+    manager.benchmark.start('qwen')
+    report = finished(manager)['result']
+    assert report['predictor_fastpath'] is True
+    result = report['results'][1]
+    assert result['cold']['predictor_modes'] == ['fixed']
+    assert result['warm_rounds'][0]['predictor_modes'] == ['fixed']
+
+
 @pytest.mark.parametrize('backend', ['native', 'batch'])
 def test_backend_failure_keeps_other_result_and_never_reports_fallback_as_batch_speed(benchmark, backend):
     manager, native, batch, _ = benchmark

@@ -175,7 +175,9 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 
 兼容旧 `/infer_single`、`/infer_bulk`、`audio_url` / `audio_urls`。旧请求中已知工作流标题或 `workflow_key` 自动启用只记录模式；没有接收确认的旧适配器完整下载后清理，`HEAD`、`Range` 和断连保留重试机会。
 
-## 批量推理路由 · v0.7.44
+## 批量推理路由 · v0.7.50
+
+Qwen 独立批量配置的 `predictor_fastpath` 默认 `true`，可通过 `PUT /settings/batch-inference` 关闭编码预测专用循环。是否实际启用以生成结果 `inference.predictor_mode`（`fixed`、`standard`、`mixed`）为准，另含 `predictor_revision`、`predictor_calls`、`predictor_fallback_calls`、`predictor_reason`。不兼容 SDK / 模型 / 调用保留原循环，不能仅用配置开关判断结果经过加速。测速报告记录开关及各轮实际路径；成品缓存按开关和实现版本隔离。
 
 现有 `POST /jobs` 和 `POST /jobs/{id}/generate` 新增可选 `inference_mode: "auto" | "native" | "batch"`。默认自动按同任务 / 生成批次的模型、参考音色和参数匹配；`native` 明确走原生后端，`batch` 优先尝试独立后端，不可用时返回原生结果及回退原因。
 

@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.49-E87936?style=flat-square" alt="源码版本 v0.7.49" />
+  <img src="https://img.shields.io/badge/源码-v0.7.50-E87936?style=flat-square" alt="源码版本 v0.7.50" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,9 +26,9 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.49。** 工作区新增实际推理状态和生成记录引擎列，可查看批大小、缓存与回退原因。Qwen 批量后端支持启动条数门槛：少量文本使用原生引擎，足够的兼容文本再启动合批，尾段复用已加载模型。测速每组 20 条，显示每条平均耗时、实时率和倍率；已记录本机 2 / 4 / 8 条批大小的实际对比。环境与模型支持一键安装关联。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.50。** Qwen 批量后端新增可关闭的编码预测专用循环；工作区显示实际推理状态和生成记录引擎列，可查看批大小、缓存与回退原因。Qwen 批量后端支持启动条数门槛：少量文本使用原生引擎，足够的兼容文本再启动合批，尾段复用已加载模型。测速每组 20 条，显示每条平均耗时、实时率和倍率；已记录本机 2 / 4 / 8 条批大小的实际对比。环境与模型支持一键安装关联。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
-**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.49 的本地构建包尚未上传发行页。独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。
+**已发布 Windows 包：v0.7.28 · Windows x64 · 解压即用，无需安装 Python。** v0.7.50 的本地构建包尚未上传发行页。独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。
 
 从 [v0.7.28 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.28) 下载 `shengjian-v0.7.28-windows-x64.zip`。同页提供对应源码包与 `SHA256SUMS.txt`。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 

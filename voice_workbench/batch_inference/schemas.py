@@ -15,6 +15,7 @@ class BatchSettings(BaseModel):
     max_batch_chars: int = Field(default=2400, ge=100, le=12000)
     prompt_cache_slots: int = Field(default=4, ge=1, le=16)
     idle_seconds: int = Field(default=120, ge=30, le=3600)
+    predictor_fastpath: bool = True
 
     @model_validator(mode='after')
     def batch_bounds(self):

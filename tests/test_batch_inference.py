@@ -356,8 +356,11 @@ def test_batch_settings_ui_applies_config_without_replacing_dirty_input(tmp_path
         control.refresh()
         assert control.python.text() == 'my-edited-python.exe'
         control.enabled.setChecked(False)
+        assert control.predictor_fastpath.isChecked()
+        control.predictor_fastpath.setChecked(False)
         control.save()
-        assert client.get('/settings/batch-inference').json()['settings']['enabled'] is False
+        saved = client.get('/settings/batch-inference').json()['settings']
+        assert saved['enabled'] is False and saved['predictor_fastpath'] is False
         assert '关闭' in control.status.text() and control.isEnabled()
         window.close()
 

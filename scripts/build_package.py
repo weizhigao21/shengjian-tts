@@ -95,6 +95,7 @@ def main():
     for name in ("声笺.exe", "声笺服务.exe", "_internal/voice_workbench/assets/app.ico",
                  "_internal/voice_workbench/assets/model_catalog.json", "_internal/voice_workbench/engine_worker.py",
                  "_internal/voice_workbench/index_emotion.py", "_internal/voice_workbench/batch_inference/qwen_worker.py",
+                 "_internal/voice_workbench/batch_inference/qwen_fastpath.py",
                  "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
         if not (candidate / name).is_file():
             raise RuntimeError(f"产物不完整：{candidate / name}")

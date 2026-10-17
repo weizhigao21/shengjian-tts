@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.49 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.50 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 

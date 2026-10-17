@@ -52,5 +52,7 @@ def model_signature(settings, versions=None):
     paths = sorted({*root.glob("*.json"), *root.glob("*.safetensors"),
                     *root.glob("speech_tokenizer/*.json"), *root.glob("speech_tokenizer/*.safetensors")})
     files = [(str(p.relative_to(root)), p.stat().st_size, p.stat().st_mtime_ns) for p in paths]
-    value = {"protocol": 1, "settings": settings.model_dump(), "files": files, 'runtime_versions': versions or {}}
+    from .qwen_fastpath import REVISION
+    value = {"protocol": 1, "settings": settings.model_dump(), "files": files, 'runtime_versions': versions or {},
+             'predictor_revision': REVISION}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
