@@ -40,7 +40,8 @@ class QwenEngine:
                 from .qwen_fastpath import install
             except ImportError:  # Direct script entry in the external Python environment.
                 from qwen_fastpath import install
-            self.predictor_path = install(self.model, settings.get('predictor_fastpath', True), device=device)
+            self.predictor_path = install(self.model, settings.get('predictor_fastpath', True), device=device,
+                                          cuda_graph=settings.get('predictor_cuda_graph', False))
         loaded = time.perf_counter()
         voice = message["voice"]
         key = (hashlib.sha256(Path(voice["reference_audio"]).read_bytes()).hexdigest(), voice["reference_text"])
@@ -57,7 +58,7 @@ class QwenEngine:
             prompt_ready = time.perf_counter()
             if message.get("seed", -1) >= 0:
                 torch.manual_seed(message["seed"])
-            counts = self.predictor_path.calls, self.predictor_path.fallbacks
+            counts = self.predictor_path.snapshot()
             wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],
                 language=[i["language"] for i in message["items"]], voice_clone_prompt=prompt,
                 **message["options"])

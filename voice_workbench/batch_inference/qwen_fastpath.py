@@ -8,7 +8,7 @@ from importlib.metadata import version
 from copy import deepcopy
 from types import SimpleNamespace
 
-REVISION = 'fixed-code-v1'
+REVISION = 'fixed-code-v2-graph-experimental'
 SUPPORTED = {'qwen-tts': '0.1.1', 'transformers': '4.57.3'}
 CALL_KEYS = {'inputs_embeds', 'max_new_tokens', 'do_sample', 'top_p', 'top_k',
              'temperature', 'output_hidden_states', 'return_dict_in_generate'}
@@ -21,12 +21,24 @@ class PredictorPath:
         self.reason = reason
         self.calls = self.fallbacks = 0
         self.predictor = self.original = None
+        self.graphs = None
 
-    def status(self, before=(0, 0)):
+    def snapshot(self):
+        return (self.calls, self.fallbacks, self.graphs.captures if self.graphs else 0,
+                self.graphs.replays if self.graphs else 0, self.graphs.fallbacks if self.graphs else 0)
+
+    def status(self, before=(0, 0, 0, 0, 0)):
         calls, fallbacks = self.calls-before[0], self.fallbacks-before[1]
-        return {'predictor_mode': 'mixed' if calls and fallbacks else 'fixed' if calls else 'standard',
+        graph_calls = self.graphs.replays-before[3] if self.graphs else 0
+        mode = ('mixed' if calls and fallbacks else 'graph' if calls and graph_calls == calls else
+                'mixed' if graph_calls else 'fixed' if calls else 'standard')
+        return {'predictor_mode': mode,
                 'predictor_revision': REVISION, 'predictor_calls': calls,
-                'predictor_fallback_calls': fallbacks, 'predictor_reason': self.reason}
+                'predictor_fallback_calls': fallbacks, 'predictor_reason': self.reason,
+                'predictor_graph_captures': self.graphs.captures-before[2] if self.graphs else 0,
+                'predictor_graph_replays': graph_calls,
+                'predictor_graph_fallbacks': self.graphs.fallbacks-before[4] if self.graphs else 0,
+                'predictor_graph_reason': self.graphs.reason if self.graphs else ''}
 
     def generate(self, *args, **kwargs):
         p = self.predictor
@@ -58,9 +70,15 @@ class PredictorPath:
                 if top_k: processors.append(TopKLogitsWarper(top_k))
                 if top_p < 1: processors.append(TopPLogitsWarper(top_p))
             self.warper_key, self.processors = key, processors
-        import torch
         self.reason = ''
         self.calls += 1
+        forward = lambda value: self.loop(value, sample)
+        output = self.graphs.run(embeds, key, forward) if self.graphs else forward(embeds)
+        return SimpleNamespace(sequences=output)
+
+    def loop(self, embeds, sample):
+        import torch
+        p = self.predictor
         tokens, state = [], None
         for step in range(15):
             state = p(inputs_embeds=embeds if step == 0 else None,
@@ -72,10 +90,10 @@ class PredictorPath:
             token = (torch.multinomial(torch.nn.functional.softmax(scores, dim=-1), num_samples=1)
                      if sample else torch.argmax(scores, dim=-1, keepdim=True))
             tokens.append(token)
-        return SimpleNamespace(sequences=torch.cat(tokens, dim=-1))
+        return torch.cat(tokens, dim=-1)
 
 
-def install(model, enabled=True, *, device='cuda'):
+def install(model, enabled=True, *, device='cuda', cuda_graph=False):
     path = PredictorPath()
     if not enabled:
         path.reason = '编码预测加速已关闭。'
@@ -101,6 +119,12 @@ def install(model, enabled=True, *, device='cuda'):
         path.predictor, path.original = p, p.generate
         path.config_object, path.config_snapshot = p.generation_config, deepcopy(vars(p.generation_config))
         path.warper_key, path.processors = None, None
+        if cuda_graph:
+            try:
+                from .qwen_cuda_graph import PredictorGraphs
+            except ImportError:
+                from qwen_cuda_graph import PredictorGraphs
+            path.graphs = PredictorGraphs()
         p.generate = path.generate
     except (AttributeError, ImportError, ValueError, TypeError) as exc:
         path.reason = '编码预测加速不可用，使用原循环：' + str(exc)

@@ -82,6 +82,7 @@ def test_acceleration_option_and_revision_partition_audio_cache(batch_manager, m
     settings = manager.batch.settings
     old = model_signature(settings)
     assert model_signature(settings.model_copy(update={'predictor_fastpath':False})) != old
+    assert model_signature(settings.model_copy(update={'predictor_cuda_graph':True})) != old
     monkeypatch.setattr(fast, 'REVISION', 'future-predictor')
     assert model_signature(settings) != old
 

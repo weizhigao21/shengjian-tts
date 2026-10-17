@@ -23,9 +23,13 @@ def execution_details(item):
             lines.append(title + '：' + str(item[key]))
     mode = item.get('predictor_mode')
     if mode:
-        lines.append('编码预测：' + {'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分调用加速'}.get(mode, mode))
+        lines.append('编码预测：' + {'graph': 'GPU 图加速', 'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分调用加速'}.get(mode, mode))
     if item.get('predictor_reason'):
         lines.append('编码预测说明：' + item['predictor_reason'])
+    if item.get('predictor_graph_reason'):
+        lines.append('图加速说明：' + item['predictor_graph_reason'])
+    if item.get('predictor_graph_replays'):
+        lines.append(f"本批图重放：{item['predictor_graph_replays']} 次；新录制：{item.get('predictor_graph_captures', 0)} 个")
     return '\n'.join(lines)
 
 
@@ -78,6 +82,8 @@ def status_presentation(health):
             color = 'fallback'
         if not last.get('cached') and last.get('predictor_mode') == 'fixed':
             text += ' · 预测加速'
+        elif not last.get('cached') and last.get('predictor_mode') == 'graph':
+            text += ' · 图加速'
         tip += '\n\n本次服务最近一次处理（' + result + '）：\n' + execution_details(last)
     return text, tip, color
 

@@ -177,6 +177,8 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 
 ## 批量推理路由 · v0.7.50
 
+**未发布实验字段：** 源码新增 `predictor_cuda_graph`（默认 `false`），现有 v0.7.50 发行构建不包含。图加速待真实 GPU 验证，结果可记录 `predictor_mode: graph` 及 `predictor_graph_captures` / `predictor_graph_replays` / `predictor_graph_fallbacks` / `predictor_graph_reason`；仅实际重放才报告图路径。
+
 Qwen 独立批量配置的 `predictor_fastpath` 默认 `true`，可通过 `PUT /settings/batch-inference` 关闭编码预测专用循环。是否实际启用以生成结果 `inference.predictor_mode`（`fixed`、`standard`、`mixed`）为准，另含 `predictor_revision`、`predictor_calls`、`predictor_fallback_calls`、`predictor_reason`。不兼容 SDK / 模型 / 调用保留原循环，不能仅用配置开关判断结果经过加速。测速报告记录开关及各轮实际路径；成品缓存按开关和实现版本隔离。
 
 现有 `POST /jobs` 和 `POST /jobs/{id}/generate` 新增可选 `inference_mode: "auto" | "native" | "batch"`。默认自动按同任务 / 生成批次的模型、参考音色和参数匹配；`native` 明确走原生后端，`batch` 优先尝试独立后端，不可用时返回原生结果及回退原因。

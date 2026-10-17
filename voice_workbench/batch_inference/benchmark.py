@@ -208,6 +208,7 @@ class InferenceBenchmark:
                   'native_model': voice['model_dir'], 'batch_model': settings.model_dir, 'device': settings.device,
                   'dtype': settings.dtype, 'max_batch_size': settings.max_batch_size,
                   'predictor_fastpath': settings.predictor_fastpath,
+                  'predictor_cuda_graph': settings.predictor_cuda_graph,
                   'seed': 1234, 'generation_options': voice['request_options'], 'workload': rows,
                   'warm_rounds': warm_rounds, 'sample_count': len(rows), 'cache_used': False, 'cache_scope': 'generated_audio',
                   'results': [], 'versions': versions}

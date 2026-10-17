@@ -62,6 +62,10 @@ class BatchInferenceControls(QWidget):
         self.predictor_fastpath.setChecked(True)
         self.predictor_fastpath.setToolTip('减少固定 15 步编码预测的通用生成开销，不修改模型或采样参数；SDK 或调用不兼容时使用原循环。')
         form.addRow('编码预测加速', self.predictor_fastpath)
+        self.predictor_cuda_graph = QCheckBox('GPU 图加速（实验，默认关闭）')
+        self.predictor_cuda_graph.setToolTip('尚未完成本机 GPU 验证。需要先启用编码预测加速；首次准备有额外耗时并增加显存占用。')
+        self.predictor_fastpath.toggled.connect(self.predictor_cuda_graph.setEnabled)
+        form.addRow('', self.predictor_cuda_graph)
         layout.addWidget(self.manual)
         row = QHBoxLayout()
         self.apply = button('检查并应用', self.save, 'check')
@@ -83,6 +87,7 @@ class BatchInferenceControls(QWidget):
         self.size.valueChanged.connect(self.minimum_size.setMaximum)
         self.minimum_size.valueChanged.connect(self.changed)
         self.predictor_fastpath.toggled.connect(self.changed)
+        self.predictor_cuda_graph.toggled.connect(self.changed)
 
     def changed(self, *_):
         self.dirty = True
@@ -107,12 +112,14 @@ class BatchInferenceControls(QWidget):
                         (self.size, lambda: self.size.setValue(self.settings['max_batch_size'])),
                         (self.minimum_size, bind_minimum)]
             controls.append((self.predictor_fastpath, lambda: self.predictor_fastpath.setChecked(self.settings.get('predictor_fastpath', True))))
+            controls.append((self.predictor_cuda_graph, lambda: self.predictor_cuda_graph.setChecked(self.settings.get('predictor_cuda_graph', False))))
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setText(self.settings[k]))
                          for key in ('python', 'model_dir', 'source_model')]
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setCurrentIndex(
                 getattr(self, k).findData(self.settings[k]))) for key in ('device', 'dtype')]
             for control, bind in controls:
                 control.blockSignals(True); bind(); control.blockSignals(False)
+            self.predictor_cuda_graph.setEnabled(self.predictor_fastpath.isChecked())
         text = ('批量后端已就绪 · ' + ('模型已驻留' if result['loaded'] else '首次批量任务时加载模型')) if result['ready'] else result['reason']
         if result['ready']:
             text += f" · 自动新启动至少 {self.settings.get('min_batch_size', 2)} 条"
@@ -122,9 +129,11 @@ class BatchInferenceControls(QWidget):
             if 'prompt_cache_hit' in recent:
                 text += ' · 音色缓存命中' if recent['prompt_cache_hit'] else ' · 新建音色缓存'
             if recent.get('predictor_mode'):
-                text += ' · 编码预测：' + {'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分加速'}[recent['predictor_mode']]
+                text += ' · 编码预测：' + {'graph': 'GPU 图加速', 'fixed': '专用加速', 'standard': 'SDK 原循环', 'mixed': '部分加速'}.get(recent['predictor_mode'], recent['predictor_mode'])
             if recent.get('predictor_reason'):
                 text += '\n' + recent['predictor_reason']
+            if recent.get('predictor_graph_reason'):
+                text += '\n' + recent['predictor_graph_reason']
         if result.get('fallbacks'):
             text += '\n最近回退：' + result['fallbacks'][-1]['reason']
         self.status.setText(text)
@@ -154,7 +163,8 @@ class BatchInferenceControls(QWidget):
                  'python': self.python.text().strip(), 'model_dir': self.model_dir.text().strip(),
                  'source_model': self.source_model.text().strip(), 'device': self.device.currentData(),
                  'dtype': self.dtype.currentData(), 'max_batch_size': self.size.value(),
-                 'min_batch_size': self.minimum_size.value(), 'predictor_fastpath': self.predictor_fastpath.isChecked()}
+                 'min_batch_size': self.minimum_size.value(), 'predictor_fastpath': self.predictor_fastpath.isChecked(),
+                 'predictor_cuda_graph': self.predictor_cuda_graph.isChecked()}
         self.setEnabled(False)
         self.loading = True
         self.sequence += 1

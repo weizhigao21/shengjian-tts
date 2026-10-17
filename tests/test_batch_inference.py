@@ -357,10 +357,13 @@ def test_batch_settings_ui_applies_config_without_replacing_dirty_input(tmp_path
         assert control.python.text() == 'my-edited-python.exe'
         control.enabled.setChecked(False)
         assert control.predictor_fastpath.isChecked()
+        assert not control.predictor_cuda_graph.isChecked()
         control.predictor_fastpath.setChecked(False)
+        assert not control.predictor_cuda_graph.isEnabled()
         control.save()
         saved = client.get('/settings/batch-inference').json()['settings']
         assert saved['enabled'] is False and saved['predictor_fastpath'] is False
+        assert saved['predictor_cuda_graph'] is False
         assert '关闭' in control.status.text() and control.isEnabled()
         window.close()
 
