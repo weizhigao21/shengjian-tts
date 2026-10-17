@@ -114,7 +114,12 @@ class BenchmarkControls(QWidget):
                 self.table.setItem(index, column, item)
         speed = (self.result or {}).get('speedup')
         total = (self.result or {}).get('total_seconds')
-        text = f'每组 {count} 条' if count else ''
+        languages = {row['language'] for row in (self.result or {}).get('workload', [])}
+        kind = {frozenset({'zh'}): '中文', frozenset({'en'}): '英文',
+                frozenset({'zh', 'en'}): '中英双语'}.get(frozenset(languages), '自定义')
+        text = f'报告：{kind} · 每组 {count} 条' if count else ''
+        size = (self.result or {}).get('max_batch_size')
+        if size: text += f' · 每批最多 {size} 条'
         if total is not None: text += f' · 测试总耗时 {total:.2f} 秒'
         if speed:
             text += f" · 首组倍率 {speed['cold']:.2f}× · 热模型倍率 {speed['warm']:.2f}×（大于 1 表示批量更快）"

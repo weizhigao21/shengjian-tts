@@ -134,10 +134,12 @@ class BatchBackend:
                 return (candidate.get("inference_mode") != "native"
                         and not unsupported(candidate["voice"], candidate["text"], self.settings)
                         and group_key(candidate["voice"]) == key)
-            batch = store.claim_batch(job, item, compatible, self.settings.max_batch_size, self.settings.max_batch_chars)
+            warm = self.status()['loaded'] and self.process.key == model_signature(self.settings, self.versions)
+            minimum = 2 if warm or item.get('inference_mode') == 'batch' else self.settings.min_batch_size
+            batch = store.claim_batch(job, item, compatible, self.settings.max_batch_size,
+                                      self.settings.max_batch_chars, minimum=minimum)
             # Finish a trailing row on the already loaded model, avoiding a costly
             # switch to GGUF solely because a micro-batch has an odd row count.
-            warm = self.status()['loaded'] and self.process.key == model_signature(self.settings, self.versions)
             return batch or ([item] if warm else [])
         except (OSError, ValueError, VoiceError) as exc:
             self.fallback(job, item, str(exc))
@@ -163,6 +165,8 @@ class BatchBackend:
                 sizes.append(size)
             if max(sizes) < 2 and not self.status()['loaded']:
                 reason = '当前长度限制下无法合并两条文本，使用现有引擎。'
+            elif max(sizes) < self.settings.min_batch_size and not self.status()['loaded']:
+                reason = f'兼容文本不足 {self.settings.min_batch_size} 条，使用原生引擎，避免小批量加载开销。'
         return {"backend": "native" if reason else "qwen3_batch", "reason": reason,
                 "batch_sizes": sizes, "single_count": sizes.count(1) if not reason else len(texts),
                 "model_loaded": self.status()["loaded"], "requires_setup": bool(self.reason) or self.setup.busy}

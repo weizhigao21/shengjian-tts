@@ -222,6 +222,7 @@ def test_ui_updates_results_speedup_progress_and_retains_voice_choice(benchmark,
     finished(manager)
     controls.bind(manager.benchmark.options())
     assert controls.table.rowCount() == 2 and '倍率' in controls.summary.text()
+    assert '报告：中英双语' in controls.summary.text() and '每批最多 2 条' in controls.summary.text()
     assert controls.table.columnCount() == 7
     for index, result in enumerate(controls.result['results']):
         assert controls.table.item(index, 3).text() == f"{result['warm']['seconds_per_item']:.2f}"

@@ -51,9 +51,13 @@ class BatchInferenceControls(QWidget):
             self.dtype.addItem(title, key)
         self.size = QSpinBox()
         self.size.setRange(2, 8); self.size.setValue(2); self.size.setSuffix(' 条')
+        self.minimum_size = QSpinBox()
+        self.minimum_size.setRange(2, 2); self.minimum_size.setSuffix(' 条')
+        self.minimum_size.setToolTip('兼容文本达到此数量才自动启动新批量引擎；不足时使用原生引擎。已驻留的批量模型继续处理尾段。')
         form.addRow('计算设备', self.device)
         form.addRow('计算精度', self.dtype)
         form.addRow('每批最多', self.size)
+        form.addRow('启动至少', self.minimum_size)
         layout.addWidget(self.manual)
         row = QHBoxLayout()
         self.apply = button('检查并应用', self.save, 'check')
@@ -72,6 +76,8 @@ class BatchInferenceControls(QWidget):
         self.device.currentIndexChanged.connect(self.changed)
         self.dtype.currentIndexChanged.connect(self.changed)
         self.size.valueChanged.connect(self.changed)
+        self.size.valueChanged.connect(self.minimum_size.setMaximum)
+        self.minimum_size.valueChanged.connect(self.changed)
 
     def changed(self, *_):
         self.dirty = True
@@ -89,8 +95,12 @@ class BatchInferenceControls(QWidget):
         self.loading = False
         self.settings = result['settings']
         if not self.dirty:
+            def bind_minimum():
+                self.minimum_size.setMaximum(self.settings['max_batch_size'])
+                self.minimum_size.setValue(self.settings.get('min_batch_size', 2))
             controls = [(self.enabled, lambda: self.enabled.setChecked(self.settings['enabled'])),
-                        (self.size, lambda: self.size.setValue(self.settings['max_batch_size']))]
+                        (self.size, lambda: self.size.setValue(self.settings['max_batch_size'])),
+                        (self.minimum_size, bind_minimum)]
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setText(self.settings[k]))
                          for key in ('python', 'model_dir', 'source_model')]
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setCurrentIndex(
@@ -98,6 +108,8 @@ class BatchInferenceControls(QWidget):
             for control, bind in controls:
                 control.blockSignals(True); bind(); control.blockSignals(False)
         text = ('批量后端已就绪 · ' + ('模型已驻留' if result['loaded'] else '首次批量任务时加载模型')) if result['ready'] else result['reason']
+        if result['ready']:
+            text += f" · 自动新启动至少 {self.settings.get('min_batch_size', 2)} 条"
         recent = result.get('last_result')
         if recent:
             text += f"\n上批 {recent['batch_size']} 条 · {recent['batch_seconds']:.2f} 秒"
@@ -131,7 +143,8 @@ class BatchInferenceControls(QWidget):
         value = {**self.settings, 'enabled': self.enabled.isChecked(),
                  'python': self.python.text().strip(), 'model_dir': self.model_dir.text().strip(),
                  'source_model': self.source_model.text().strip(), 'device': self.device.currentData(),
-                 'dtype': self.dtype.currentData(), 'max_batch_size': self.size.value()}
+                 'dtype': self.dtype.currentData(), 'max_batch_size': self.size.value(),
+                 'min_batch_size': self.minimum_size.value()}
         self.setEnabled(False)
         self.loading = True
         self.sequence += 1

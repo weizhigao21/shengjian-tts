@@ -282,7 +282,7 @@ class Store:
             item["provenance"] = json.loads(item["provenance"]) if item["provenance"] else None
             return job, item
 
-    def claim_batch(self, job, first, compatible, limit, max_chars):
+    def claim_batch(self, job, first, compatible, limit, max_chars, minimum=2):
         """Atomically reserve compatible rows from this generation, with bounded lookahead."""
         with self.lock, self.db:
             selected, chars = [first], len(first["text"])
@@ -299,7 +299,7 @@ class Store:
                 chars += len(item["text"])
                 if len(selected) >= limit:
                     break
-            if len(selected) < 2:
+            if len(selected) < minimum:
                 return []
             for item in selected[1:]:
                 self.db.execute("""UPDATE segments SET status='running',attempts=attempts+1,error=NULL,

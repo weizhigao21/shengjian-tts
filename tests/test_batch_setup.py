@@ -367,3 +367,29 @@ def test_setup_ui_retains_choice_shows_speed_and_refreshes_on_completion(manager
     assert not auto.timer.isActive() and auto.install.isEnabled()
     assert '完成' in auto.status.text()
     window.close()
+
+
+def test_batch_ui_binds_and_saves_start_threshold_with_valid_bounds(manager, qtbot, monkeypatch):
+    from voice_workbench.gui import Window
+    monkeypatch.setattr(Window, 'call', lambda *a, **kw: None)
+    window = Window(18992, manager.root, autostart=False)
+    qtbot.addWidget(window)
+    for timer in (window.timer, window.settings.timer, window.document_timer): timer.stop()
+    control = window.settings.batch_inference
+    data = manager.batch.status()
+    data['settings'].update(max_batch_size=8, min_batch_size=8)
+    control.bind(data)
+    assert control.size.value() == control.minimum_size.value() == 8
+    assert not control.dirty
+    control.size.setValue(4)
+    assert control.minimum_size.maximum() == control.minimum_size.value() == 4
+    captured = {}
+    def put(path, json):
+        import httpx
+        captured.update(json)
+        return httpx.Response(200, json={}, request=httpx.Request('PUT', 'http://test'+path))
+    from types import SimpleNamespace
+    window.call = lambda action, *args: action(SimpleNamespace(put=put))
+    control.save()
+    assert captured['min_batch_size'] == captured['max_batch_size'] == 4
+    window.close()

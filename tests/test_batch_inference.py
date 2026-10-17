@@ -122,6 +122,45 @@ def test_native_opt_out_and_cold_single_keep_existing_runner(batch_manager):
     assert native.calls == ['A', 'B', 'C'] and not probe.calls
 
 
+@pytest.mark.parametrize('count,sizes', [(2, []), (7, []), (8, [8]), (9, [8, 1]), (20, [8, 8, 4])])
+def test_auto_batch_start_threshold_preserves_small_jobs_and_warm_tails(batch_manager, count, sizes):
+    manager, native, probe = batch_manager
+    manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 8, 'min_batch_size': 8})
+    identity = manager.submit('启动门槛', 'qwen', [{'text': f'row {i}'} for i in range(count)])
+    job = wait_job(manager.store.get, identity, ('done',))
+    assert [len(call['items']) for call in probe.calls] == sizes
+    assert len(native.calls) == (0 if sizes else count)
+    assert all(row['attempts'] == 1 for row in job['segments'])
+    assert [row['text'] for row in job['segments']] == [f'row {i}' for i in range(count)]
+
+
+def test_explicit_batch_request_can_override_automatic_start_threshold(batch_manager):
+    manager, native, probe = batch_manager
+    manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 8, 'min_batch_size': 8})
+    identity = manager.submit('主动合批', 'qwen', [{'text': 'A'}, {'text': 'B'}], inference_mode='batch')
+    assert wait_job(manager.store.get, identity, ('done',))['completed'] == 2
+    assert len(probe.calls) == 1 and not native.calls
+
+
+def test_start_threshold_counts_only_compatible_rows_and_plan_explains_native_route(batch_manager):
+    manager, native, probe = batch_manager
+    manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 8, 'min_batch_size': 8})
+    voice, _ = manager.config.resolve('qwen')
+    assert manager.batch.plan(voice, ['A']*7)['backend'] == 'native'
+    assert '8' in manager.batch.plan(voice, ['A']*7)['reason']
+    assert manager.batch.plan(voice, ['A']*8)['batch_sizes'] == [8]
+    rows = [{'text': str(i), 'voice_id': 'qwen', 'overrides': {'request_options': {'seed': i % 2}}} for i in range(8)]
+    identity = manager.submit('不同参数不足门槛', 'qwen', rows)
+    assert wait_job(manager.store.get, identity, ('done',))['completed'] == 8
+    assert len(native.calls) == 8 and not probe.calls
+
+
+def test_batch_start_threshold_configuration_is_bounded():
+    assert BatchSettings().min_batch_size == 2
+    with pytest.raises(ValueError, match='启动合批条数'):
+        BatchSettings(min_batch_size=8, max_batch_size=4)
+
+
 def test_different_seeds_are_grouped_separately_without_crossing_generations(batch_manager):
     manager, native, probe = batch_manager
     rows = [{'text': str(i), 'voice_id': 'qwen', 'overrides': {'request_options': {'seed': seed}}}

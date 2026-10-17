@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BatchSettings(BaseModel):
@@ -11,9 +11,16 @@ class BatchSettings(BaseModel):
     device: Literal["cuda", "cpu"] = "cuda"
     dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
     max_batch_size: int = Field(default=2, ge=2, le=8)
+    min_batch_size: int = Field(default=2, ge=2, le=8)
     max_batch_chars: int = Field(default=2400, ge=100, le=12000)
     prompt_cache_slots: int = Field(default=4, ge=1, le=16)
     idle_seconds: int = Field(default=120, ge=30, le=3600)
+
+    @model_validator(mode='after')
+    def batch_bounds(self):
+        if self.min_batch_size > self.max_batch_size:
+            raise ValueError('启动合批条数不能大于每批最多条数')
+        return self
 
 
 class PlanRequest(BaseModel):
