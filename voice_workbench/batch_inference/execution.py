@@ -57,6 +57,7 @@ class BatchExecution:
                            "items": [{"text": item['text'], "language": LANGUAGES[item['voice']['language']], "output": str(path)}
                                      for item, path in zip(items, paths)]}
                 started = perf_counter()
+                self.execution_phase(slot, 'generating')
                 answer = self.batch.process.generate(settings, signature, payload, cancelled,
                     max(i['voice']['timeout'] for i in items))
                 elapsed = perf_counter() - started
@@ -83,6 +84,7 @@ class BatchExecution:
                     self.store.finish(job['id'], item['idx'], audio=output.name, cached=all(cached),
                         duration=details['duration'], generation_seconds=elapsed, inference=metadata)
                 self.batch.last_result = dict(metadata, job_id=job['id'], indices=[i['idx'] for i in items])
+                self.execution_finished(slot, 'done', cached=all(cached), inference=metadata)
         except Exception as exc:
             self.batch.process.interrupt()
             if not cancelled.is_set() and not self.stopping.is_set():
@@ -96,6 +98,7 @@ class BatchExecution:
                     if cancelled.is_set() or self.stopping.is_set():
                         return
                     self.batch.fallback(job, items[0], error['message'])
+                    self.execution_finished(slot, 'fallback', inference={'fallback_reason': error['message']})
                     for item in items:
                         self.store.requeue(job['id'], item['idx'])
         finally:
@@ -105,6 +108,8 @@ class BatchExecution:
                 except OSError:
                     pass
             with self.lock:
+                if cancelled.is_set():
+                    self.execution_finished(slot, 'cancelled')
                 self.active.pop(slot, None)
                 self.current = next(((a['job_id'], a['index']) for a in self.active.values()), None)
                 self.wake.set()

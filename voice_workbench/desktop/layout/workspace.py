@@ -10,6 +10,7 @@ from ...ui import application_icon, STYLE, ElidedLabel, RecentTasks, button, lab
 from .generation import GenerationLayout
 from .player import PlayerLayout
 from .workflow import WorkflowLayout
+from ..components.inference_status import InferenceStatus
 
 
 class UiLayout(GenerationLayout, PlayerLayout, WorkflowLayout):
@@ -90,6 +91,8 @@ class UiLayout(GenerationLayout, PlayerLayout, WorkflowLayout):
         self.page_title = label("工作台  /  语音创作", "muted")
         header.addWidget(self.page_title)
         header.addStretch()
+        self.inference_status = InferenceStatus()
+        header.addWidget(self.inference_status, 1)
         main.addWidget(self.workspace_header)
         self.tabs = QStackedWidget()
         # Connect after all pages exist.

@@ -2,6 +2,8 @@
 
 默认地址 `http://127.0.0.1:8765`。启动服务后可在 `/docs` 查看完整请求结构。
 
+`GET /health` 返回实际执行快照：`active` 中的 `backend`（`native` / `qwen3_batch`）、`batch_size`、`indices`、`phase`（`checking` / `generating`）、`cancelling`，以及存在时的调度 / 回退原因。`last_execution` 只代表当前服务会话最近一次处理，含 `status`、`cached` 和完成时间；不能当作当前运行状态。`inference.ready` 是批量环境可用，`inference.loaded` 是模型驻留，均不等于正在批量生成。`inference_benchmark` 是测速进度摘要，完整报告仍从 `/inference/benchmark` 获取。生成历史的 `segments[].inference` 持久记录结果引擎；`cached=true` 表示复用音频，本次未推理。
+
 音频编辑使用独立的项目与版本 ID。[操作说明](docs/AUDIO_EDITING.md)列出文件限制和模型要求。`POST /audio-editor/projects` 接收本机 `path`、可选 `name` 和 `original_text`，返回原始版本。处理请求的 `source_version` 必须来自同一项目已完成的版本：
 
 ```json

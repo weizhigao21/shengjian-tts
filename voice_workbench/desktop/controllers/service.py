@@ -137,6 +137,7 @@ class ServiceController:
         self.ready = True
         self.last_connection_error = None
         health, voices, jobs, job = values[:4]
+        self.inference_status.bind(health)
         self.references = values[4] if len(values) > 4 else [{"id": v["id"], "name": v["name"],
             "reference_audio": v["reference_audio"], "reference_text": v.get("reference_text", ""), "duration": 0}
             for v in voices if v.get("reference_audio")]
@@ -166,6 +167,8 @@ class ServiceController:
             self.save_document()
 
     def set_service_state(self, text, state):
+        if state != 'ready':
+            self.inference_status.bind(None)
         self.banner.setText(text)
         self.banner.setToolTip(f"{text}\n{self.url}")
         self.banner.setProperty("state", state)

@@ -323,7 +323,8 @@ class DocumentController:
         self.page_title.setText("工作台  /  " + names[index])
         for i, control in enumerate(self.nav_buttons):
             control.setChecked(index == i)
-        self.workspace_header.setVisible(index != 0)
+        self.workspace_header.setVisible(True)
+        self.page_title.setVisible(index != 0)
         if index == 3:
             self.clip_list.hide()
             self.settings.refresh()

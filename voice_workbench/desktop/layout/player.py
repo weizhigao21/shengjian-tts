@@ -108,10 +108,10 @@ class PlayerLayout:
         close.setToolTip("收起列表")
         header.addWidget(close)
         result.addLayout(header)
-        self.segments_table = QTableWidget(0, 6)
+        self.segments_table = QTableWidget(0, 7)
         self.configure_table(self.segments_table)
-        self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "生成耗时", "状态", "错误原因"])
-        for col, width in ((0, 56), (1, 135), (3, 96), (4, 100)):
+        self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "生成耗时", "状态", "错误原因", "推理引擎"])
+        for col, width in ((0, 56), (1, 135), (3, 96), (4, 100), (6, 106)):
             self.segments_table.setColumnWidth(col, width)
         self.segments_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.segments_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)

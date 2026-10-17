@@ -76,9 +76,12 @@ class InferenceBenchmark:
         with self.lock:
             self.state.update(changes)
 
-    def status(self):
+    def status(self, compact=False):
         with self.lock:
-            return {**deepcopy(self.state), 'busy': self.gpu_busy, 'result': deepcopy(self.result)}
+            state = {**deepcopy(self.state), 'busy': self.gpu_busy}
+            if not compact:
+                state['result'] = deepcopy(self.result)
+            return state
 
     def options(self):
         settings = self.manager.batch.settings
@@ -166,7 +169,8 @@ class InferenceBenchmark:
                     chars += size; count += 1
             group = rows[position:position + count]
             paths = [folder / f'{backend}-{stage}-{position+i}.wav' for i in range(count)]
-            self.update(message=f"{'原生引擎' if backend == 'native' else '批量后端'} · {stage} · {position+1}–{position+count}/{len(rows)}")
+            self.update(backend=backend, batch_size=count,
+                        message=f"{'原生引擎' if backend == 'native' else '批量后端'} · {stage} · {position+1}–{position+count}/{len(rows)}")
             before = time.perf_counter()
             if backend == 'native':
                 self.native.generate({'voice': dict(voice, language=group[0]['language']),

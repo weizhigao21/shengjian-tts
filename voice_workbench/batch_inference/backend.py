@@ -120,7 +120,12 @@ class BatchBackend:
         reason = self.failures.get((job_id, item["generation"]))
         if not reason and item.get('inference_mode') == 'batch':
             reason = self.status()['reason'] or unsupported(item['voice'], item['text'], self.settings) or '没有足够的兼容文本可合批。'
-        return {"backend": "native", "fallback_reason": reason} if reason else {"backend": "native"}
+        if reason:
+            return {"backend": "native", "fallback_reason": reason}
+        route = ('本次指定原生引擎。' if item.get('inference_mode') == 'native' else
+                 self.status(compact=True)['reason'] or unsupported(item['voice'], item['text'], self.settings) or
+                 f'未组成可用批次，使用原生引擎；冷模型启动门槛为 {self.settings.min_batch_size} 条兼容文本。')
+        return {"backend": "native", "route_reason": route}
 
     def select(self, store, job, item):
         if (self.reason or self.setup.busy or item.get("inference_mode") == "native"

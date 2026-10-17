@@ -16,11 +16,12 @@ from .store import Store, WORKFLOW_TITLES
 from .model_info import MODES
 from .services.service_lock import ServiceLock
 from .services.generation import prepare_segments
+from .services.inference_status import InferenceTelemetry
 from .batch_inference.backend import BatchBackend
 from .batch_inference.execution import BatchExecution
 
 
-class Manager(BatchExecution):
+class Manager(BatchExecution, InferenceTelemetry):
     def __init__(self, data_dir: Path, runner=None, runner_factory=None):
         self.root = Path(data_dir).resolve()
         self.service_lock = ServiceLock(self.root)
@@ -38,6 +39,7 @@ class Manager(BatchExecution):
         self.wake = threading.Event()
         self.stopping = threading.Event()
         self.current = None
+        self.last_execution = None
         for folder in ("audio", "logs", "temporary"):
             (self.root / folder).mkdir(exist_ok=True)
         from .workflow_audio import WorkflowAudio
@@ -143,10 +145,9 @@ class Manager(BatchExecution):
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
                     "audio_editing": self.audio_editor.active,
                     "recognition": self.recognition.active,
-                    "active": [{"job_id": a["job_id"], "index": a["index"],
-                                "indices": a.get("indices", [a["index"]]),
-                                "backend": "qwen3_batch" if a.get("batch") else "native"} for a in self.active.values()],
+                    **self.execution_snapshot(),
                     "inference": self.batch.status(compact=True),
+                    "inference_benchmark": self.benchmark.status(compact=True) if hasattr(self, 'benchmark') else {},
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
                     "queue": self.store.queued_job_count()}
 
@@ -298,7 +299,8 @@ class Manager(BatchExecution):
                                 cancelled = threading.Event()
                                 self.active[slot] = {"job_id": job["id"], "index": item["idx"],
                                                      "generation": item["generation"], "capacity": capacity,
-                                                     "cancelled": cancelled}
+                                                     "cancelled": cancelled,
+                                                     "inference": self.batch.native_metadata(job['id'], item)}
                                 self.current = next((a["job_id"], a["index"]) for a in self.active.values())
                                 pool.submit(self._execute, slot, job, item, cancelled, capacity)
                                 submitted = True
@@ -338,12 +340,14 @@ class Manager(BatchExecution):
                 if cached and not self.stopping.is_set() and not cancelled.is_set():
                     self.store.finish(job_id, index, audio=output.name, cached=True, duration=details["duration"], generation_seconds=0.0,
                                       inference=self.batch.native_metadata(job_id, item))
+                    self.execution_finished(slot, 'done', cached=True)
                     return
             if not cached:
                 # Include engine/model loading in generate(), but exclude queueing
                 # and persistence. A monotonic clock tolerates system clock changes.
                 inference_started = perf_counter()
                 self.batch.process.interrupt()
+                self.execution_phase(slot, 'generating')
                 runner.generate({"voice": voice, "fingerprint": fingerprint,
                                       "text": item["text"], "output": str(temporary),
                                       "job_id": job_id, "index": index}, cancelled)
@@ -357,6 +361,7 @@ class Manager(BatchExecution):
                         self.store.cache_put(key, output, file_digest(str(output)))
                     self.store.finish(job_id, index, audio=output.name, cached=False, duration=details["duration"], generation_seconds=generation_seconds,
                                       inference=self.batch.native_metadata(job_id, item))
+                    self.execution_finished(slot, 'done')
         except Exception as exc:
             if inference_started is not None and generation_seconds is None:
                 generation_seconds = max(0.0, perf_counter() - inference_started)
@@ -376,9 +381,12 @@ class Manager(BatchExecution):
                     else:
                         self.store.finish(job_id, index, error=error, generation_seconds=generation_seconds,
                                           inference=self.batch.native_metadata(job_id, item))
+                        self.execution_finished(slot, 'failed')
         finally:
             temporary.unlink(missing_ok=True)
             with self.lock:
+                if cancelled.is_set():
+                    self.execution_finished(slot, 'cancelled')
                 self.active.pop(slot, None)
                 self.current = next(((a["job_id"], a["index"]) for a in self.active.values()), None)
                 self.wake.set()

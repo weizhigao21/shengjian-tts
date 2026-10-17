@@ -15,6 +15,7 @@ from PyQt6.QtGui import QColor
 from ..constants import STATES
 from ...services.dialogue import audio_name, dialogue_id
 from ...naming import display_title
+from ..components.inference_status import record_engine
 
 
 class PlaybackController:
@@ -83,10 +84,13 @@ class PlaybackController:
             stamp = datetime.fromtimestamp(created).strftime("%m-%d %H:%M:%S") if created else item.get("timestamp", "")
             name = self.dialogue_audio_name(item) if item.get("source_id") else display_title(job) + f" · 第 {item.get('generation', 1)} 次 · {item['text']}"
             elapsed, elapsed_tip = generation_elapsed(item)
-            for col, text in enumerate((str(item["idx"]), stamp, name, elapsed, status, error.get("message", ""))):
+            engine, engine_tip = record_engine(item)
+            for col, text in enumerate((str(item["idx"]), stamp, name, elapsed, status, error.get("message", ""), engine)):
                 tooltip = ("生成时间：" + stamp + ("\n字幕时间：" + item["timestamp"] if item["timestamp"] else "")) if col == 1 else text
                 if col == 3:
                     tooltip = elapsed_tip
+                elif col == 6:
+                    tooltip = engine_tip
                 elif col == 2 and item.get("source_id"):
                     tooltip = name + "\n对白 ID：" + item["source_id"] + "\n正文：" + item["text"] + f"\n生成批次：{item.get('generation', 1)}"
                 cell = self.update_table_cell(self.segments_table, row, col, text, tooltip)
