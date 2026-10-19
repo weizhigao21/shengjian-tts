@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import array
+import re
+import shutil
 import sys
+import time
 import wave
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import (QByteArray, QCoreApplication, QMimeData, QObject, QPoint, QPointF, QRect, QSize, Qt, QUrl,
-                           QEvent, pyqtSignal)
+                           QEvent, QStandardPaths, pyqtSignal)
 from PyQt6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat,
                          QTextCursor, QWheelEvent)
 from PyQt6.QtSvg import QSvgRenderer
@@ -352,7 +356,84 @@ def audio_mime_data(paths):
     return data
 
 
-def audio_drag_pixmap(count, title):
+DRAG_NAME_CHARS = 60
+DRAG_CACHE_MINUTES = 30
+_ILLEGAL_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def audio_drag_name(text, when=None):
+    """「生成的文本_生成时间」: the name another program shows once the clip lands there."""
+    stem = " ".join(_ILLEGAL_NAME.sub(" ", text or "").split()).strip(" .")
+    if len(stem) > DRAG_NAME_CHARS:
+        stem = stem[:DRAG_NAME_CHARS].rstrip(" .")
+    moment = datetime.fromtimestamp(time.time() if when is None else when)
+    return (stem or "音频") + "_" + moment.strftime("%Y%m%d-%H%M%S")
+
+
+def drag_cache_dir():
+    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)
+    folder = Path(base or ".") / "shengjian-drag"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def prune_drag_cache(folder, minutes=DRAG_CACHE_MINUTES):
+    """Drop clips handed out long ago; a just-dropped file may still be read by the target."""
+    deadline = time.time() - minutes * 60
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.stat().st_mtime < deadline:
+                entry.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def prepare_drag_files(files, texts=None):
+    """Copies each clip under its text and generation time.
+
+    Windows hands the target a path, so a readable name has to be a real file: the
+    original stays untouched under its opaque id, the copy carries the name.
+    """
+    files = existing_audio_files(files)
+    if not files:
+        return []
+    folder = drag_cache_dir()
+    prune_drag_cache(folder)
+    prepared = []
+    for index, path in enumerate(files):
+        try:
+            when = path.stat().st_mtime
+        except OSError:
+            prepared.append(path)
+            continue
+        text = texts[index] if texts and index < len(texts) else ""
+        target = folder / (audio_drag_name(text or path.stem, when) + path.suffix.lower())
+        try:
+            shutil.copy2(path, target)
+            prepared.append(target)
+            continue
+        except OSError:
+            pass
+        # A stale copy is written by the target program: land next to it instead.
+        candidate, serial = target, 2
+        while candidate.exists():
+            candidate = target.with_name(f"{target.stem}-{serial}{target.suffix}")
+            serial += 1
+        try:
+            shutil.copy2(path, candidate)
+        except OSError:
+            # Out of space or a locked file: a drop under the original name still works.
+            prepared.append(path)
+            continue
+        prepared.append(candidate)
+    return prepared
+
+
+def audio_drag_pixmap(count, title, when=None):
     """Carry the clip name under the cursor instead of a screenshot of the row."""
     width, height = 268, 46
     pixmap = QPixmap(width * 2, height * 2)
@@ -376,21 +457,29 @@ def audio_drag_pixmap(count, title):
     font.setWeight(QFont.Weight.Normal)
     painter.setFont(font)
     painter.setPen(QColor("#8b8b90"))
+    stamp = datetime.fromtimestamp(when).strftime("%Y-%m-%d %H:%M") if when else ""
+    detail = f"{count} 个音频" if count > 1 else "拖到其他程序即可使用"
+    caption = stamp + " · " + detail if stamp else detail
     painter.drawText(QRect(44, 25, width - 60, 16), Qt.AlignmentFlag.AlignVCenter,
-                     f"{count} 个音频" if count > 1 else "拖到其他程序即可使用")
+                     QFontMetrics(font).elidedText(caption, Qt.TextElideMode.ElideRight, width - 60))
     painter.end()
     pixmap.setDevicePixelRatio(2)
     return pixmap
 
 
-def start_audio_drag(source, files, title=""):
+def start_audio_drag(source, files, title="", texts=None):
     """Hand one drag session to the OS; nothing readable means no drag at all."""
     files = existing_audio_files(files)
     if not files:
         return False
+    handed = prepare_drag_files(files, texts) or files
+    try:
+        when = handed[0].stat().st_mtime
+    except OSError:
+        when = None
     drag = QDrag(source)
-    drag.setMimeData(audio_mime_data(files))
-    pixmap = audio_drag_pixmap(len(files), title or files[0].name)
+    drag.setMimeData(audio_mime_data(handed))
+    pixmap = audio_drag_pixmap(len(handed), title or handed[0].stem, when)
     drag.setPixmap(pixmap)
     size = pixmap.deviceIndependentSize()
     drag.setHotSpot(QPoint(int(size.width()) - 22, int(size.height()) // 2))
@@ -412,9 +501,10 @@ def start_audio_drag(source, files, title=""):
 class DragHandle(QWidget):
     """A six-dot grip: pulling it hands the row's latest audio to another program."""
 
-    def __init__(self, files, title=None, parent=None, size=18):
+    def __init__(self, files, title=None, parent=None, size=18, texts=None):
         super().__init__(parent)
-        self.files, self.title, self.press, self.active = files, title or (lambda: ""), None, False
+        self.files, self.title, self.texts = files, title or (lambda: ""), texts
+        self.press, self.active = None, False
         self.setFixedSize(size, size)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setAccessibleName("拖动音频到其他程序")
@@ -434,7 +524,8 @@ class DragHandle(QWidget):
         self.update()
 
     def begin_drag(self):
-        return start_audio_drag(self, self.files() if self.files else (), self.title())
+        return start_audio_drag(self, self.files() if self.files else (), self.title(),
+                                self.texts() if self.texts else None)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.active:
@@ -495,13 +586,17 @@ class AudioDrag:
     def describe_audio(self, row):
         return ""
 
+    def audio_row_texts(self, row):
+        """The text each dropped file should be named after; None keeps the stored name."""
+        return None
+
     def audio_drag_files(self, row):
         return existing_audio_files(self.resolve_audio(row))
 
     def startDrag(self, supported_actions):
         row = self.currentRow()
         # Nothing readable under the cursor keeps the press an ordinary click.
-        start_audio_drag(self, self.audio_drag_files(row), self.describe_audio(row))
+        start_audio_drag(self, self.audio_drag_files(row), self.describe_audio(row), self.audio_row_texts(row))
 
 
 class AudioTable(AudioDrag, QTableWidget):

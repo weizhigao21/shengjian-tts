@@ -2,6 +2,7 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,8 @@ from PyQt6.QtWidgets import QApplication
 from voice_workbench.api import create_app
 from voice_workbench.gui import Window
 from voice_workbench.recent_works import segment_audio
-from voice_workbench.ui import AudioTable, audio_mime_data, existing_audio_files
+from voice_workbench.ui import (AudioTable, audio_drag_name, audio_mime_data, drag_cache_dir, existing_audio_files,
+                                prepare_drag_files, prune_drag_cache)
 from test_service import ControlledRunner, wait_job
 
 
@@ -80,6 +82,56 @@ def test_mime_data_carries_existing_files_only(tmp_path):
     assert [Path(url.toLocalFile()) for url in data.urls()] == [real.resolve()]
 
 
+def test_drag_name_is_the_line_plus_its_generation_time():
+    stamp = time.mktime((2026, 10, 19, 18, 4, 7, 0, 0, -1))
+    assert audio_drag_name("姐姐你在干什么呀？", stamp) == "姐姐你在干什么呀？_20261019-180407"
+    assert audio_drag_name('a/b:c*d?e"f<g>h|i\\j', stamp) == "a b c d e f g h i j_20261019-180407"
+    assert len(audio_drag_name("字" * 300, stamp)) == 60 + len("_20261019-180407")
+    assert audio_drag_name("   ", stamp) == "音频_20261019-180407"
+
+
+def test_prepared_copies_carry_the_audio_and_leave_the_original_alone(tmp_path):
+    source = tmp_path / "0f0f0f0f.wav"
+    source.write_bytes(b"RIFF" + bytes(64))
+    stamp = time.time() - 3600
+    os.utime(source, (stamp, stamp))
+    prepared = prepare_drag_files([source], ["一段测试对白"])
+    assert len(prepared) == 1 and prepared[0] != source.resolve()
+    assert prepared[0].parent == drag_cache_dir().resolve()
+    assert prepared[0].read_bytes() == source.read_bytes()
+    assert abs(prepared[0].stat().st_mtime - stamp) < 1
+    expected = "一段测试对白_" + time.strftime("%Y%m%d-%H%M%S", time.localtime(stamp)) + ".wav"
+    assert prepared[0].name == expected
+    assert source.is_file() and source.stat().st_size == 68
+
+
+def test_a_batch_keeps_one_name_per_clip(tmp_path):
+    clips = []
+    for index in range(3):
+        path = tmp_path / f"clip-{index}.wav"
+        path.write_bytes(b"RIFF" + bytes(index))
+        stamp = time.time() - 600 + index
+        os.utime(path, (stamp, stamp))
+        clips.append(path)
+    prepared = prepare_drag_files(clips, ["第一句", "第二句"])  # 文本少于文件时回退原名
+    assert len(prepared) == 3
+    assert prepared[0].stem.startswith("第一句_") and prepared[1].stem.startswith("第二句_")
+    assert prepared[2].stem.startswith("clip-2_")
+    assert len({path.name for path in prepared}) == 3
+
+
+def test_old_drag_copies_are_pruned(tmp_path):
+    folder = tmp_path / "cache"
+    folder.mkdir()
+    stale, fresh = folder / "old.wav", folder / "new.wav"
+    stale.write_bytes(b"RIFF")
+    fresh.write_bytes(b"RIFF")
+    long_ago = time.time() - 3600
+    os.utime(stale, (long_ago, long_ago))
+    prune_drag_cache(folder)
+    assert not stale.exists() and fresh.exists()
+
+
 def test_drag_starts_with_the_row_file_and_a_preview(tmp_path, qtbot, monkeypatch):
     import voice_workbench.ui as ui
     monkeypatch.setattr(ui, "QDrag", FakeDrag)
@@ -92,9 +144,14 @@ def test_drag_starts_with_the_row_file_and_a_preview(tmp_path, qtbot, monkeypatc
     table.setCurrentCell(0, 0)
     table.resolve_audio = lambda row: [audio]
     table.describe_audio = lambda row: "0001 · 你好"
+    table.audio_row_texts = lambda row: ["你好，这是一句测试对白"]
     table.startDrag(Qt.DropAction.CopyAction)
     drag = FakeDrag.created[-1]
-    assert drag.mime.hasUrls() and Path(drag.mime.urls()[0].toLocalFile()) == audio.resolve()
+    assert drag.mime.hasUrls()
+    handed = Path(drag.mime.urls()[0].toLocalFile())
+    assert handed.is_file() and handed.read_bytes() == audio.read_bytes()
+    assert handed.stem.startswith("你好，这是一句测试对白_")
+    assert handed.suffix == ".wav"
     assert drag.pixmap is not None and not drag.pixmap.isNull()
     assert drag.hotspot is not None
     assert drag.executed == [Qt.DropAction.CopyAction]
@@ -147,6 +204,15 @@ def test_task_list_rows_hand_over_the_work_audio(generated, monkeypatch):
     assert window.jobs_table.audio_drag_files(0) == [path.resolve() for path in window.job_audio_files(0)]
     assert len(window.jobs_table.audio_drag_files(0)) == job["total"]
     assert window.dialogue_editor.audio_root == (window.data_dir / "audio")
+    # 侧栏整批拖出时，每个文件按它自己的原文命名，而不是作品名。
+    FakeDrag.created.clear()
+    window.jobs_table.selectRow(0)
+    window.jobs_table.startDrag(Qt.DropAction.CopyAction)
+    names = [Path(url.toLocalFile()).name for url in FakeDrag.created[-1].mime.urls()]
+    texts = {item["text"] for item in window.visible_segments}
+    assert len(names) == job["total"]
+    assert all(name.endswith(".wav") and "_20" in name for name in names)
+    assert all(any(name.startswith(text + "_") for text in texts) for name in names)
 
 
 def test_audio_management_rows_hand_over_the_file(generated):
@@ -158,6 +224,8 @@ def test_audio_management_rows_hand_over_the_file(generated):
     QApplication.processEvents()
     files = window.settings.audio_table.audio_drag_files(0)
     assert files and files[0].is_file()
+    texts = window.settings.audio_table.audio_row_texts(0)
+    assert texts and texts[0] == window.settings.visible_audio[0]["text"]
 
 
 def test_dialogue_rows_hand_over_their_latest_take(tmp_path, qtbot, monkeypatch):
@@ -189,7 +257,9 @@ def test_dialogue_rows_hand_over_their_latest_take(tmp_path, qtbot, monkeypatch)
     assert row.drag_title() == "小雨 · 姐姐你在干什么呀？"
     assert row.drag_handle.begin_drag() is True
     drag = FakeDrag.created[-1]
-    assert drag.mime.hasUrls() and Path(drag.mime.urls()[0].toLocalFile()) == latest.resolve()
+    assert drag.mime.hasUrls()
+    handed = Path(drag.mime.urls()[0].toLocalFile())
+    assert handed.read_bytes() == b"RIFF" and handed.stem.startswith("姐姐你在干什么呀？_")
     assert drag.executed == [Qt.DropAction.CopyAction]
     # 音频被删除或未生成时，手柄退回普通状态，不再发起空拖拽。
     latest.unlink()

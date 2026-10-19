@@ -216,6 +216,11 @@ class PlaybackController:
         text = re.sub(r"\s+", " ", item["text"]).strip()
         return f"{item['idx']:04d} · {text[:16] or '音频'}"
 
+    def segment_audio_texts(self, row):
+        """Drop the clip under the line it was generated from, not under its file id."""
+        item = self.visible_segments[row] if self.job_data and 0 <= row < len(self.visible_segments) else None
+        return [item["text"]] if item else None
+
     def adjacent_row(self, direction, indices=None):
         row = self.segments_table.currentRow()
         playable = [i for i in self.playable_rows() if indices is None or self.visible_segments[i]["idx"] in indices]

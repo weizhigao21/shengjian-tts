@@ -9,7 +9,7 @@ from ...ui import icon
 from ..api_client import checked
 from ..constants import STATES
 from ..model_labels import model_key
-from ...recent_works import read_recent, segment_audio, task_type, WORK_NAMES
+from ...recent_works import read_recent, segment_audio_records, task_type, WORK_NAMES
 
 
 class DocumentController:
@@ -205,20 +205,27 @@ class DocumentController:
         action.setObjectName("deleteJob")
         return menu
 
-    def job_audio_files(self, row):
-        """Every finished audio of the dragged work; other work kinds open their own page."""
+    def job_audio_records(self, row):
+        """Every finished audio of the dragged work, paired with the line that produced it."""
         if not 0 <= row < len(self.jobs):
             return []
         value = self.jobs[row]
         if task_type(value) in ("audio", "recognition"):
             return []
         folder = (self.data_dir / "audio").resolve()
-        files = []
-        for name in segment_audio(self.data_dir, value["id"]):
-            path = (folder / name).resolve()
+        records = []
+        for record in segment_audio_records(self.data_dir, value["id"]):
+            path = (folder / record["audio"]).resolve()
             if path.parent == folder and path.is_file():
-                files.append(path)
-        return files
+                records.append({**record, "path": path})
+        return records
+
+    def job_audio_files(self, row):
+        """Every finished audio of the dragged work; other work kinds open their own page."""
+        return [record["path"] for record in self.job_audio_records(row)]
+
+    def job_audio_texts(self, row):
+        return [record["text"] for record in self.job_audio_records(row)] or None
 
     def job_audio_title(self, row):
         return display_title(self.jobs[row]) if 0 <= row < len(self.jobs) else ""

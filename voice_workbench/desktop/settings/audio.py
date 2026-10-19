@@ -49,6 +49,7 @@ class AudioSettings:
         self.audio_table.enable_audio_drag()
         self.audio_table.resolve_audio = self.audio_row_files
         self.audio_table.describe_audio = self.audio_row_title
+        self.audio_table.audio_row_texts = self.audio_row_texts
         self.audio_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.audio_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.audio_table.horizontalHeader().setMinimumSectionSize(28)
@@ -125,6 +126,13 @@ class AudioSettings:
         if not record:
             return ""
         return f"{record.get('work_title') or '音频'} · {(record.get('text') or '')[:14]}"
+
+    def audio_row_texts(self, row):
+        """Name the dropped file after its line; the stored timestamp is the generation time."""
+        record = self.visible_audio[row] if 0 <= row < len(self.visible_audio) else None
+        if not record or not record.get("available"):
+            return None
+        return [record.get("text") or ""]
 
     def set_audio_category(self, category):
         self.audio_category = category

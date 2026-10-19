@@ -85,7 +85,7 @@ class DialogueRow(QWidget):
         layout.setSpacing(9)
         header = QHBoxLayout()
         header.setSpacing(5)
-        self.drag_handle = DragHandle(self.audio_files, self.drag_title, self)
+        self.drag_handle = DragHandle(self.audio_files, self.drag_title, self, texts=self.audio_texts)
         header.addWidget(self.drag_handle)
         self.name_edit = QLineEdit(entry.get("role_name") or "")
         self.name_edit.setObjectName("dialogueRoleName")
@@ -174,6 +174,10 @@ class DialogueRow(QWidget):
         if root is None or latest.get("status") != "done" or not latest.get("audio"):
             return []
         return [Path(root) / latest["audio"]]
+
+    def audio_texts(self):
+        """The line itself names the dropped file."""
+        return [self.text.toPlainText()] if self.audio_files() else None
 
     def drag_title(self):
         name = self.role_name or dialogue_id(self.identity)

@@ -112,6 +112,7 @@ class PlayerLayout:
         self.segments_table.enable_audio_drag()
         self.segments_table.resolve_audio = self.segment_audio_files
         self.segments_table.describe_audio = self.segment_audio_title
+        self.segments_table.audio_row_texts = self.segment_audio_texts
         self.configure_table(self.segments_table)
         self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "生成耗时", "状态", "错误原因", "推理引擎"])
         for col, width in ((0, 56), (1, 135), (3, 96), (4, 100), (6, 106)):

@@ -52,6 +52,7 @@ class UiLayout(GenerationLayout, PlayerLayout, WorkflowLayout):
         self.jobs_table.setObjectName("recentJobs")
         self.jobs_table.resolve_audio = self.job_audio_files
         self.jobs_table.describe_audio = self.job_audio_title
+        self.jobs_table.audio_row_texts = self.job_audio_texts
         self.configure_table(self.jobs_table)
         self.jobs_table.horizontalHeader().hide()
         self.jobs_table.setColumnHidden(1, True)
