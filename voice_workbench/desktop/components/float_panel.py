@@ -21,7 +21,10 @@ from ..constants import STATES
 PANEL_WIDTH = 430
 CARD_RADIUS = 12
 ROW_HEIGHT = 28
-TABLE_MAX_HEIGHT = 196
+# The list lives in a box of constant height: a batch adds rows, never pixels,
+# and anything past the fourth row scrolls instead of stretching the window.
+TABLE_ROWS = 4
+TABLE_HEIGHT = TABLE_ROWS * ROW_HEIGHT + 4
 CHARS_PER_SECOND = 4.2
 
 
@@ -38,9 +41,30 @@ def format_duration(seconds):
 
 
 class FloatEditor(QPlainTextEdit):
-    """Ctrl+Enter generates without reaching for the mouse."""
+    """Ctrl+Enter generates without reaching for the mouse.
+
+    The hint has to step aside the moment typing starts, and typing Chinese means
+    the input method holds the letters outside the document until a candidate is
+    picked. Qt still sees an empty document then, so it paints the hint straight
+    under the composing letters — the hint is withdrawn for the whole composition
+    instead.
+    """
 
     submit = pyqtSignal()
+
+    def __init__(self, hint=""):
+        super().__init__()
+        self.hint = hint
+        self.composing = False
+        self.setPlaceholderText(hint)
+
+    def inputMethodEvent(self, event):
+        composing = bool(event.preeditString())
+        super().inputMethodEvent(event)
+        if composing != self.composing:
+            self.composing = composing
+            self.setPlaceholderText("" if composing else self.hint)
+            self.viewport().update()
 
     def keyPressEvent(self, event):
         if (event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
@@ -100,6 +124,7 @@ class FloatTasks(AudioDrag, QTableWidget):
         self.horizontalHeader().hide()
         self.verticalHeader().hide()
         self.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.enable_audio_drag()
 
     def _index(self, row):
@@ -158,6 +183,7 @@ class FloatPanel(QWidget):
         self.setFixedWidth(PANEL_WIDTH)
         self._build()
         self._restore()
+        self._rebuild()
         self._refresh_stats()
 
     # ---------- construction ----------
@@ -239,9 +265,8 @@ class FloatPanel(QWidget):
         voices.addWidget(self.speed_label)
         body_layout.addLayout(voices)
 
-        self.editor = FloatEditor()
+        self.editor = FloatEditor("输入台词，回车换行…")
         self.editor.setObjectName("floatEditor")
-        self.editor.setPlaceholderText("输入台词，回车换行…")
         self.editor.setFixedHeight(84)
         palette = self.editor.palette()
         palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#9b9b9f"))
@@ -303,13 +328,16 @@ class FloatPanel(QWidget):
 
         self.table = FloatTasks(self)
         self.table.setObjectName("floatTasks")
-        self.table.setFixedHeight(0)
+        self.table.setFixedHeight(TABLE_HEIGHT)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.cellDoubleClicked.connect(self._play_row)
         body_layout.addWidget(self.table)
 
         self.empty = QLabel("生成的音频会出现在这里\n抓住每行右侧的六点，拖进时间线")
         self.empty.setObjectName("floatEmpty")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Same box as the list, so the first batch never moves the window either.
+        self.empty.setFixedHeight(TABLE_HEIGHT)
         body_layout.addWidget(self.empty)
 
         self.error = QLabel("")
@@ -508,8 +536,7 @@ class FloatPanel(QWidget):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.blockSignals(False)
-        height = min(TABLE_MAX_HEIGHT, len(rows) * ROW_HEIGHT + 4)
-        self.table.setFixedHeight(height)
+        self.table.setFixedHeight(TABLE_HEIGHT)
         self.table.setVisible(bool(rows))
         self.empty.setVisible(not rows)
         self._resize()
@@ -663,4 +690,11 @@ QPushButton#floatGenerate:disabled { background: #e9dcd0; color: #a89c90; }
 QTableWidget#floatTasks { border: none; background: transparent; font-size: 13px; color: #2a2a2c; }
 QTableWidget#floatTasks::item { border-bottom: 1px solid #f1ebe3; padding: 0 2px; }
 QTableWidget#floatTasks::item:selected { background: #f4e7db; color: #18181a; }
+QTableWidget#floatTasks QScrollBar:vertical { background: transparent; width: 6px; margin: 0; }
+QTableWidget#floatTasks QScrollBar::handle:vertical { background: #ded7cd; border-radius: 3px; min-height: 20px; }
+QTableWidget#floatTasks QScrollBar::handle:vertical:hover { background: #cdc4b8; }
+QTableWidget#floatTasks QScrollBar::add-line:vertical,
+QTableWidget#floatTasks QScrollBar::sub-line:vertical { height: 0; border: none; background: transparent; }
+QTableWidget#floatTasks QScrollBar::add-page:vertical,
+QTableWidget#floatTasks QScrollBar::sub-page:vertical { background: transparent; }
 """

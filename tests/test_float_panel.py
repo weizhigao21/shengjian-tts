@@ -289,21 +289,48 @@ def test_the_first_typed_character_repaints_the_whole_editor(window):
     assert panel.had_text is False
 
 
-def test_the_panel_shrinks_back_when_the_list_shrinks(window):
-    """A batch of lines used to leave the window at its tallest height for good."""
+def test_the_panel_keeps_one_height_however_many_lines_arrive(window):
+    """Every batch used to add a row and a few pixels; the list now has its own box."""
+    from voice_workbench.desktop.components.float_panel import TABLE_HEIGHT
+
     panel = window.float_panel
-    panel.show_job({"segments": [{"idx": i, "text": f"第{i}句", "status": "done", "audio": None}
-                                 for i in range(4)]})
-    QApplication.processEvents()
-    tall = panel.height()
-    panel.show_job({"segments": [{"idx": 0, "text": "第一句", "status": "done", "audio": None}]})
-    QApplication.processEvents()
-    assert panel.height() < tall
-    assert panel.height() == panel.layout().sizeHint().height()
     panel.show_job({"segments": []})
     QApplication.processEvents()
-    assert panel.height() < tall
-    assert panel.height() == panel.layout().sizeHint().height()
+    empty = panel.height()
+    for count in (1, 4, 9):
+        panel.show_job({"segments": [{"idx": i, "text": f"第{i}句", "status": "done", "audio": None}
+                                     for i in range(count)]})
+        QApplication.processEvents()
+        assert panel.height() == empty
+        assert panel.table.height() == TABLE_HEIGHT
+        assert panel.height() == panel.layout().sizeHint().height()
+    assert panel.table.verticalScrollBar().maximum() > 0
+
+
+def test_the_hint_steps_aside_while_the_input_method_composes(window):
+    """Pinyin letters live outside the document, so Qt kept painting the hint under them."""
+    from PyQt6.QtGui import QInputMethodEvent
+
+    editor = window.float_panel.editor
+    assert editor.placeholderText()
+    QApplication.sendEvent(editor, QInputMethodEvent("nh", []))
+    assert editor.placeholderText() == ""
+    commit = QInputMethodEvent()
+    commit.setCommitString("你好啊")
+    QApplication.sendEvent(editor, commit)
+    assert editor.toPlainText() == "你好啊"
+    assert editor.placeholderText()
+
+
+def test_cancelling_a_composition_brings_the_hint_back(window):
+    from PyQt6.QtGui import QInputMethodEvent
+
+    editor = window.float_panel.editor
+    QApplication.sendEvent(editor, QInputMethodEvent("nh", []))
+    assert editor.placeholderText() == ""
+    QApplication.sendEvent(editor, QInputMethodEvent("", []))
+    assert editor.toPlainText() == ""
+    assert editor.placeholderText()
 
 
 def test_the_layout_never_stretches_the_window_behind_our_back(window):
