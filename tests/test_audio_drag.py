@@ -146,6 +146,7 @@ def test_task_list_rows_hand_over_the_work_audio(generated, monkeypatch):
     assert FakeDrag.created[-1].mime.hasUrls()
     assert window.jobs_table.audio_drag_files(0) == [path.resolve() for path in window.job_audio_files(0)]
     assert len(window.jobs_table.audio_drag_files(0)) == job["total"]
+    assert window.dialogue_editor.audio_root == (window.data_dir / "audio")
 
 
 def test_audio_management_rows_hand_over_the_file(generated):
@@ -157,6 +158,60 @@ def test_audio_management_rows_hand_over_the_file(generated):
     QApplication.processEvents()
     files = window.settings.audio_table.audio_drag_files(0)
     assert files and files[0].is_file()
+
+
+def test_dialogue_rows_hand_over_their_latest_take(tmp_path, qtbot, monkeypatch):
+    """对白框本身就是拖拽源：拖起的最新一条音频，不需要去生成记录里找。"""
+    import voice_workbench.ui as ui
+    from voice_workbench.desktop.components.dialogue import DialogueEditor
+    monkeypatch.setattr(ui, "QDrag", FakeDrag)
+    FakeDrag.created.clear()
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    older, latest = audio_dir / "take-1.wav", audio_dir / "take-2.wav"
+    older.write_bytes(b"RIFF")
+    latest.write_bytes(b"RIFF")
+    editor = DialogueEditor()
+    qtbot.addWidget(editor)
+    editor.audio_root = audio_dir
+    editor.load([{"id": "abc12345", "text": "姐姐你在干什么呀？", "role_name": "小雨"}])
+    row = editor.rows[0]
+    assert row.drag_handle.active is False and row.audio_files() == []
+    assert row.drag_handle.begin_drag() is False and FakeDrag.created == []
+    editor.update_records([
+        {"idx": 1, "status": "done", "audio": older.name, "source_id": "abc12345",
+         "source_revision": "x", "generation": 1, "generation_seconds": 1.2},
+        {"idx": 2, "status": "done", "audio": latest.name, "source_id": "abc12345",
+         "source_revision": "x", "generation": 2, "generation_seconds": 0.9},
+    ], None, True)
+    assert row.drag_handle.active
+    assert row.audio_files() == [latest.resolve()]
+    assert row.drag_title() == "小雨 · 姐姐你在干什么呀？"
+    assert row.drag_handle.begin_drag() is True
+    drag = FakeDrag.created[-1]
+    assert drag.mime.hasUrls() and Path(drag.mime.urls()[0].toLocalFile()) == latest.resolve()
+    assert drag.executed == [Qt.DropAction.CopyAction]
+    # 音频被删除或未生成时，手柄退回普通状态，不再发起空拖拽。
+    latest.unlink()
+    row.drag_handle.refresh()
+    FakeDrag.created.clear()
+    assert row.drag_handle.active is False
+    assert row.drag_handle.begin_drag() is False and FakeDrag.created == []
+
+
+def test_dialogue_row_press_without_audio_keeps_the_handle_a_click(qtbot, monkeypatch):
+    import voice_workbench.ui as ui
+    from voice_workbench.desktop.components.dialogue import DialogueEditor
+    monkeypatch.setattr(ui, "QDrag", FakeDrag)
+    FakeDrag.created.clear()
+    editor = DialogueEditor()
+    qtbot.addWidget(editor)
+    editor.load([{"id": "abc12345", "text": "还没生成", "role_name": "小雨"}])
+    row = editor.rows[0]
+    assert row.drag_handle.active is False
+    assert row.drag_handle.cursor().shape() == Qt.CursorShape.ArrowCursor
+    assert "生成之后" in row.drag_handle.toolTip()
+    assert row.drag_handle.begin_drag() is False and FakeDrag.created == []
 
 
 def test_generation_list_stays_open_while_a_drag_is_running(qtbot):

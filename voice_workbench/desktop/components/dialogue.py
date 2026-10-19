@@ -2,13 +2,16 @@
 from __future__ import annotations
 import uuid
 import math
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 from PyQt6.QtGui import QTextCharFormat
-from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QApplication, QHBoxLayout, QLineEdit, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 from ...services.dialogue import entry_revision, dialogue_id
-from ...ui import button, generation_elapsed, icon, ElidedLabel
+from ...ui import DragHandle, button, generation_elapsed, icon, ElidedLabel
 from ..model_labels import model_label
 from .voice_mentions import PresetScriptEditor, VOICE_ROLE
 from .delayed_tooltip import DelayedToolTip
@@ -69,6 +72,7 @@ class DialogueRow(QWidget):
         self.latest = None
         self.record_count = 0
         self.effective_voice = None
+        self.press = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.setObjectName("dialogueRow")
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
@@ -81,6 +85,8 @@ class DialogueRow(QWidget):
         layout.setSpacing(9)
         header = QHBoxLayout()
         header.setSpacing(5)
+        self.drag_handle = DragHandle(self.audio_files, self.drag_title, self)
+        header.addWidget(self.drag_handle)
         self.name_edit = QLineEdit(entry.get("role_name") or "")
         self.name_edit.setObjectName("dialogueRoleName")
         self.name_edit.setFixedWidth(140)
@@ -129,8 +135,8 @@ class DialogueRow(QWidget):
         self.text.preset_chosen.connect(self.set_voice)
         self.text.next_requested.connect(lambda: panel.add_after(self))
         layout.addWidget(self.text)
-        for control in (self.text, self.text.viewport(), self.name_edit, self.status, self.voice_button,
-                        self.generate_button, self.play_button, self.delete_button):
+        for control in (self, self.drag_handle, self.text, self.text.viewport(), self.name_edit, self.status,
+                        self.voice_button, self.generate_button, self.play_button, self.delete_button):
             control.installEventFilter(self)
         self.detail_tip = DelayedToolTip(self, self.detail_text)
         for control in (self, self.name_edit, self.text, self.text.viewport(), self.status):
@@ -146,7 +152,33 @@ class DialogueRow(QWidget):
 
     def mousePressEvent(self, event):
         self.panel.select(self.identity)
+        self.press = event.position().toPoint() if event.button() == Qt.MouseButton.LeftButton else None
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self.press is not None and event.buttons() & Qt.MouseButton.LeftButton
+                and (event.position().toPoint() - self.press).manhattanLength() >= QApplication.startDragDistance()):
+            self.press = None
+            self.drag_handle.begin_drag()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.press = None
+        super().mouseReleaseEvent(event)
+
+    def audio_files(self):
+        """The latest finished take of this line, ready to be dropped elsewhere."""
+        latest = self.latest or {}
+        root = getattr(self.panel, "audio_root", None)
+        if root is None or latest.get("status") != "done" or not latest.get("audio"):
+            return []
+        return [Path(root) / latest["audio"]]
+
+    def drag_title(self):
+        name = self.role_name or dialogue_id(self.identity)
+        text = " ".join(self.text.toPlainText().split())[:16]
+        return name + " · " + text if text else name
 
     def entry(self):
         return {"id": self.identity, "text": self.text.toPlainText(), "voice_id": self.voice_id, "voice_name": self.voice_name,
@@ -252,6 +284,7 @@ class DialogueRow(QWidget):
         self.status.setStyleSheet("color: " + color + ";")
         detail = generation_elapsed(latest)[1] if latest and latest["status"] == "done" else ((latest or {}).get("error") or {}).get("message", "")
         self.status.setToolTip(status + ("\n" + detail if detail else ""))
+        self.drag_handle.refresh()
 
 
 class DialogueEditor(QScrollArea):
@@ -266,6 +299,7 @@ class DialogueEditor(QScrollArea):
         super().__init__(parent)
         self.voices, self.rows = [], []
         self.selected_id = None
+        self.audio_root = None
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body = QWidget()

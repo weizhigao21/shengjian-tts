@@ -50,6 +50,7 @@ class GenerationLayout:
         self.editor_stack = QStackedWidget()
         self.editor_stack.addWidget(self.text_edit)
         self.dialogue_editor = DialogueEditor()
+        self.dialogue_editor.audio_root = self.data_dir / "audio"
         self.dialogue_editor.changed.connect(self.dialogue_changed)
         self.dialogue_editor.name_changed.connect(self.dialogue_name_changed)
         self.dialogue_editor.submit_requested.connect(self.generate_dialogue_entry)

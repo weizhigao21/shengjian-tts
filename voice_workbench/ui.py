@@ -383,6 +383,102 @@ def audio_drag_pixmap(count, title):
     return pixmap
 
 
+def start_audio_drag(source, files, title=""):
+    """Hand one drag session to the OS; nothing readable means no drag at all."""
+    files = existing_audio_files(files)
+    if not files:
+        return False
+    drag = QDrag(source)
+    drag.setMimeData(audio_mime_data(files))
+    pixmap = audio_drag_pixmap(len(files), title or files[0].name)
+    drag.setPixmap(pixmap)
+    size = pixmap.deviceIndependentSize()
+    drag.setHotSpot(QPoint(int(size.width()) - 22, int(size.height()) // 2))
+    # The target program may activate mid-drag; a hidden source list cancels the drop.
+    held, parent = [], source.parentWidget()
+    while parent is not None:
+        if isinstance(parent, AnchoredPopover):
+            parent.held = True
+            held.append(parent)
+        parent = parent.parentWidget()
+    try:
+        drag.exec(Qt.DropAction.CopyAction)
+    finally:
+        for popover in held:
+            popover.held = False
+    return True
+
+
+class DragHandle(QWidget):
+    """A six-dot grip: pulling it hands the row's latest audio to another program."""
+
+    def __init__(self, files, title=None, parent=None, size=18):
+        super().__init__(parent)
+        self.files, self.title, self.press, self.active = files, title or (lambda: ""), None, False
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setAccessibleName("拖动音频到其他程序")
+        self.refresh()
+
+    def audio_files(self):
+        return existing_audio_files(self.files() if self.files else ())
+
+    def drag_title(self):
+        return self.title() or self.toolTip()
+
+    def refresh(self):
+        self.active = bool(self.audio_files())
+        self.setCursor(Qt.CursorShape.OpenHandCursor if self.active else Qt.CursorShape.ArrowCursor)
+        self.setToolTip("按住拖到其他程序，带走最新生成的音频" if self.active
+                        else "生成之后，可以按住这里把音频拖到其他程序")
+        self.update()
+
+    def begin_drag(self):
+        return start_audio_drag(self, self.files() if self.files else (), self.title())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.active:
+            self.press = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self.press is not None and event.buttons() & Qt.MouseButton.LeftButton
+                and (event.position().toPoint() - self.press).manhattanLength() >= QApplication.startDragDistance()):
+            self.press = None
+            self.begin_drag()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.press = None
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.underMouse():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#f4e7db"))
+            painter.drawRoundedRect(self.rect(), 5, 5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ORANGE if self.active else "#cfcfd4"))
+        center = QPointF(self.width() / 2, self.height() / 2)
+        for dx in (-3.5, 3.5):
+            for dy in (-4.0, 0.0, 4.0):
+                painter.drawEllipse(QPointF(center.x() + dx, center.y() + dy), 1.3, 1.3)
+        painter.end()
+
+
 class AudioDrag:
     """Row-level file drag shared by every generated-audio list."""
 
@@ -404,28 +500,8 @@ class AudioDrag:
 
     def startDrag(self, supported_actions):
         row = self.currentRow()
-        files = self.audio_drag_files(row)
-        if not files:
-            # Nothing readable under the cursor: keep the press an ordinary click.
-            return
-        drag = QDrag(self)
-        drag.setMimeData(audio_mime_data(files))
-        pixmap = audio_drag_pixmap(len(files), self.describe_audio(row) or files[0].name)
-        drag.setPixmap(pixmap)
-        size = pixmap.deviceIndependentSize()
-        drag.setHotSpot(QPoint(int(size.width()) - 22, int(size.height()) // 2))
-        # The target program may activate mid-drag; a hidden source list cancels the drop.
-        held, parent = [], self.parentWidget()
-        while parent is not None:
-            if isinstance(parent, AnchoredPopover):
-                parent.held = True
-                held.append(parent)
-            parent = parent.parentWidget()
-        try:
-            drag.exec(Qt.DropAction.CopyAction)
-        finally:
-            for popover in held:
-                popover.held = False
+        # Nothing readable under the cursor keeps the press an ordinary click.
+        start_audio_drag(self, self.audio_drag_files(row), self.describe_audio(row))
 
 
 class AudioTable(AudioDrag, QTableWidget):

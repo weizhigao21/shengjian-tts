@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.55-E87936?style=flat-square" alt="源码版本 v0.7.55" />
+  <img src="https://img.shields.io/badge/源码-v0.7.56-E87936?style=flat-square" alt="源码版本 v0.7.56" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,7 +26,7 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.55。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.56。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
 **未发布实验：** CUDA Graph 默认关闭，已在本机 RTX 2080 Ti 完成编码 / 随机数 / 音频一致性、取消恢复及回退验证。20 条中文和中英混合短句相对当前专用批量循环的热模型耗时均减少约 50%，详见[验证报告](docs/CUDA_GRAPH_VALIDATION.md)。现有 v0.7.50 构建包不包含此实验功能。
 
@@ -222,7 +222,7 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 <summary>作品、生成耗时与参考声音</summary>
 
 - 作品可重命名、删除和撤销；任务列表用图标区分文章和对话，时间记录在详情中。
-- 生成记录和侧栏任务行都可以直接拖到其他程序：拖起时交出真实 WAV 文件，播放器、音频编辑软件、聊天窗口都能接收，不需要先导出。
+- 对白框、生成记录和侧栏任务行都可以直接拖到其他程序：拖起时交出真实 WAV 文件，播放器、音频编辑软件、聊天窗口都能接收，不需要先导出。
 - 音频列表默认最新在前，可切换排序。生成耗时包含推理时的模型加载，不含排队；缓存与旧记录分别显示「缓存」「未记录」。
 - 手动播放结束后停止；再次生成保留旧音频。对话中角色名字可以相同，历史记录仍按每框的固定 ID 区分。
 - 「设置 → 生成音频」右键可添加为参考音频，自动带入文本。参考声音为 1–60 秒 WAV，保存独立副本。
