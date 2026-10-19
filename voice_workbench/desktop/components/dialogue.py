@@ -4,7 +4,7 @@ import uuid
 import math
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCharFormat
 from PyQt6.QtWidgets import (
     QApplication, QHBoxLayout, QLineEdit, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
@@ -300,6 +300,10 @@ class DialogueEditor(QScrollArea):
         self.voices, self.rows = [], []
         self.selected_id = None
         self.audio_root = None
+        self.reveal_row, self.reveal_margin, self.reveal_frames = None, 16, 0
+        self.reveal_timer = QTimer(self)
+        self.reveal_timer.setSingleShot(True)
+        self.reveal_timer.timeout.connect(self.follow_reveal)
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body = QWidget()
@@ -350,8 +354,33 @@ class DialogueEditor(QScrollArea):
         self.changed.emit()
         self.select(row.identity)
         row.text.setFocus()
-        self.ensureWidgetVisible(row)
+        self.reveal(row)
         return row
+
+    def reveal(self, row, margin=16, frames=10):
+        """Follow the new row for a few frames: its geometry only lands after the layout pass."""
+        self.reveal_row, self.reveal_margin, self.reveal_frames = row, margin, frames
+        self.reveal_timer.start(0)
+
+    def follow_reveal(self):
+        row, frames = self.reveal_row, self.reveal_frames
+        if row is None or frames <= 0 or row not in self.rows:
+            self.reveal_row, self.reveal_frames = None, 0
+            return
+        if self.rows[-1] is row:
+            # Appending at the end: pin to the bottom until the page stops growing.
+            bar = self.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        else:
+            self.scroll_to(row, self.reveal_margin)
+        self.reveal_frames = frames - 1
+        if self.reveal_frames:
+            self.reveal_timer.start(16)
+
+    def scroll_to(self, row, margin=16):
+        bar, view = self.verticalScrollBar(), self.viewport().height()
+        bottom = row.mapTo(self.body, row.rect().bottomLeft()).y() + margin
+        bar.setValue(max(bar.minimum(), min(bar.maximum(), bottom - view)))
 
     def remove_row(self, row):
         was_selected = self.selected_id == row.identity

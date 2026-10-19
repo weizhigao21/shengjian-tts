@@ -211,3 +211,33 @@ def test_existing_database_is_backed_up_before_dialogue_migration(tmp_path):
         assert db.execute("SELECT script FROM jobs WHERE id=?", (target,)).fetchone()[0] == "原文"
         assert "editor_state" not in {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
     restored.close()
+
+
+def overflow_page(qtbot, rows=12):
+    widget = panel(qtbot)
+    widget.resize(700, 320)
+    widget.load([{"id": f"id{index:06d}", "text": f"第 {index} 条对白，用来把页面撑满。", "role_name": f"角色{index}"}
+                 for index in range(rows)])
+    qtbot.waitUntil(lambda: widget.verticalScrollBar().maximum() > 0, timeout=2000)
+    return widget, widget.verticalScrollBar()
+
+
+def test_adding_a_row_keeps_the_page_on_the_new_row(qtbot):
+    """新行还没有布局位置就 ensureWidgetVisible 会把滚动条甩回顶部，必须等布局落定再滚。"""
+    widget, bar = overflow_page(qtbot)
+    bar.setValue(bar.maximum())
+    row = widget.add_after(widget.rows[-1])
+    qtbot.wait(250)
+    assert bar.value() > 0, "添加对白后回到了顶部"
+    assert bar.value() >= bar.maximum() - 1
+    assert row.mapTo(widget.viewport(), row.rect().topLeft()).y() >= 0
+    assert row.mapTo(widget.viewport(), row.rect().bottomLeft()).y() <= widget.viewport().height()
+
+
+def test_adding_a_row_from_the_top_scrolls_down_to_it(qtbot):
+    widget, bar = overflow_page(qtbot)
+    bar.setValue(0)
+    row = widget.add_after(widget.rows[-1])
+    qtbot.wait(250)
+    assert bar.value() > 0
+    assert row.mapTo(widget.viewport(), row.rect().bottomLeft()).y() <= widget.viewport().height()
