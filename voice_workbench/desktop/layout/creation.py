@@ -20,7 +20,8 @@ def creation_home(window):
             ("article", "文章", "article", "长文、旁白和字幕\n沿用文本编辑与参数设置"),
             ("dialogue", "对话", "dialogue", "多角色对白\n输入 @ 选择音色，每段独立编辑"),
             ("audio", "音频编辑", "audio", "裁剪、拼接与音量调整\nVevo2 换声和台词修改"),
-            ("recognition", "语音识别", "recognize", "拖入音频自动识别文字\n点击每行播放对应片段")):
+            ("recognition", "语音识别", "recognize", "拖入音频自动识别文字\n点击每行播放对应片段"),
+            ("float", "边剪边配", "float", "悬浮小窗常驻\n打字即生成，拖进时间线")):
         control = button(name + "\n" + description, lambda checked=False, m=mode: window.start_creation(m), symbol)
         control.setObjectName("creationChoice")
         control.setIconSize(QSize(25, 25))

@@ -22,7 +22,7 @@ def test_third_mode_keeps_article_layout_and_has_own_transport(qtbot, tmp_path):
     assert window.text_edit.toPlainText() == '仍然是文章内容'
     assert window.editor_mode == 'article'
     assert window.transport.isHidden()
-    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition'}
+    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition', 'float'}
     window.resume_creation_editor()
     assert window.creation_pages.currentIndex() == 1 and window.transport.isVisible()
     assert window.generate_button.parent() != window.audio_editor

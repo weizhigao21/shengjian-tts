@@ -100,6 +100,7 @@ ICONS = {
     "cpu": '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/>',
     "trash": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+    "float": '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 8h18"/><path d="m10 11 4 2.5-4 2.5z"/>',
 }
 
 

@@ -18,6 +18,7 @@ from .audio_output import SystemAudioOutput
 from .draft_saves import DraftSaveQueue
 from .voice_checks import VoiceCheckCache
 from .controllers.documents import DocumentController
+from .controllers.float_mode import FloatModeController
 from .controllers.generation import GenerationController
 from .controllers.playback import PlaybackController
 from .controllers.service import ServiceController
@@ -26,7 +27,7 @@ from .controllers.creation import CreationController
 from .layout.workspace import UiLayout
 
 
-class Window(CreationController, DocumentController, GenerationController, PlaybackController, VoiceLibraryController, ServiceController, UiLayout, QMainWindow):
+class Window(CreationController, DocumentController, GenerationController, PlaybackController, VoiceLibraryController, ServiceController, FloatModeController, UiLayout, QMainWindow):
     def __init__(self, port, data_dir, autostart=True):
         super().__init__()
         self.port, self.data_dir = port, Path(data_dir).resolve()
@@ -81,10 +82,12 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.reference_player = QMediaPlayer(self)
         self.reference_player.setAudioOutput(self.reference_output)
         self.reference_preview_origin = None
+        self.float_setup()
         self._build()
         if self.draft_saves.load_error:
             self.service_log.append("本地待存草稿读取失败，请检查 pending-drafts.json：" + self.draft_saves.load_error)
         self.load_saved_jobs()
+        self.register_float_hotkey()
         self.reference_player.playbackStateChanged.connect(self.update_reference_icon)
         self.reference_player.errorOccurred.connect(self.reference_playback_error)
         self.timer = QTimer(self)
@@ -150,6 +153,9 @@ class Window(CreationController, DocumentController, GenerationController, Playb
             return
         self.close_timer.stop()
         self.closing = True
+        self.close_float_mode(restore=False)
+        self.float_hotkey.unregister()
+        self.float_player.stop()
         self.audio_editor.controller.close()
         self.recognition.controller.close()
         self.clear_autoplay()

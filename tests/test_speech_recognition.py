@@ -616,7 +616,7 @@ def test_creation_home_offers_recognition_beside_the_other_modes(qtbot, tmp_path
     qtbot.addWidget(window)
     window.show()
     window.open_creation_home()
-    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition'}
+    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition', 'float'}
     assert '语音识别' in window.creation_choices['recognition'].text()
     window.start_creation('recognition')
     window.open_creation_home()

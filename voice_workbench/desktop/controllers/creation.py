@@ -22,6 +22,9 @@ class CreationController:
         self.choose_creation_mode(self.editor_mode, dirty=False)
 
     def start_creation(self, mode):
+        if mode == "float":
+            self.open_float_mode()
+            return
         if mode == "audio":
             self.open_audio_editor()
             return

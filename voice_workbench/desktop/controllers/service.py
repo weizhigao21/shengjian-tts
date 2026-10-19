@@ -150,6 +150,7 @@ class ServiceController:
         voice_ids = [(v["id"], v["name"], v.get("model_name")) for v in voices]
         old_ids = [(v["id"], v["name"], v.get("model_name")) for v in self.voices]
         self.voices = voices
+        self.sync_float_voices(voices)
         self.text_edit.set_voices(voices)
         self.dialogue_editor.set_voices(voices)
         if voice_ids != old_ids:
