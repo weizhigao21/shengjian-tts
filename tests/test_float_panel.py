@@ -312,6 +312,26 @@ def test_the_layout_never_stretches_the_window_behind_our_back(window):
     assert layout.sizeConstraint() == QLayout.SizeConstraint.SetNoConstraint
 
 
+def test_the_sidebar_entry_carries_the_float_mark(window):
+    from voice_workbench.ui import ORANGE, icon
+
+    entry = window.float_entry
+    assert entry.text() == "边剪边配"
+    assert entry.icon().isNull() is False
+    shown = entry.icon().pixmap(18, 18).toImage()
+    assert shown == icon("float", ORANGE).pixmap(18, 18).toImage()
+
+
+def test_the_sidebar_entry_hands_over_to_the_panel(window):
+    window.close_float_mode(restore=False)
+    QApplication.processEvents()
+    assert window.float_panel.isVisible() is False
+    window.float_entry.click()
+    QApplication.processEvents()
+    assert window.float_panel.isVisible() is True
+    assert window.float_timer.isActive()
+
+
 def test_creation_cards_wrap_three_per_row(window):
     from PyQt6.QtWidgets import QGridLayout
     from voice_workbench.desktop.layout.creation import creation_home

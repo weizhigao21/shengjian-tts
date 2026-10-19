@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from ... import __version__
-from ...ui import application_icon, STYLE, ElidedLabel, RecentTasks, button, label
+from ...ui import ORANGE, application_icon, STYLE, ElidedLabel, RecentTasks, button, icon, label
 from .generation import GenerationLayout
 from .player import PlayerLayout
 from .workflow import WorkflowLayout
@@ -46,7 +46,15 @@ class UiLayout(GenerationLayout, PlayerLayout, WorkflowLayout):
             control.setCheckable(True)
             self.nav_buttons.append(control)
             nav.addWidget(control)
-        nav.addSpacing(24)
+        nav.addSpacing(20)
+        # Sits with the task list, not among the nav tabs: it is a one-click action,
+        # and the icon is the same window mark the panel itself carries.
+        self.float_entry = button("边剪边配", lambda: self.start_creation("float"), "float", "nav")
+        self.float_entry.setObjectName("floatEntry")
+        self.float_entry.setIcon(icon("float", ORANGE))
+        self.float_entry.setToolTip("主窗口让位，小窗接管打字与生成（Ctrl+Alt+Space 随时切换）")
+        nav.addWidget(self.float_entry)
+        nav.addSpacing(16)
         nav.addWidget(label("最近作品", "muted"))
         self.jobs_table = RecentTasks()
         self.jobs_table.setObjectName("recentJobs")
