@@ -18,10 +18,12 @@ import httpx
 from ..config import atomic_json
 from ..downloads import DownloadPaused, TransferRate, download_file, transfer_state
 from ..errors import VoiceError
+from ..engine_sources import SOURCE_NAMES, download_archive
 from ..model_updates import safe_remote_path
 from ..program_files import checked_child
 from ..runtime import external_environment
 from .discovery import catalog, discover, model_path, python_path
+from .sources import MODEL_SOURCES, RUNTIME_SOURCES, model_url, pip_plans
 
 BUSY = {'detecting', 'downloading', 'verifying', 'extracting', 'dependencies', 'checking', 'waiting', 'pausing'}
 
@@ -39,6 +41,7 @@ class BatchSetup:
             timeout=httpx.Timeout(20, connect=10, read=10)))
         self.last_scan = 0
         self.last_scan_key = None
+        self.runtime_source = 'mirror'
 
     @property
     def busy(self):
@@ -88,8 +91,9 @@ class BatchSetup:
         if candidate != self.backend.settings or all((candidate.python, candidate.model_dir, candidate.source_model)):
             self.start('detect')
 
-    def start(self, action='all', source_model='', device=None, source='mirror'):
-        if action not in ('all', 'runtime', 'model', 'detect') or source not in ('mirror', 'huggingface'):
+    def start(self, action='all', source_model='', device=None, source='modelscope', runtime_source='mirror'):
+        if (action not in ('all', 'runtime', 'model', 'detect') or source not in ('mirror', 'huggingface', 'modelscope')
+                or runtime_source not in RUNTIME_SOURCES):
             raise VoiceError('BATCH_SETUP_INVALID', '安装操作或下载源无效', stage='批量安装')
         with self.backend.manager.lock, self.lock:
             if self.closed or self.backend.manager.stopping.is_set():
@@ -107,8 +111,10 @@ class BatchSetup:
                 self.backend.manager.require_idle_engine('批量安装')
                 self.backend.process.interrupt()
             self.event = threading.Event()
+            self.runtime_source = runtime_source
             self.state = {'status': 'detecting', 'action': action, 'received': 0, 'size': 0, 'speed_bps': 0,
-                          'message': '正在检测本地环境和关联模型…', 'source_model': candidate.source_model}
+                          'message': '正在检测本地环境和关联模型…', 'source_model': candidate.source_model,
+                          'source': source, 'runtime_source': runtime_source}
             original = self.backend.settings.model_dump()
             self.thread = threading.Thread(target=self._run, args=(action, candidate, selected, source, original),
                                            name='qwen-batch-setup', daemon=True)
@@ -128,16 +134,6 @@ class BatchSetup:
 
     def managed(self, path):
         return checked_child(Path(path), self.root)
-
-    def _fetch(self, target, entry, url):
-        self.managed(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            download_file(target, entry, url, self.event, self.client_factory, self.update)
-        except ValueError:
-            # Only managed downloads, never user-selected external assets.
-            target.unlink(missing_ok=True)
-            raise
 
     def _extract(self, archive, target):
         self.managed(target)
@@ -219,6 +215,22 @@ class BatchSetup:
             proc.stdout.close()
             reader.join(timeout=2)
 
+    def _pip(self, prefix, packages, device=None):
+        errors = []
+        for name, command in pip_plans(prefix, packages, self.runtime_source, device):
+            self.check_cancel()
+            self.update(status='dependencies', received=0, size=0, speed_bps=0,
+                        download_source=name, source_errors=list(errors), message='正在安装依赖 · ' + name)
+            try:
+                self._command(command)
+                return
+            except (RuntimeError, TimeoutError) as exc:
+                self.check_cancel()
+                errors.append({'source': name, 'message': str(exc)})
+                self.update(source_errors=list(errors), message=name + ' 未完成，正在尝试其他来源…')
+        detail = '\n'.join(e['source'] + '：' + e['message'] for e in errors)
+        raise RuntimeError('依赖安装失败；可暂停后更换运行环境来源重试。\n' + detail)
+
     def _runtime(self, device):
         root = self.managed(self.root / 'runtime/qwen-batch')
         root.mkdir(parents=True, exist_ok=True)
@@ -227,7 +239,14 @@ class BatchSetup:
             entry = catalog()['python']
             self.update(size=entry['size'], phase='python', message='下载独立 Python 运行环境…')
             archive = root / 'downloads' / entry['name']
-            self._fetch(archive, entry, entry['url'])
+            self.managed(archive)
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            def progress(**changes):
+                if 'active_source' in changes:
+                    changes['download_source'] = SOURCE_NAMES[changes['active_source']]
+                self.update(**changes)
+            download_archive(archive, entry, entry['url'], self.event, self.client_factory, progress,
+                             'auto' if self.runtime_source == 'mirror' else 'github', label='Python')
             self.update(status='extracting', speed_bps=0, message='解压独立 Python…')
             with tempfile.TemporaryDirectory(prefix='.python-', dir=root) as folder:
                 staging = Path(folder)
@@ -251,10 +270,9 @@ class BatchSetup:
             self._command([str(base), '-m', 'venv', str(env)], timeout=120)
             self.update(status='dependencies', phase='dependencies', received=0, size=0, speed_bps=0, message='下载并安装 PyTorch 和 Qwen SDK；首次需要数 GB…')
             prefix = [str(python), '-m', 'pip', 'install', '--no-input', '--disable-pip-version-check']
-            self._command(prefix + ['pip==25.2', '--index-url', 'https://pypi.org/simple'])
-            index = 'https://download.pytorch.org/whl/' + ('cu128' if device == 'cuda' else 'cpu')
-            self._command(prefix + ['--progress-bar', 'raw', 'torch==2.9.0', 'torchaudio==2.9.0', '--index-url', index])
-            self._command(prefix + ['--progress-bar', 'raw', 'qwen-tts==0.1.1', '--index-url', 'https://pypi.org/simple'])
+            self._pip(prefix, ['pip==25.2'])
+            self._pip(prefix + ['--progress-bar', 'raw'], [], device=device)
+            self._pip(prefix + ['--progress-bar', 'raw'], ['qwen-tts==0.1.1'])
         self.update(status='checking', phase='runtime', speed_bps=0, message='检查独立环境和计算设备…')
         code = 'import torch,qwen_tts,soundfile; print("Qwen runtime ready"); '
         if device == 'cuda':
@@ -266,10 +284,10 @@ class BatchSetup:
     def _model(self, size, source):
         entry = catalog()['models'][size]
         root = self.managed(model_path(self.root, size))
-        host = 'https://hf-mirror.com' if source == 'mirror' else 'https://huggingface.co'
         total = sum(f['size'] for f in entry['files'])
         completed = 0
-        self.update(size=total, received=0, phase='model', message='下载对应的 Qwen Base 原始权重…')
+        self.update(size=total, received=0, phase='model', download_source=MODEL_SOURCES[source],
+                    source_errors=[], message='下载对应的 Qwen Base 原始权重…')
         for file in entry['files']:
             self.check_cancel()
             if not safe_remote_path(file['path']):
@@ -280,7 +298,7 @@ class BatchSetup:
                 if 'received' in changes: changes['received'] += completed
                 self.update(message=file['path'], **changes)
             try:
-                download_file(target, file, f"{host}/{entry['repo']}/resolve/{entry['revision']}/{file['path']}",
+                download_file(target, file, model_url(entry, file, source),
                               self.event, self.client_factory, progress)
             except ValueError:
                 target.unlink(missing_ok=True)

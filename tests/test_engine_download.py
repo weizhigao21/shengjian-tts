@@ -262,7 +262,7 @@ def test_corrupt_complete_engine_cache_can_be_retried(tmp_path):
         engines, payloads = installer(manager)
         cached = engines.download_dir / "engine.zip"
         cached.write_bytes(b"x" * len(payloads["engine.zip"]))
-        engines.start("cpu")
+        engines.start("cpu", source='github')
         engines.threads["cpu"].join(3)
         assert engines.states["cpu"]["status"] == "failed" and not cached.exists()
         engines.start("cpu")

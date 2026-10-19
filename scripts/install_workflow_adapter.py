@@ -140,6 +140,15 @@ def prepare(target):
     marker = '        self.pause_lock = threading.Lock()\n'
     worker = replace_once(worker, marker, marker + '        self.workflow_context = {"key": uuid.uuid4().hex,\n                                 "title": "双语配音 · " + os.path.splitext(os.path.basename(config.get("source_name") or (config.get("lrc_files") or ["字幕"])[0]))[0][:150]}\n')
     worker = worker.replace('cancel_check=lambda: self.stop_flag,\n                            )', 'cancel_check=lambda: self.stop_flag,\n                                workflow_context=self.workflow_context,\n                            )')
+    worker = replace_once(worker, 'from .tts_cache import AudioCache',
+                          'from .tts_cache import AudioCache\nfrom .local_voice_stream import supports_incremental, run_incremental')
+    marker = '        if use_bulk:\n            self.log_signal.emit(f"批量推理已启用，微批大小: {bulk_batch_size}")'
+    worker = replace_once(worker, marker, '''        if use_bulk and len(available_apis) == 1 and supports_incremental(available_apis[0]):
+            run_incremental(self, available_apis[0], pending_tasks, completed, completed_weight,
+                            start_time, task_id, task_dir)
+            return
+
+''' + marker)
     panel_path = target / "src" / "widgets" / "tts_panel.py"
     panel = panel_path.read_text(encoding="utf-8-sig")
     if not voice_picker_installed(panel):
@@ -154,6 +163,7 @@ def prepare(target):
         panel = replace_once(panel, marker, marker + '        self.local_voice_picker.sync_from_config()\n')
     modifications = [(utils_path, utils), (bridge_path, bridge), (worker_path, worker), (panel_path, panel),
                      (steps / "local_voice_client.py", (ROOT / "integration" / "local_voice_client.py").read_text(encoding="utf-8")),
+                     (steps / "local_voice_stream.py", (ROOT / "integration" / "local_voice_stream.py").read_text(encoding="utf-8")),
                      (target / "src" / "widgets" / "local_voice_picker.py", (ROOT / "integration" / "local_voice_picker.py").read_text(encoding="utf-8"))]
     for path, source in modifications:
         compile(source, str(path), "exec")

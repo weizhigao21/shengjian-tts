@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
+from .engine_sources import EngineSource
 
 Language = Literal["zh", "en", "en-us", "en-gb", "ja", "es", "ar", "fr", "fr-fr", "hi", "it", "pt", "pt-br", "ko", "de", "ru"]
 
@@ -153,6 +154,7 @@ class ModelDownload(BaseModel):
 
 class EngineDownload(BaseModel):
     backend: Literal["cuda", "cpu"] = "cuda"
+    source: EngineSource | None = None
 
 
 class ModelRemoval(BaseModel):

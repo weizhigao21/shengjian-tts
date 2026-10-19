@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QHeaderView, QScrollArea, QTableWidget, QFrame, QVBoxLayout,
     QWidget,
 )
-from ...ui import ElidedLabel, label
+from ...ui import AudioTable, ElidedLabel, label
 from ...model_dates import publication_metadata
 
 
@@ -82,7 +82,7 @@ class ModelTable(QTableWidget):
 class SettingsComponents:
     def table(self, headers, whole_page=False):
         table = (ModelTable(0, len(headers), self.models_scroll) if whole_page
-                 else QTableWidget(0, len(headers)))
+                 else AudioTable(0, len(headers)))
         table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

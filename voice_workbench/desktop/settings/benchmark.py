@@ -1,6 +1,6 @@
 """Live cold/warm backend comparisons; report copying without creating works."""
 import json
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QProgressBar, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 from ...ui import button, label
 from ..api_client import checked
@@ -39,8 +39,22 @@ class BenchmarkControls(QWidget):
         row.addWidget(self.start_button); row.addWidget(self.cancel_button); row.addWidget(self.copy_button); row.addStretch()
         layout.addLayout(row)
         self.progress = QProgressBar()
+        self.progress.setObjectName('benchmarkProgress')
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 1)
+        self.progress.setToolTip('整体进度：已完成 / 计划生成的测试音频条数，含原生与批量两个后端')
         self.progress.hide()
-        layout.addWidget(self.progress)
+        self.progress_text = label('', 'hint')
+        self.progress_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.progress_text.setMinimumWidth(self.progress_text.fontMetrics().horizontalAdvance('100 / 100 条 · 100%') + 6)
+        self.progress_text.setToolTip('整体进度：已完成 / 计划生成的测试音频条数')
+        self.progress_text.hide()
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(10)
+        progress_row.addWidget(self.progress, 1)
+        progress_row.addWidget(self.progress_text)
+        layout.addLayout(progress_row)
         self.status = label('完成批量环境配置后即可测试。', 'hint')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -80,17 +94,24 @@ class BenchmarkControls(QWidget):
         self.cancel_button.setEnabled(data['status'] != 'cancelling')
         self.copy_button.setEnabled(bool(self.result))
         for control in (self.voice, self.workload, self.rounds): control.setEnabled(not self.busy)
+        total, completed = max(0, data.get('total', 0)), max(0, data.get('completed', 0))
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(min(completed, total) if total else 0)
         self.progress.setVisible(self.busy)
-        self.progress.setRange(0, max(1, data.get('total', 0)))
-        self.progress.setValue(data.get('completed', 0))
+        self.progress_text.setVisible(self.busy)
+        self.progress_text.setText(f'{completed} / {total} 条 · {round(completed * 100 / total) if total else 0}%' if total else '')
         self.status.setText(data.get('message') or data.get('reason') or '已就绪，可以开始速度测试。')
         self.render_result()
         self.panel.enabled.setEnabled(not self.busy)
+        # A finished run must restore manual configuration as well; previously only
+        # the automatic section was re-enabled, so batch limits stayed read-only.
+        # Installing a runtime locks the same fields, so both states share one lock.
+        locked = self.busy or getattr(self.panel.automatic, 'busy', False)
+        for control in (self.panel.manual, self.panel.apply, self.panel.automatic):
+            control.setEnabled(not locked)
         if self.busy:
-            for control in (self.panel.manual, self.panel.apply, self.panel.automatic): control.setEnabled(False)
             self.timer.start()
         else:
-            self.panel.automatic.setEnabled(True)
             self.timer.stop()
 
     def render_result(self):
@@ -123,6 +144,9 @@ class BenchmarkControls(QWidget):
         if total is not None: text += f' · 测试总耗时 {total:.2f} 秒'
         if speed:
             text += f" · 首组倍率 {speed['cold']:.2f}× · 热模型倍率 {speed['warm']:.2f}×（大于 1 表示批量更快）"
+        ignored = (self.result or {}).get('ignored_options') or []
+        if ignored:
+            text += ' · 不参与对比的参数：' + '、'.join(ignored)
         self.summary.setText(text.lstrip(' ·'))
 
     def start(self):

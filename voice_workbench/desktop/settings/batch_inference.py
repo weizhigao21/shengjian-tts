@@ -3,7 +3,7 @@ from pathlib import Path
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit, QSpinBox, QVBoxLayout, QWidget
-from ...runtime import project_root
+from ...runtime import resource_root
 from ...ui import button, label
 from ..api_client import checked
 
@@ -71,7 +71,7 @@ class BatchInferenceControls(QWidget):
         self.apply = button('检查并应用', self.save, 'check')
         row.addWidget(self.apply)
         row.addWidget(button('安装说明', lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(
-            str(project_root() / 'docs/BATCH_INFERENCE.md'))), 'info', 'ghost'))
+            str(resource_root() / 'docs/QWEN_BATCH_SETUP.md'))), 'info', 'ghost'))
         row.addStretch()
         layout.addLayout(row)
         self.status = label('尚未配置独立批量后端。', 'hint')

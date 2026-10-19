@@ -122,6 +122,29 @@ def test_low_memory_and_recording_failure_keep_fixed_path(cuda, monkeypatch):
     assert cache.fallbacks == 1 and 'capture unsupported' in cache.reason
 
 
+def test_reclaimable_pool_does_not_block_a_new_batch_shape(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3, shape=(8, 2, 4)), (True, .9, 50, 1.), cuda.forward)
+    assert cache.captures == 1
+    # The previous graph still owns its private pool; the driver reports no free
+    # memory until the allocator returns cached blocks.
+    cuda.free = 0
+    cuda.empty_cache = lambda: setattr(cuda, 'free', 6 * 1024**3)
+    result = cache.run(Tensor(5, shape=(4, 2, 4)), (True, .9, 50, 1.), cuda.forward)
+    assert cache.captures == 2 and cache.fallbacks == 0
+    assert len(cache.entries) == 2 and result.value is not None
+
+
+def test_new_shape_is_still_refused_when_memory_stays_exhausted(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3, shape=(8, 2, 4)), (True, .9, 50, 1.), cuda.forward)
+    cuda.free = 0
+    cuda.empty_cache = lambda: None
+    cache.run(Tensor(5, shape=(4, 2, 4)), (True, .9, 50, 1.), cuda.forward)
+    assert cache.captures == 1 and cache.fallbacks == 1 and '512' in cache.reason
+    assert not cache.entries
+
+
 def test_graph_storage_and_failed_shapes_are_bounded(cuda):
     cache = PredictorGraphs()
     for batch in (1, 2, 4, 8):

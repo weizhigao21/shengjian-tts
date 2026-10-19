@@ -87,7 +87,8 @@ class Store:
                          "duration": "REAL", "generation_seconds": "REAL", "audio_deleted": "INTEGER NOT NULL DEFAULT 0", "workflow": "INTEGER NOT NULL DEFAULT 0",
                          "audio_storage": "TEXT NOT NULL DEFAULT 'permanent'", "delivery_ack": "INTEGER NOT NULL DEFAULT 0",
                          "audio_expires": "REAL", "audio_released": "REAL", "audio_release_reason": "TEXT",
-                         "inference_mode": "TEXT NOT NULL DEFAULT 'auto'", "inference": "TEXT"},
+                         "inference_mode": "TEXT NOT NULL DEFAULT 'auto'", "inference": "TEXT",
+                         "queue_paused": "INTEGER NOT NULL DEFAULT 0"},
         }.items():
             existing = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             for name, declaration in fields.items():
@@ -261,7 +262,7 @@ class Store:
     def next(self, job_id=None, admitted=None):
         with self.lock, self.db:
             row = self.db.execute("""SELECT s.job_id,s.idx FROM segments s JOIN jobs j ON j.id=s.job_id
-                WHERE s.status='queued' AND j.deleted=0 AND j.status IN ('queued','running')
+                WHERE s.status='queued' AND s.queue_paused=0 AND j.deleted=0 AND j.status IN ('queued','running')
                 AND (? IS NULL OR s.job_id=?)
                 ORDER BY j.created, s.idx LIMIT 1""", (job_id, job_id)).fetchone()
             if row is None:
@@ -286,7 +287,7 @@ class Store:
         """Atomically reserve compatible rows from this generation, with bounded lookahead."""
         with self.lock, self.db:
             selected, chars = [first], len(first["text"])
-            rows = self.db.execute("""SELECT * FROM segments WHERE job_id=? AND generation=? AND status='queued'
+            rows = self.db.execute("""SELECT * FROM segments WHERE job_id=? AND generation=? AND status='queued' AND queue_paused=0
                 ORDER BY idx LIMIT 64""", (job["id"], first["generation"])).fetchall()
             for row in rows:
                 item = dict(row)
@@ -331,16 +332,39 @@ class Store:
             self.db.execute("UPDATE segments SET status='queued',error=NULL WHERE job_id=? AND idx=? AND status='running'", (job_id, index))
             self._refresh(job_id)
 
+    def pause_generation(self, job_id, generation, paused):
+        with self.lock, self.db:
+            cursor = self.db.execute("""UPDATE segments SET queue_paused=? WHERE job_id=? AND generation=?""",
+                                     (int(paused), job_id, generation))
+            return bool(cursor.rowcount)
+
+    def generation_progress(self, job_id, generation):
+        """Compact completion feed; never deserialize all voice/model snapshots."""
+        with self.lock:
+            rows = self.db.execute("""SELECT s.idx,s.status,s.audio,s.error,s.audio_storage,s.queue_paused FROM segments s
+                JOIN jobs j ON j.id=s.job_id WHERE s.job_id=? AND s.generation=? AND j.deleted=0
+                ORDER BY s.idx""", (job_id, generation)).fetchall()
+            if not rows:
+                return None
+            states = {r['status'] for r in rows}
+            status = next(s for s in ('running','queued','failed','cancelled','done') if s in states)
+            return {'job_id': job_id, 'generation': generation, 'status': status, 'total': len(rows),
+                    'paused': any(r['queue_paused'] and r['status'] in ('queued','running') for r in rows),
+                    'completed': sum(r['status']=='done' for r in rows),
+                    'segments': [{'idx': r['idx'], 'status': r['status'], 'audio': r['audio'], 'audio_storage': r['audio_storage'],
+                                  'error': json.loads(r['error']) if r['error'] else None}
+                                 for r in rows if r['status'] in ('done','failed','cancelled')]}
+
     def cancel(self, job_id, generation=None):
         with self.lock, self.db:
-            self.db.execute("UPDATE segments SET status='cancelled' WHERE job_id=? AND status IN ('queued','running') AND (? IS NULL OR generation=?)", (job_id, generation, generation))
+            self.db.execute("UPDATE segments SET status='cancelled',queue_paused=0 WHERE job_id=? AND status IN ('queued','running') AND (? IS NULL OR generation=?)", (job_id, generation, generation))
             if generation is None:
                 self.db.execute("UPDATE jobs SET workflow_closed=1 WHERE id=? AND workflow_key IS NOT NULL", (job_id,))
             self._refresh(job_id)
 
     def retry(self, job_id):
         with self.lock, self.db:
-            self.db.execute("UPDATE segments SET status='queued',error=NULL,generation_seconds=NULL WHERE job_id=? AND status IN ('failed','cancelled')", (job_id,))
+            self.db.execute("UPDATE segments SET status='queued',queue_paused=0,error=NULL,generation_seconds=NULL WHERE job_id=? AND status IN ('failed','cancelled')", (job_id,))
             self._refresh(job_id)
 
     def delete(self, job_id):

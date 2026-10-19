@@ -11,6 +11,19 @@ from ..errors import VoiceError
 from ..runtime import external_environment, resource_root
 
 
+def batch_budget(items, timeout):
+    """Bound how long one batch may hold its rows before it is treated as stalled.
+
+    The preset timeout is a user-facing ceiling (600 s by default) and is far too
+    long for a stuck worker: the job would sit at "running" with no audio for ten
+    minutes. Chinese speech runs at roughly four characters per second and the
+    slowest path (no CUDA graph) stays near RTF 1, so 2.5x the estimated audio plus
+    a fixed allowance leaves headroom while surfacing a stall within a minute.
+    """
+    chars = sum(len(item.get("text") or "") for item in items)
+    return min(timeout, max(45, int(chars / 4 * 2.5 + 20)))
+
+
 class BatchProcess:
     def __init__(self, root):
         self.root = Path(root)
@@ -60,10 +73,12 @@ class BatchProcess:
         if cancelled.is_set():
             raise VoiceError("CANCELLED", "任务已取消")
         process, answers = self.start(settings, signature)
+        items = payload.get("items") or []
+        budget = batch_budget(items, timeout)
         try:
             process.stdin.write(json.dumps({"settings": settings.model_dump(), **payload}, ensure_ascii=False) + "\n")
             process.stdin.flush()
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + budget
             while time.monotonic() < deadline:
                 if cancelled.is_set():
                     raise VoiceError("CANCELLED", "任务已取消")
@@ -78,7 +93,8 @@ class BatchProcess:
                 self.last_used = time.monotonic()
                 self.loaded = True
                 return answer
-            raise VoiceError("INFERENCE_TIMEOUT", "批量后端推理超时", stage="批量推理")
+            raise VoiceError("INFERENCE_TIMEOUT", f"批量推理超时：{len(items)} 条等待超过 {budget} 秒，已改用原生引擎重试",
+                             stage="批量推理")
         except BaseException:
             self.interrupt()
             raise

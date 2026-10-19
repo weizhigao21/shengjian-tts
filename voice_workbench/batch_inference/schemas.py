@@ -1,5 +1,6 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .sources import RuntimeSource
 
 
 class BatchSettings(BaseModel):
@@ -36,7 +37,8 @@ class SetupRequest(BaseModel):
     action: Literal['all', 'runtime', 'model', 'detect'] = 'all'
     source_model: str = Field(default='', max_length=4096)
     device: Literal['cuda', 'cpu'] = 'cuda'
-    source: Literal['mirror', 'huggingface'] = 'mirror'
+    source: Literal['modelscope', 'mirror', 'huggingface'] = 'modelscope'
+    runtime_source: RuntimeSource = 'mirror'
 
 
 class BenchmarkRequest(BaseModel):

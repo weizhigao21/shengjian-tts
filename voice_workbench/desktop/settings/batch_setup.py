@@ -2,6 +2,7 @@
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
 from ...ui import button, label
+from ...batch_inference.sources import MODEL_SOURCES, RUNTIME_SOURCES
 from ..api_client import checked
 from .common import size_text
 from .model_transfers import speed_text
@@ -22,13 +23,19 @@ class BatchSetupControls(QWidget):
         self.source.setMinimumWidth(150)
         self.source.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.download_source = QComboBox()
-        self.download_source.addItem('HF 镜像', 'mirror')
-        self.download_source.addItem('Hugging Face', 'huggingface')
+        for key, name in MODEL_SOURCES.items():
+            self.download_source.addItem(name, key)
+        self.download_source.setToolTip('模型文件均按内置大小和 SHA-256 校验；暂停后可换源继续下载。')
+        self.runtime_source = QComboBox()
+        for key, name in RUNTIME_SOURCES.items():
+            self.runtime_source.addItem(name, key)
+        self.runtime_source.setToolTip('国内加速覆盖独立 Python、PyTorch 和 Qwen SDK；失败后尝试备用镜像及官方来源。已有环境和下载文件优先复用。')
         self.device = QComboBox()
         self.device.addItem('NVIDIA CUDA', 'cuda')
         self.device.addItem('CPU', 'cpu')
         form.addRow('自动关联模型', self.source)
         form.addRow('模型下载来源', self.download_source)
+        form.addRow('运行环境来源', self.runtime_source)
         form.addRow('安装计算环境', self.device)
         layout.addLayout(form)
         self.plan = label('正在检测本地模型…', 'hint')
@@ -85,7 +92,7 @@ class BatchSetupControls(QWidget):
         task = data['task']
         self.busy = task['busy']
         enabled = not self.busy and not self.loading
-        for control in (self.source, self.device, self.download_source, self.detect):
+        for control in (self.source, self.device, self.download_source, self.runtime_source, self.detect):
             control.setEnabled(enabled)
         self.install.setEnabled(enabled and data['supported'] and bool(self.selected))
         self.model_download.setEnabled(self.install.isEnabled())
@@ -93,8 +100,10 @@ class BatchSetupControls(QWidget):
         self.pause.setVisible(self.busy)
         self.pause.setEnabled(task['status'] != 'pausing')
         self.install.setText('继续安装并关联' if task['status'] in ('paused', 'failed') else '一键安装并关联')
-        self.panel.manual.setEnabled(not self.busy)
-        self.panel.apply.setEnabled(not self.busy)
+        # A benchmark run locks the same fields; keep both states consistent.
+        locked = self.busy or getattr(getattr(self.panel, 'benchmark', None), 'busy', False)
+        self.panel.manual.setEnabled(not locked)
+        self.panel.apply.setEnabled(not locked)
         self.progress.setVisible(self.busy)
         received, total = task.get('received', 0), task.get('size', 0)
         self.progress.setRange(0, 1000 if total else 0)
@@ -104,6 +113,8 @@ class BatchSetupControls(QWidget):
             message += f"\n{size_text(received)} / {size_text(total)}"
         if task.get('speed_bps'):
             message += ' · ' + speed_text(task['speed_bps'])
+        if self.busy and task.get('download_source'):
+            message += '\n来源：' + task['download_source']
         self.status.setText(message)
         self.timer.start() if self.busy else self.timer.stop()
 
@@ -111,10 +122,12 @@ class BatchSetupControls(QWidget):
         if self.loading or self.busy:
             return
         self.loading = True
-        for control in (self.install, self.detect, self.runtime_download, self.model_download):
+        for control in (self.install, self.detect, self.runtime_download, self.model_download,
+                        self.source, self.device, self.download_source, self.runtime_source):
             control.setEnabled(False)
         payload = {'action': action, 'source_model': self.selected,
-                   'source': self.download_source.currentData(), 'device': self.device.currentData()}
+                   'source': self.download_source.currentData(), 'device': self.device.currentData(),
+                   'runtime_source': self.runtime_source.currentData()}
         def done(_):
             self.loading = False
             self.panel.dirty = False

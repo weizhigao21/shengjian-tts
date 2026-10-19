@@ -39,7 +39,7 @@ def runtime(body: ModelImport, request: Request):
 
 @router.post("/models/runtime/download", status_code=202)
 def download_runtime(body: EngineDownload, request: Request):
-    return manager(request).models.engines.start(body.backend)
+    return manager(request).models.engines.start(body.backend, source=body.source)
 
 
 @router.post("/models/runtime/pause")
@@ -64,7 +64,7 @@ def check_runtime_updates(request: Request):
 
 @router.post("/models/runtime/upgrade", status_code=202)
 def upgrade_runtime(body: EngineDownload, request: Request):
-    return manager(request).models.engines.start(body.backend, upgrade=True)
+    return manager(request).models.engines.start(body.backend, upgrade=True, source=body.source)
 
 
 @router.post("/models/runtime/rollback")

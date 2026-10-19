@@ -2,9 +2,9 @@
 from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QHeaderView, QProgressBar, QSlider, QTableWidget, QWidget,
+    QVBoxLayout, QHBoxLayout, QHeaderView, QProgressBar, QSlider, QWidget,
 )
-from ...ui import AnchoredPopover, Waveform, audio_sort_combo, button, label
+from ...ui import AnchoredPopover, AudioTable, Waveform, audio_sort_combo, button, label
 
 
 class PlayerLayout:
@@ -108,7 +108,10 @@ class PlayerLayout:
         close.setToolTip("收起列表")
         header.addWidget(close)
         result.addLayout(header)
-        self.segments_table = QTableWidget(0, 7)
+        self.segments_table = AudioTable(0, 7)
+        self.segments_table.enable_audio_drag()
+        self.segments_table.resolve_audio = self.segment_audio_files
+        self.segments_table.describe_audio = self.segment_audio_title
         self.configure_table(self.segments_table)
         self.segments_table.setHorizontalHeaderLabels(["#", "生成时间", "名称 / 文本", "生成耗时", "状态", "错误原因", "推理引擎"])
         for col, width in ((0, 56), (1, 135), (3, 96), (4, 100), (6, 106)):
@@ -121,6 +124,6 @@ class PlayerLayout:
         self.segments_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.segments_table.customContextMenuRequested.connect(self.clip_context_menu)
         result.addWidget(self.segments_table, 1)
-        self.result_hint = label("点击片段播放 · 右键保存到声音库；失败片段可查看具体原因。", "muted")
+        self.result_hint = label("点击片段播放 · 拖到其他程序即可带走音频 · 失败片段可查看具体原因。", "muted")
         result.addWidget(self.result_hint)
         self.clip_list.hide()

@@ -137,7 +137,7 @@ def transfers(manager, monkeypatch):
     requests = []
     def reply(request):
         requests.append(request)
-        name = str(request.url).split('/'+'a'*40+'/')[1]
+        name = request.url.path.split('/resolve/', 1)[1].split('/', 1)[1]
         raw = payloads[name]
         offset = int(request.headers.get('range', 'bytes=0-').split('=')[1].split('-')[0])
         headers = {'content-length': str(len(raw)-offset)}
@@ -282,6 +282,7 @@ def test_owned_command_is_cancellable_and_does_not_change_parent_environment(man
 
 def test_runtime_install_is_isolated_and_reuses_a_completed_environment(manager, monkeypatch):
     task = manager.batch.setup
+    task.runtime_source = 'official'
     root = manager.root/'runtime/qwen-batch'
     root.mkdir(parents=True)
     (root/'python').mkdir()

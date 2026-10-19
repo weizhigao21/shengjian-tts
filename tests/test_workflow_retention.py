@@ -111,9 +111,11 @@ def test_adapter_acknowledges_only_valid_successful_downloads_and_keeps_partial_
     with TestClient(create_app(tmp_path / "data", runner)) as client:
         def filename(index, *args):
             return str(tmp_path / f"out-{index}.wav")
+        downloads = []
         def download(url, target):
             content = client.get(url).content
-            if target.endswith("out-2.wav"):
+            downloads.append(url)
+            if len(downloads) == 2:
                 raise OSError("disk write failed")
             Path(target).write_bytes(content)
         cache = Cache()

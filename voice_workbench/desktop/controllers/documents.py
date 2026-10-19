@@ -9,7 +9,7 @@ from ...ui import icon
 from ..api_client import checked
 from ..constants import STATES
 from ..model_labels import model_key
-from ...recent_works import read_recent, task_type, WORK_NAMES
+from ...recent_works import read_recent, segment_audio, task_type, WORK_NAMES
 
 
 class DocumentController:
@@ -49,6 +49,8 @@ class DocumentController:
                 stamp = datetime.fromtimestamp(value["created"]).strftime("%Y-%m-%d %H:%M:%S")
                 status = "导入中" if value["status"] == "importing" else STATES.get(value["status"], value["status"])
                 tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{status} · {value['completed']}/{value['total']}"
+                if task_type(value) not in ("audio", "recognition"):
+                    tooltip += "\n把这一行拖到其他程序，可带走该作品最新生成的音频"
                 for col, text in enumerate((display_title(value), status, f"{value['completed']}/{value['total']}")):
                     cell = self.update_table_cell(self.jobs_table, row, col, text, tooltip)
                     if cell.data(256) != value["id"]:
@@ -202,6 +204,24 @@ class DocumentController:
                                lambda: self.delete_job(value["id"]))
         action.setObjectName("deleteJob")
         return menu
+
+    def job_audio_files(self, row):
+        """Every finished audio of the dragged work; other work kinds open their own page."""
+        if not 0 <= row < len(self.jobs):
+            return []
+        value = self.jobs[row]
+        if task_type(value) in ("audio", "recognition"):
+            return []
+        folder = (self.data_dir / "audio").resolve()
+        files = []
+        for name in segment_audio(self.data_dir, value["id"]):
+            path = (folder / name).resolve()
+            if path.parent == folder and path.is_file():
+                files.append(path)
+        return files
+
+    def job_audio_title(self, row):
+        return display_title(self.jobs[row]) if 0 <= row < len(self.jobs) else ""
 
     def job_context_menu(self, position):
         menu = self.job_menu(self.jobs_table.rowAt(position.y()))

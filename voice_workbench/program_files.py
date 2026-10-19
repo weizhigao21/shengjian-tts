@@ -7,6 +7,19 @@ from pathlib import Path
 import shutil
 import tempfile
 
+LEGACY_DOCUMENTS = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt",
+    "docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md", "docs/MODEL_DISCOVERY.md", "docs/OPTIMIZATION.md",
+    "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md", "docs/SPEECH_RECOGNITION.md", "docs/BATCH_INFERENCE.md", "docs/setup_qwen_batch.py",
+    *(f"docs/images/{name}.png" for name in ("app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library",
+        "index-emotion", "workflow", "models", "engine-settings", "audio-manager", "model-discovery", "audio-editor", "app-updates")))
+
+
+def retired_documents(candidate):
+    """Only retire known old release files; personal files are never enumerated."""
+    licenses = candidate / '_internal/legal/licenses'
+    return (*LEGACY_DOCUMENTS, *(f'licenses/{path.relative_to(licenses).as_posix()}'
+        for path in licenses.rglob('*') if path.is_file() and not path.is_symlink()))
+
 
 def checked_child(path, root):
     resolved, base = path.resolve(), root.resolve()
@@ -66,6 +79,11 @@ def overwrite_program(candidate, target, documentation):
             if not path.is_file():
                 raise RuntimeError(f"程序文件不是普通文件：{path}")
             old_files.add(path)
+            for parent in path.parents:
+                if parent == target:
+                    break
+                checked_child(parent, target)
+                old_directories.add(parent)
     for relative in directories:
         destination = checked_child(target/relative, target)
         if destination.exists() and not destination.is_dir():

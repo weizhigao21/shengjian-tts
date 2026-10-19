@@ -36,8 +36,9 @@ def test_workflow_stop_cancels_submitted_service_job(tmp_path):
     runner = ControlledRunner()
     runner.block.set()
     with TestClient(create_app(tmp_path, runner)) as client:
+        checks = iter((False, True))
         results = run_local_job(Session(client), "http://127.0.0.1:8765", "default",
-                                [(1, "00:00:00.00", "hello", "unused", 0)], cancel_check=lambda: True)
+                                [(1, "00:00:00.00", "hello", "unused", 0)], cancel_check=lambda: next(checks, True))
         assert results[0][0] is None
         assert "任务已取消" in results[0][1]
         assert client.get("/jobs").json() == []

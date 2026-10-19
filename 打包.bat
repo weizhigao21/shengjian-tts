@@ -12,14 +12,18 @@ echo.
 
 rem 优先使用项目虚拟环境，然后尝试 Python 3.10 和其他 Python 3。
 set "PYCMD="
-if exist ".venv\Scripts\python.exe" set PYCMD="%~dp0.venv\Scripts\python.exe"
+if not exist ".venv\Scripts\python.exe" goto find_python
+".venv\Scripts\python.exe" -c "import sys, struct; sys.exit(0 if sys.version_info >= (3,10) and struct.calcsize('P') == 8 else 1)" >nul 2>nul
+if not errorlevel 1 set PYCMD="%~dp0.venv\Scripts\python.exe"
 if defined PYCMD goto python_ready
+echo [提示] 项目虚拟环境已失效，正在查找本机可用的 Python…
+:find_python
 where py >nul 2>nul
 if errorlevel 1 goto try_python
-py -3.10 -c "pass" >nul 2>nul
+py -3.10 -c "import sys, struct; sys.exit(0 if sys.version_info >= (3,10) and struct.calcsize('P') == 8 else 1)" >nul 2>nul
 if not errorlevel 1 set "PYCMD=py -3.10"
 if defined PYCMD goto python_ready
-py -3 -c "pass" >nul 2>nul
+py -3 -c "import sys, struct; sys.exit(0 if sys.version_info >= (3,10) and struct.calcsize('P') == 8 else 1)" >nul 2>nul
 if not errorlevel 1 set "PYCMD=py -3"
 if defined PYCMD goto python_ready
 :try_python

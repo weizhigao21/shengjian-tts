@@ -46,6 +46,9 @@ class AudioSettings:
         tools.addWidget(self.delete_all)
         layout.addLayout(tools)
         self.audio_table = self.table(("", "作品 / 生成文本", "模型 / 模式", "声音预设", "生成时间 / 时长", "生成耗时", "试听", "详情", "删除"))
+        self.audio_table.enable_audio_drag()
+        self.audio_table.resolve_audio = self.audio_row_files
+        self.audio_table.describe_audio = self.audio_row_title
         self.audio_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.audio_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.audio_table.horizontalHeader().setMinimumSectionSize(28)
@@ -109,6 +112,19 @@ class AudioSettings:
         self.audio_count.setText(f"当前列表 {len(self.visible_audio)} 条 · 共 {len(self.audio_data)} 条音频")
         self.update_selection()
         self.update_play_buttons()
+
+    def audio_row_files(self, row):
+        """Dragging a row hands the file itself to the target program."""
+        record = self.visible_audio[row] if 0 <= row < len(self.visible_audio) else None
+        if not record or not record.get("available") or not record.get("audio"):
+            return []
+        return [self.owner.data_dir / "audio" / record["audio"]]
+
+    def audio_row_title(self, row):
+        record = self.visible_audio[row] if 0 <= row < len(self.visible_audio) else None
+        if not record:
+            return ""
+        return f"{record.get('work_title') or '音频'} · {(record.get('text') or '')[:14]}"
 
     def set_audio_category(self, category):
         self.audio_category = category

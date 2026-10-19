@@ -1,6 +1,6 @@
 # 代码架构
 
-声笺 v0.7.50 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
+声笺 v0.7.52 按桌面交互、HTTP 接口、应用服务、任务调度、数据访问与推理适配组织代码。对话功能与后续计划见 [DIALOGUE_MODE_PLAN.md](DIALOGUE_MODE_PLAN.md)，音频编辑见 [AUDIO_EDITING.md](AUDIO_EDITING.md)，语音识别见 [SPEECH_RECOGNITION.md](SPEECH_RECOGNITION.md)，批量推理见 [BATCH_INFERENCE.md](BATCH_INFERENCE.md)，程序更新见 [APP_UPDATES.md](APP_UPDATES.md)。
 
 ## 分层
 
@@ -174,3 +174,9 @@ voice_workbench/
 v0.7.45 新增 `batch_inference/discovery.py` 与 `provisioning.py`，将本地规格发现和异步环境 / 模型安装从推理解耦；桌面 `batch_setup.py` 管理安装入口、进度和状态刷新。安装只写数据目录，完成后在引擎空闲时应用配置，不在轮询或推理中下载。
 
 v0.7.46 的 `batch_inference/benchmark.py` 使用独立原生 / 批量进程，在管理器引擎保留期间运行固定快照，不进入任务存储或成品缓存。桌面 `settings/benchmark.py` 在原设置轮询中接收进度并呈现冷 / 热报告；模型安装、配置、识别和编辑沿用引擎互斥约束。
+
+v0.7.51 新增 `engine_sources.py`，仅负责固定官方附件 URL 的下载来源改写和有界失败切换，继续复用 `downloads.py` 的续传、大小和 SHA-256 校验。`engine_management.py` 保留版本选择、安装验证与激活职责，保存下载来源并固定每个任务的选择；`engine_updates.py` 仍从官方 API 读取版本信息，下载镜像不提供校验值。
+
+v0.7.52 的 `batch_inference/sources.py` 生成专用环境的国内 / 官方依赖安装计划及模型文件 URL；`provisioning.py` 执行有界来源切换并沿用原取消、日志和环境关联生命周期。Python 复用 GitHub 附件传输模块，PyTorch 精确指定计算构建，模型来源切换不改写固定权重校验值。桌面 `batch_setup.py` 分别提交模型与运行环境来源，打开页面和自动检测均不启动下载。
+
+未发布工作流整批处理由 `integration/local_voice_stream.py` 负责缓存筛选、接口上限拆分及工作流进度回调；`local_voice_client.py` 负责批次提交、轻量进度轮询、暂停 / 继续、逐条下载校验与交付确认。`http_api/jobs.py` 提供批次控制，`store.py` 持久保存 `queue_paused`，原队列与合批候选查询都排除暂停片段。服务不依赖工作流 GUI，工作流也不接触推理进程。安装脚本将独立模块与现有工作流入口一起准备并校验，不把工作流微批大小当作 GPU 批量设置。

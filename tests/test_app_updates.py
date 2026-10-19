@@ -213,6 +213,38 @@ def test_apply_overwrites_program_removes_stale_runtime_and_keeps_user_data(tmp_
     assert not any('backup' in p.name for p in tmp_path.iterdir())
 
 
+def test_update_to_compact_layout_retires_only_known_old_docs_and_keeps_complete_notices(tmp_path):
+    args, cfg, job = prepared_job(tmp_path)
+    candidate = tmp_path / 'candidate'
+    (candidate / 'README.md').unlink()
+    license_file = candidate / '_internal/legal/licenses/pyqt6/LICENSE'
+    license_file.parent.mkdir(parents=True)
+    license_file.write_bytes(b'complete original license')
+    guide = candidate / '_internal/docs/QWEN_BATCH_SETUP.md'
+    guide.parent.mkdir(parents=True)
+    guide.write_text('installation help')
+    manifest.write_manifest(candidate, job['version'])
+    with zipfile.ZipFile(args.zip, 'w') as zf:
+        for path in candidate.rglob('*'):
+            if path.is_file():
+                zf.write(path, '声笺/' + path.relative_to(candidate).as_posix())
+    job['sha256'] = manifest.digest_file(args.zip)
+    (tmp_path / 'job.json').write_text(json.dumps(job), encoding='utf-8')
+    install = Path(args.dir)
+    for name in ('docs/ARCHITECTURE.md', 'docs/images/workbench.png', 'licenses/pyqt6/LICENSE', 'README.md'):
+        path = install / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'old public document')
+    (install / 'licenses/personal.txt').write_bytes(b'personal file')
+    apply.run_update(args, cfg, Mock())
+    assert not (install / 'docs').exists() and not (install / 'README.md').exists()
+    assert not (install / 'licenses/pyqt6').exists()
+    assert (install / 'licenses/personal.txt').read_bytes() == b'personal file'
+    assert (install / 'data/config.json').read_bytes() == b'personal config'
+    assert (install / '_internal/legal/licenses/pyqt6/LICENSE').read_bytes() == b'complete original license'
+    assert (install / '_internal/docs/QWEN_BATCH_SETUP.md').is_file()
+
+
 def test_wait_timeout_does_not_replace_any_files(tmp_path, monkeypatch):
     args, cfg, _ = prepared_job(tmp_path)
     monkeypatch.setattr(apply, 'wait_for_process_exit', lambda *_: False)

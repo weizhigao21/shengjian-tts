@@ -13,10 +13,40 @@ PARAMETERS = {"max_tokens": "max_new_tokens", "do_sample": "do_sample", "tempera
               "top_k": "top_k", "top_p": "top_p", "repetition_penalty": "repetition_penalty",
               "subtalker_do_sample": "subtalker_dosample", "subtalker_temperature": "subtalker_temperature",
               "subtalker_top_k": "subtalker_top_k", "subtalker_top_p": "subtalker_top_p"}
+# Real audio.cpp request options owned by layers a batch run does not have: the
+# chunked streaming transport (how the server pushes audio to a player) and the
+# CustomVoice speaker table. Base voice cloning renders the same samples with or
+# without them, and batch runs require Base clone, so they need no adaptation.
+NATIVE_ONLY = {"stream_chunk_policy", "stream_frames_per_event", "voice_id"}
+SEGMENTATION = {"seed", "text_chunk_size", "text_chunk_mode"}
 
 
 def options(voice):
     return compatible_options(voice, model_ui(voice))[0]
+
+
+def compatible(voice):
+    """Split saved options into the ones the current model declares and stale ones.
+
+    A preset can outlive an engine downgrade or a model variant switch; keys the
+    current contract no longer declares reach neither backend. Benchmarking drops
+    them (it never rewrites the preset) so the comparison stays runnable, while
+    declared options the batch contract still cannot express are refused below.
+    """
+    request = options(voice)
+    declared = {spec["name"] for spec in model_ui(voice).get("generation_options", [])}
+    return ({name: value for name, value in request.items() if name in declared},
+            sorted(set(request) - declared))
+
+
+def unmapped(voice):
+    """Request options the batch contract cannot express, native-only ones aside."""
+    request = options(voice)
+    return sorted(set(request) - set(PARAMETERS) - SEGMENTATION - NATIVE_ONLY)
+
+
+def native_only(voice):
+    return sorted(set(options(voice)) & NATIVE_ONLY)
 
 
 def unsupported(voice, text, settings):
@@ -31,8 +61,8 @@ def unsupported(voice, text, settings):
     if voice.get("language") not in LANGUAGES or voice.get("speed", 1) != 1:
         return "当前语言或语速不支持批量后端。"
     request = options(voice)
-    if set(request) - set(PARAMETERS) - {"seed", "text_chunk_size", "text_chunk_mode"}:
-        return "存在批量后端尚未适配的生成参数。"
+    if blocked := unmapped(voice):
+        return "批量后端不支持这些生成参数：" + "、".join(blocked) + "。"
     if request.get("text_chunk_mode", "default") != "default":
         return "当前长文分段方式需要原生引擎。"
     if len(text) > min(request.get("text_chunk_size") or 8192, settings.max_batch_chars):

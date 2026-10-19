@@ -6,12 +6,14 @@ import sys
 import wave
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QCoreApplication, QObject, QPointF, QRect, QSize, Qt, QEvent, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCursor, QWheelEvent
+from PyQt6.QtCore import (QByteArray, QCoreApplication, QMimeData, QObject, QPoint, QPointF, QRect, QSize, Qt, QUrl,
+                           QEvent, pyqtSignal)
+from PyQt6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat,
+                         QTextCursor, QWheelEvent)
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDoubleSpinBox, QFrame, QLabel,
-                            QPushButton, QSizePolicy, QSlider, QSpinBox, QStyledItemDelegate, QStyle,
-                            QStyleOptionViewItem, QTableWidget, QTextEdit, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox,
+                            QDoubleSpinBox, QFrame, QLabel, QPushButton, QSizePolicy, QSlider, QSpinBox,
+                            QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableWidget, QTextEdit, QWidget)
 
 
 INK = "#18181a"
@@ -244,6 +246,7 @@ class AnchoredPopover(QFrame):
         super().__init__(owner)
         self.owner, self.anchor = owner, anchor
         self.previous_focus = None
+        self.held = False
         self.hide()
 
     def eventFilter(self, watched, event):
@@ -259,7 +262,7 @@ class AnchoredPopover(QFrame):
         elif kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
             self.hide()
             return True
-        elif watched is self.owner and kind == QEvent.Type.WindowDeactivate:
+        elif watched is self.owner and kind == QEvent.Type.WindowDeactivate and not self.held:
             self.hide()
         return False
 
@@ -327,13 +330,119 @@ class RecentJobDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class RecentTasks(QTableWidget):
+def existing_audio_files(paths):
+    """Keep unique, readable audio files in their original order."""
+    result, seen = [], set()
+    for path in paths or ():
+        try:
+            path = Path(path).resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        result.append(path)
+    return result
+
+
+def audio_mime_data(paths):
+    """A real file drop, so any program that takes a dropped file can take the clip."""
+    data = QMimeData()
+    data.setUrls([QUrl.fromLocalFile(str(path)) for path in paths])
+    return data
+
+
+def audio_drag_pixmap(count, title):
+    """Carry the clip name under the cursor instead of a screenshot of the row."""
+    width, height = 268, 46
+    pixmap = QPixmap(width * 2, height * 2)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.scale(2, 2)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(255, 255, 255, 244))
+    painter.setPen(QPen(QColor("#e6e6e8"), 1))
+    painter.drawRoundedRect(QRect(0, 0, width - 1, height - 1), 10, 10)
+    painter.fillRect(QRect(1, 11, 3, height - 22), QColor(ORANGE))
+    icon("audio", ORANGE, 18).paint(painter, QRect(16, 13, 20, 20))
+    font = QFont()
+    font.setPixelSize(12)
+    font.setWeight(QFont.Weight.DemiBold)
+    painter.setFont(font)
+    painter.setPen(QColor(INK))
+    painter.drawText(QRect(44, 7, width - 84, 20), Qt.AlignmentFlag.AlignVCenter,
+                     QFontMetrics(font).elidedText(title, Qt.TextElideMode.ElideRight, width - 84))
+    font.setPixelSize(11)
+    font.setWeight(QFont.Weight.Normal)
+    painter.setFont(font)
+    painter.setPen(QColor("#8b8b90"))
+    painter.drawText(QRect(44, 25, width - 60, 16), Qt.AlignmentFlag.AlignVCenter,
+                     f"{count} 个音频" if count > 1 else "拖到其他程序即可使用")
+    painter.end()
+    pixmap.setDevicePixelRatio(2)
+    return pixmap
+
+
+class AudioDrag:
+    """Row-level file drag shared by every generated-audio list."""
+
+    def enable_audio_drag(self):
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.setDragDropOverwriteMode(False)
+
+    def resolve_audio(self, row):
+        """A missing resolver must keep the widget click-only."""
+        return ()
+
+    def describe_audio(self, row):
+        return ""
+
+    def audio_drag_files(self, row):
+        return existing_audio_files(self.resolve_audio(row))
+
+    def startDrag(self, supported_actions):
+        row = self.currentRow()
+        files = self.audio_drag_files(row)
+        if not files:
+            # Nothing readable under the cursor: keep the press an ordinary click.
+            return
+        drag = QDrag(self)
+        drag.setMimeData(audio_mime_data(files))
+        pixmap = audio_drag_pixmap(len(files), self.describe_audio(row) or files[0].name)
+        drag.setPixmap(pixmap)
+        size = pixmap.deviceIndependentSize()
+        drag.setHotSpot(QPoint(int(size.width()) - 22, int(size.height()) // 2))
+        # The target program may activate mid-drag; a hidden source list cancels the drop.
+        held, parent = [], self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, AnchoredPopover):
+                parent.held = True
+                held.append(parent)
+            parent = parent.parentWidget()
+        try:
+            drag.exec(Qt.DropAction.CopyAction)
+        finally:
+            for popover in held:
+                popover.held = False
+
+
+class AudioTable(AudioDrag, QTableWidget):
+    """A table of generated audio; rows leave as files once a resolver is set."""
+
+    def __init__(self, rows, columns):
+        super().__init__(rows, columns)
+
+
+class RecentTasks(AudioDrag, QTableWidget):
     delete_requested = pyqtSignal(str)
 
     def __init__(self):
         super().__init__(0, 3)
         self.setMouseTracking(True)
         self.setItemDelegate(RecentJobDelegate(self))
+        self.enable_audio_drag()
 
     def mousePressEvent(self, event):
         row = self.rowAt(int(event.position().y()))
@@ -437,6 +546,7 @@ QPushButton { border:1px solid #e3e3e5; border-radius:8px; background:white; pad
 QPushButton:hover { background:#f3f3f4; border-color:#d6d6d8; }
 QPushButton:pressed { background:#eaeaec; }
 QPushButton:disabled { color:#b0b0b4; background:#f7f7f7; border-color:#eeeeef; }
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background:#f6f6f7; color:#a2a2a8; border-color:#ececee; }
 QPushButton:focus { border-color:#e0651c; }
 QPushButton[kind="primary"] { background:#18181a; color:white; border-color:#18181a; font-weight:600; }
 QPushButton[kind="primary"]:hover { background:#343436; }
@@ -476,6 +586,8 @@ QSlider::sub-page:horizontal { background:#e0651c; }
 QSlider::handle:horizontal { background:#e0651c; width:10px; margin:-4px 0; border-radius:5px; }
 QProgressBar { border:0; background:#efeff1; border-radius:3px; max-height:5px; min-height:5px; }
 QProgressBar::chunk { background:#e0651c; border-radius:3px; }
+QProgressBar#benchmarkProgress { min-height:8px; max-height:8px; border-radius:4px; background:#efeff1; }
+QProgressBar#benchmarkProgress::chunk { background:#e0651c; border-radius:4px; }
 QStatusBar { background:#f7f7f7; color:#99999d; font-size:11px; }
 QStatusBar::item { border:none; }
 QDialog, QMessageBox { background:#f7f7f7; }

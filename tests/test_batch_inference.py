@@ -309,6 +309,30 @@ def test_real_worker_ipc_is_persistent_and_cancellable_without_torch(tmp_path, m
         process.interrupt()
 
 
+def test_batch_budget_scales_with_text_and_caps_at_preset_timeout():
+    from voice_workbench.batch_inference.process import batch_budget
+    assert batch_budget([{'text': '你好世界'}] * 8, 600) == 45
+    assert batch_budget([{'text': '字' * 2400}], 600) == 600
+    assert batch_budget([], 30) == 30
+
+
+def test_stalled_batch_is_dropped_on_the_estimated_budget_not_the_preset_timeout(tmp_path, monkeypatch):
+    folder = tmp_path/'voice_workbench/batch_inference'
+    folder.mkdir(parents=True)
+    (folder/'qwen_worker.py').write_text("import sys,time\nfor line in sys.stdin:\n time.sleep(30)\n")
+    monkeypatch.setattr('voice_workbench.batch_inference.process.resource_root', lambda: tmp_path)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda items, timeout: .3)
+    process = BatchProcess(tmp_path)
+    try:
+        started = time.monotonic()
+        with pytest.raises(Exception, match='超时'):
+            process.generate(BatchSettings(python=sys.executable), 'one',
+                             {'items': [{'text': '一条卡住的文本'}]}, threading.Event(), 600)
+        assert time.monotonic() - started < 5 and process.process is None
+    finally:
+        process.interrupt()
+
+
 def test_batch_limits_and_idle_release_keep_model_residency_bounded(batch_manager):
     manager, _, probe = batch_manager
     manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_chars': 100})

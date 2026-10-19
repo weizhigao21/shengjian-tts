@@ -199,9 +199,14 @@ def test_parallel_oom_retries_once_in_serial_and_cancel_stops_every_lane(tmp_pat
         manager.close()
 
 
-@pytest.mark.skipif(not Path(r"G:\code\双语音声工作流\src\steps\tts_utils.py").exists(), reason="requires the paired workflow checkout")
+PAIRED_WORKFLOW = next((path for path in (Path(__file__).resolve().parents[2] / '双语音声工作流',
+                                         Path(r'G:\code\双语音声工作流'))
+                        if (path / 'src/steps/tts_utils.py').is_file()), None)
+
+
+@pytest.mark.skipif(PAIRED_WORKFLOW is None, reason="requires the paired workflow checkout")
 def test_adapter_can_be_reinstalled_without_repeated_context_arguments(tmp_path):
-    target = Path(r"G:\code\双语音声工作流")
+    target = PAIRED_WORKFLOW
     modifications = prepare(target)
     for path, source in modifications:
         path = tmp_path / path.relative_to(target)

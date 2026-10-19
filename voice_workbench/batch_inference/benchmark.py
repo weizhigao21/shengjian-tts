@@ -13,7 +13,7 @@ from ..audio_cpp import AudioCppRunner
 from ..config import atomic_json
 from ..errors import VoiceError, describe_error
 from ..runner import check_voice, validate_wave
-from .policy import LANGUAGES, PARAMETERS, model_signature, options, unsupported
+from .policy import LANGUAGES, NATIVE_ONLY, PARAMETERS, compatible, model_signature, options, unsupported
 from .process import BatchProcess
 
 SAMPLE_COUNT = 20
@@ -105,9 +105,12 @@ class InferenceBenchmark:
             voice, _ = m.config.resolve(voice_id)
             voice = deepcopy(voice)
             # A bounded deterministic workload; both backends receive these same options.
-            request = options(voice)
+            # Options the current model never declared cannot reach either backend, and
+            # native-only ones (streaming transport, CustomVoice speaker) never reach batch.
+            request, stale = compatible(voice)
             request.update(seed=1234, max_tokens=min(request.get('max_tokens') or 256, 256))
             voice['request_options'] = request
+            ignored = sorted(set(stale) | (set(request) & NATIVE_ONLY))
             rows = workload(workload_name)
             for row in rows:
                 local = dict(voice, language=row['language'])
@@ -125,7 +128,7 @@ class InferenceBenchmark:
                           'completed': 0, 'total': 2 * len(rows) * (1 + warm_rounds), 'started': time.time()}
             settings = m.batch.settings.model_copy(deep=True)
             versions = dict(m.batch.versions)
-            self.thread = threading.Thread(target=self._run, args=(voice, rows, settings, versions, warm_rounds),
+            self.thread = threading.Thread(target=self._run, args=(voice, rows, settings, versions, warm_rounds, ignored),
                                            name='inference-benchmark', daemon=True)
             self.thread.start()
         return self.status()
@@ -171,7 +174,8 @@ class InferenceBenchmark:
             group = rows[position:position + count]
             paths = [folder / f'{backend}-{stage}-{position+i}.wav' for i in range(count)]
             self.update(backend=backend, batch_size=count,
-                        message=f"{'原生引擎' if backend == 'native' else '批量后端'} · {stage} · {position+1}–{position+count}/{len(rows)}")
+                        message=f"{'原生引擎' if backend == 'native' else '批量后端'} · {stage} · "
+                                f"本轮 {position+1}–{position+count} / {len(rows)} 条")
             before = time.perf_counter()
             if backend == 'native':
                 self.native.generate({'voice': dict(voice, language=group[0]['language']),
@@ -202,7 +206,7 @@ class InferenceBenchmark:
                 'first_call_seconds': first_seconds, 'calls': calls,
                 **({'predictor_modes': sorted(predictor_modes)} if predictor_modes else {})}
 
-    def _run(self, voice, rows, settings, versions, warm_rounds):
+    def _run(self, voice, rows, settings, versions, warm_rounds, ignored=()):
         started = time.perf_counter()
         report = {'id': uuid.uuid4().hex, 'started': time.time(), 'voice_id': voice['id'], 'voice_name': voice['name'],
                   'native_model': voice['model_dir'], 'batch_model': settings.model_dir, 'device': settings.device,
@@ -210,8 +214,8 @@ class InferenceBenchmark:
                   'predictor_fastpath': settings.predictor_fastpath,
                   'predictor_cuda_graph': settings.predictor_cuda_graph,
                   'seed': 1234, 'generation_options': voice['request_options'], 'workload': rows,
-                  'warm_rounds': warm_rounds, 'sample_count': len(rows), 'cache_used': False, 'cache_scope': 'generated_audio',
-                  'results': [], 'versions': versions}
+                  'ignored_options': list(ignored), 'warm_rounds': warm_rounds, 'sample_count': len(rows),
+                  'cache_used': False, 'cache_scope': 'generated_audio', 'results': [], 'versions': versions}
         logs = self.manager.root / 'logs/benchmarks' / report['id']
         cpu_threads = self.manager.config.performance()['cpu_threads'] or min(8, max(1, os.cpu_count() or 4))
         report['cpu_threads'] = cpu_threads

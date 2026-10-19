@@ -20,6 +20,30 @@ def external_work(kind, identity, name, created, updated=None, status="done"):
             "status": status, "total": 1, "completed": int(status == "done")}
 
 
+def segment_audio(root, job_id, limit=200):
+    """Finished audio filenames of one work's latest generation, in segment order."""
+    path = Path(root).resolve() / "tasks.sqlite3"
+    if not path.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=.2)) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(segments)")}
+            filters = ["job_id=?", "status='done'", "audio IS NOT NULL", "audio<>''"]
+            if "audio_deleted" in columns:
+                filters.append("audio_deleted=0")
+            generation = "generation" if "generation" in columns else "1"
+            order = f"{generation},idx" if generation == "generation" else "idx"
+            rows = db.execute(f"SELECT audio,{generation} FROM segments WHERE {' AND '.join(filters)}"
+                              f" ORDER BY {order} LIMIT ?", (job_id, limit * 4)).fetchall()
+    except sqlite3.Error:
+        return []
+    records = [(row[0], row[1] or 1) for row in rows if row[0]]
+    if not records:
+        return []
+    latest = max(record[1] for record in records)
+    return [name for name, batch in records if batch == latest][:limit]
+
+
 def read_recent(root, limit=100):
     root = Path(root).resolve()
     result = Store.read_recent(root, limit)

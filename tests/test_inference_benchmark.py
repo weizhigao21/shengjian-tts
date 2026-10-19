@@ -10,9 +10,12 @@ from fastapi.testclient import TestClient
 
 from voice_workbench.api import create_app
 from voice_workbench.batch_inference.benchmark import InferenceBenchmark, workload
+from voice_workbench.batch_inference.policy import compatible, unsupported
 from voice_workbench.config import ConfigStore, atomic_json
 from voice_workbench.errors import VoiceError
+from voice_workbench.generation_options import FALLBACK
 from test_batch_inference import assets, batch_manager, BatchProbe
+from test_model_capabilities import gguf
 from test_service import ControlledRunner, make_wave, wait_job
 
 
@@ -255,7 +258,15 @@ def test_ui_updates_results_speedup_progress_and_retains_voice_choice(benchmark,
     data.update(busy=True, status='running', completed=20, total=80)
     controls.bind(data)
     assert controls.timer.isActive() and controls.progress.value() == 20
+    assert not controls.progress_text.isHidden() and controls.progress_text.text() == '20 / 80 条 · 25%'
     assert not controls.start_button.isEnabled() and not panel.automatic.isEnabled()
+    # Switching the engine while measuring is refused, including manual limits.
+    assert not panel.manual.isEnabled() and not panel.apply.isEnabled()
+    data.update(busy=False, status='done')
+    controls.bind(data)
+    # ...but finishing must hand the manual configuration back, not leave it locked.
+    assert panel.manual.isEnabled() and panel.apply.isEnabled() and panel.automatic.isEnabled()
+    assert not controls.timer.isActive()
     window.close()
 
 
@@ -266,3 +277,65 @@ def test_workload_has_twenty_distinct_sentences(name, languages):
     assert {row['language'] for row in rows} == languages
     if name == 'bilingual':
         assert [row['language'] for row in rows] == ['zh', 'en']*10
+
+
+def test_preset_options_the_current_model_never_declared_do_not_block_or_reach_a_backend(benchmark):
+    manager, native, batch, _ = benchmark
+    voice, _ = manager.config.resolve('qwen')
+    manager.config.save_voice({**voice, 'request_options': {**voice['request_options'],
+        'stream_chunk_policy': 'grow', 'stream_frames_per_event': 12, 'voice_id': 'aiden'}})
+    manager.benchmark.start('qwen')
+    state = finished(manager)
+    assert state['status'] == 'done'
+    report = state['result']
+    assert report['ignored_options'] == ['stream_chunk_policy', 'stream_frames_per_event', 'voice_id']
+    assert set(report['generation_options']) == {'seed', 'max_tokens'}
+    assert all(set(call['voice']['request_options']) == {'seed', 'max_tokens'} for call in native.calls)
+    assert all(set(call['options']) <= {'max_new_tokens', 'do_sample', 'temperature', 'top_k', 'top_p',
+                                        'repetition_penalty', 'subtalker_dosample', 'subtalker_temperature',
+                                        'subtalker_top_k', 'subtalker_top_p'} for call in batch.calls)
+    # The saved preset keeps its stale keys; only the benchmark snapshot is cleaned.
+    assert manager.config.resolve('qwen')[0]['request_options']['voice_id'] == 'aiden'
+
+
+def test_option_declared_by_the_model_but_missing_from_the_batch_contract_is_still_refused(tmp_path):
+    voice, settings = assets(tmp_path)
+    path = tmp_path / 'custom.gguf'
+    gguf(path, {'schema_version': 1, 'family': 'qwen3_tts', 'languages': ['zh'],
+                'capabilities': {'clone': ['speaker_reference']},
+                'options': {'request': [
+                    {'name': 'max_tokens', 'type': 'int', 'default': 1024, 'min': 1, 'max': 8192},
+                    {'name': 'text_chunk_size', 'type': 'int', 'default': 8192, 'min': 0, 'max': 12000},
+                    {'name': 'seed', 'type': 'int', 'default': -1, 'min': -1, 'max': 2147483647},
+                    {'name': 'num_inference_steps', 'type': 'int', 'default': 10, 'min': 1, 'max': 50}]}},
+         config={'tts_model_type': 'base'})
+    settings = settings.model_copy(update={'source_model': str(path)})
+    voice.update(model_dir=str(path), device=settings.device,
+                 request_options={'seed': 42, 'num_inference_steps': 10})
+    kept, dropped = compatible(voice)
+    assert dropped == [] and kept['num_inference_steps'] == 10
+    assert 'num_inference_steps' in unsupported(voice, '你好', settings)
+
+
+def test_native_only_options_declared_by_the_engine_never_block_or_reach_the_batch_backend(benchmark, tmp_path):
+    manager, native, batch, _ = benchmark
+    voice, _ = manager.config.resolve('qwen')
+    # Mirrors audio-v0.9.x: the engine spec declares streaming transport and the
+    # CustomVoice speaker table next to the sampling parameters.
+    specs = [deepcopy(s) for s in FALLBACK['qwen3_tts']] + [
+        {'name': 'stream_chunk_policy', 'type': 'string', 'default': 'grow', 'enum': ['grow', 'fixed']},
+        {'name': 'stream_frames_per_event', 'type': 'int', 'default': 12, 'min': 1, 'max': 999},
+        {'name': 'voice_id', 'type': 'string', 'default': 'aiden', 'enum': ['aiden', 'dylan']}]
+    gguf(Path(voice['model_dir']), {'schema_version': 1, 'family': 'qwen3_tts', 'languages': ['zh', 'en'],
+        'capabilities': {'clone': ['speaker_reference']}, 'options': {'request': specs}},
+        config={'tts_model_type': 'base'})
+    manager.config.save_voice({**voice, 'request_options': {**voice['request_options'],
+        'stream_chunk_policy': 'grow', 'stream_frames_per_event': 12, 'voice_id': 'aiden'}})
+    manager.benchmark.start('qwen')
+    state = finished(manager)
+    assert state['status'] == 'done'
+    report = state['result']
+    assert report['ignored_options'] == ['stream_chunk_policy', 'stream_frames_per_event', 'voice_id']
+    # The native engine really accepts them; the batch contract forwards neither.
+    assert all('stream_chunk_policy' in call['voice']['request_options'] for call in native.calls)
+    assert all(not {'stream_chunk_policy', 'voice_id'} & set(call['options']) for call in batch.calls)

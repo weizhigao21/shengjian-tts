@@ -26,6 +26,9 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     expected = json.loads(fixture.read_text(encoding='utf-8'))
     data = tmp_path/'unused-data'
     actual = create_app(data).openapi()
+    for operation, method in (('progress','get'),('pause','post'),('resume','post')):
+        route = f'/jobs/{{job_id}}/generations/{{generation}}/{operation}'
+        assert set(actual['paths'].pop(route)) == {method}
     # The independent audio editor adds routes and schemas; old routes stay frozen.
     for path in list(actual['paths']):
         if path.startswith('/audio-editor/'):
@@ -47,6 +50,7 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     for name in ('BatchSettings', 'PlanRequest', 'SetupRequest', 'BenchmarkRequest'):
         actual['components']['schemas'].pop(name)
     actual['components']['schemas']['JobInput']['properties'].pop('inference_mode')
+    actual['components']['schemas']['EngineDownload']['properties'].pop('source')
     assert actual['paths'].pop('/parameter-presets')['post']['responses'].get('201')
     assert set(actual['paths'].pop('/parameter-presets/{identity}')) == {'put', 'patch', 'delete'}
     for name in ('ParameterPresetInput', 'ParameterPresetRename'):

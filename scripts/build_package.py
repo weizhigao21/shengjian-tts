@@ -15,27 +15,29 @@ sys.path.insert(0, str(ROOT))
 from voice_workbench.app_updates.manifest import write_manifest, digest_file, MANIFEST, UPDATER
 
 if __package__:
-    from .package_files import overwrite_program
+    from .package_files import overwrite_program, retired_documents
 else:
-    from package_files import overwrite_program
+    from package_files import overwrite_program, retired_documents
 
-DOCUMENTATION = ("README.md", "API.md", "UI_STYLE.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt")
-DOCUMENTATION_GUIDES = ("docs/ARCHITECTURE.md", "docs/DIALOGUE_MODE_PLAN.md", "docs/MODEL_DISCOVERY.md",
-                        "docs/OPTIMIZATION.md", "docs/AUDIO_EDITING.md", "docs/APP_UPDATES.md", "docs/SPEECH_RECOGNITION.md",
-                        "docs/BATCH_INFERENCE.md", "docs/setup_qwen_batch.py")
-DOCUMENTATION_LICENSES = tuple(path.relative_to(ROOT).as_posix() for path in sorted((ROOT / "licenses").rglob("*"))
-                              if path.is_file() and not path.is_symlink())
-DOCUMENTATION_ASSETS = tuple(f"docs/images/{name}.png" for name in (
-    "app", "workbench", "dialogue", "dialogue-history", "generation-list", "voice-library", "index-emotion", "workflow", "models", "engine-settings", "audio-manager", "model-discovery", "audio-editor", "app-updates"))
+LEGAL_DOCUMENTS = ("THIRD_PARTY_NOTICES.md", "LICENSE", "requirements-release.txt")
+USER_GUIDES = ("docs/QWEN_BATCH_SETUP.md",)
+
+
+def documentation_files():
+    """Ship user help and unchanged notices inside the runtime folder."""
+    files = {name: '_internal/' + name for name in USER_GUIDES}
+    licenses = (path.relative_to(ROOT).as_posix() for path in sorted((ROOT / 'licenses').rglob('*'))
+                if path.is_file() and not path.is_symlink())
+    files.update((name, '_internal/legal/' + name) for name in (*LEGAL_DOCUMENTS, *licenses))
+    return files
 
 
 def copy_documentation(candidate):
-    """Keep relative README images working in the unpacked program folder."""
-    for name in (*DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES):
+    """Exclude development docs and screenshots; retain complete attribution."""
+    for source, name in documentation_files().items():
         destination = candidate / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        source = ROOT / ("scripts/setup_qwen_batch.py" if name == "docs/setup_qwen_batch.py" else name)
-        shutil.copy2(source, destination)
+        shutil.copy2(ROOT / source, destination)
 
 
 def contained(path, parent):
@@ -50,19 +52,19 @@ def publish(candidate, target):
     """Publish only program files; existing configuration/data folders stay in place."""
     contained(candidate, ROOT / "build")
     contained(target, ROOT / "dist")
-    overwrite_program(candidate, target, (UPDATER, MANIFEST, *DOCUMENTATION, *DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES))
+    overwrite_program(candidate, target, (UPDATER, MANIFEST, *retired_documents(candidate)))
 
 
 def distribution_archive(candidate, destination):
     """Publish program files only, even if a locally used folder contains user data."""
     contained(destination, ROOT / "dist")
-    allowed = {"声笺.exe", "声笺服务.exe", UPDATER, MANIFEST, "_internal", *DOCUMENTATION}
+    allowed = {"声笺.exe", "声笺服务.exe", UPDATER, MANIFEST, "_internal"}
     temporary = destination.with_suffix('.zip.tmp')
     try:
         with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(candidate.rglob('*')):
                 relative = path.relative_to(candidate)
-                included = relative.parts[0] in allowed or relative.as_posix() in (*DOCUMENTATION_GUIDES, *DOCUMENTATION_ASSETS, *DOCUMENTATION_LICENSES)
+                included = relative.parts[0] in allowed
                 if path.is_file() and not path.is_symlink() and included:
                     archive.write(path, str(Path('声笺') / relative))
         os.replace(temporary, destination)

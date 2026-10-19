@@ -140,32 +140,73 @@ def test_distribution_zip_excludes_personal_data_even_in_used_release(tmp_path, 
     (target / 'licenses' / 'pyqt6').mkdir(parents=True)
     (target / 'licenses' / 'pyqt6' / 'LICENSE').write_bytes(b'upstream license')
     (target / 'licenses' / 'personal.txt').write_bytes(b'private notes')
-    for name in build_package.DOCUMENTATION_GUIDES:
-        (target / name).write_text('public design documentation')
+    (target / '_internal' / 'legal' / 'licenses' / 'pyqt6').mkdir(parents=True)
+    (target / '_internal' / 'legal' / 'licenses' / 'pyqt6' / 'LICENSE').write_bytes(b'upstream license')
+    (target / '_internal' / 'docs').mkdir()
+    (target / '_internal' / 'docs' / 'QWEN_BATCH_SETUP.md').write_text('installation help')
     archive = build_package.distribution_archive(target, tmp_path/'dist/release.zip')
     with zipfile.ZipFile(archive) as saved:
         assert set(saved.namelist()) == {'声笺/声笺.exe', '声笺/_internal/library.dll',
-                                       '声笺/README.md', '声笺/API.md', '声笺/UI_STYLE.md',
-                                       '声笺/docs/images/workbench.png', '声笺/docs/images/app.png',
-                                       '声笺/LICENSE', '声笺/licenses/pyqt6/LICENSE',
-                                       *('声笺/'+name for name in build_package.DOCUMENTATION_GUIDES)}
+                                       '声笺/_internal/docs/QWEN_BATCH_SETUP.md',
+                                       '声笺/_internal/legal/licenses/pyqt6/LICENSE'}
         assert saved.read('声笺/_internal/library.dll') == b'library'
-        assert saved.read('声笺/docs/images/workbench.png') == b'public screenshot'
-        assert saved.read('声笺/licenses/pyqt6/LICENSE') == b'upstream license'
+        assert saved.read('声笺/_internal/legal/licenses/pyqt6/LICENSE') == b'upstream license'
     assert (target / 'data' / 'tasks.sqlite3').read_bytes() == b'personal database'
 
 
-def test_copy_documentation_keeps_all_relative_readme_assets(tmp_path, monkeypatch):
+def test_copy_documentation_ships_only_user_help_and_unchanged_notices_inside_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(build_package, "ROOT", tmp_path)
-    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
-        source = tmp_path / ('scripts/setup_qwen_batch.py' if name == 'docs/setup_qwen_batch.py' else name)
+    names = (*build_package.LEGAL_DOCUMENTS, *build_package.USER_GUIDES, 'licenses/README.md', 'licenses/pyqt6/LICENSE')
+    for name in (*names, 'docs/ARCHITECTURE.md', 'docs/images/workbench.png', 'API.md', 'UI_STYLE.md', 'README.md'):
+        source = tmp_path / name
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(name.encode("utf-8"))
     candidate = tmp_path / "build" / "staging" / "声笺"
     build_package.copy_documentation(candidate)
-    for name in (*build_package.DOCUMENTATION, *build_package.DOCUMENTATION_GUIDES, *build_package.DOCUMENTATION_ASSETS, *build_package.DOCUMENTATION_LICENSES):
-        source = tmp_path / ('scripts/setup_qwen_batch.py' if name == 'docs/setup_qwen_batch.py' else name)
-        assert (candidate / name).read_bytes() == source.read_bytes()
+    actual = {path.relative_to(candidate).as_posix() for path in candidate.rglob('*') if path.is_file()}
+    expected = {'_internal/' + name if name.startswith('docs/') else '_internal/legal/' + name for name in names}
+    assert actual == expected
+    for source, destination in build_package.documentation_files().items():
+        assert (candidate / destination).read_bytes() == (tmp_path / source).read_bytes()
+
+
+def test_publish_retires_old_documents_preserves_personal_files_and_removes_empty_folders(tmp_path, monkeypatch):
+    candidate, target, _ = make_release(tmp_path, monkeypatch)
+    for name in ('docs/images/workbench.png', 'docs/ARCHITECTURE.md', 'README.md', 'licenses/pyqt6/LICENSE'):
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'old release document')
+    (target / 'licenses/personal.txt').write_bytes(b'private notes')
+    path = candidate / '_internal/legal/licenses/pyqt6/LICENSE'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'upstream license')
+    build_package.publish(candidate, target)
+    assert not (target / 'docs').exists() and not (target / 'README.md').exists()
+    assert not (target / 'licenses/pyqt6').exists()
+    assert (target / 'licenses/personal.txt').read_bytes() == b'private notes'
+    assert (target / 'data/user-config.json').read_text() == 'keep me'
+    assert (target / '_internal/legal/licenses/pyqt6/LICENSE').read_bytes() == b'upstream license'
+
+
+def test_batch_install_help_opens_the_bundled_user_guide(tmp_path, qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QPushButton
+    from voice_workbench.gui import Window
+    from voice_workbench.desktop.settings import batch_inference
+    guide = tmp_path / '_internal/docs/QWEN_BATCH_SETUP.md'
+    guide.parent.mkdir(parents=True)
+    guide.write_text('installation help')
+    monkeypatch.setattr(batch_inference, 'resource_root', lambda: tmp_path / '_internal')
+    monkeypatch.setattr(Window, 'call', lambda *args, **kwargs: None)
+    opened = []
+    monkeypatch.setattr(batch_inference.QDesktopServices, 'openUrl', lambda url: opened.append(Path(url.toLocalFile())) or True)
+    window = Window(18992, tmp_path / 'data', autostart=False)
+    qtbot.addWidget(window)
+    for timer in (window.timer, window.document_timer, window.settings.timer):
+        timer.stop()
+    controls = window.settings.batch_inference.findChildren(QPushButton)
+    next(control for control in controls if control.text() == '安装说明').click()
+    assert opened == [guide] and opened[0].is_file()
+    window.close()
 
 
 def test_optional_installer_stays_inside_the_existing_updater_payload_boundary():

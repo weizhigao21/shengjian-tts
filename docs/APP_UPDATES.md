@@ -30,13 +30,19 @@ v0.7.33 起，Windows 完整包提供独立的 `声笺更新器.exe`。在「设
 运行 `打包.bat`，同时构建 GUI / 服务和独立的一文件更新器。构建目录内生成 `program-files.json`，记录版本与每个程序文件的 SHA-256，随后输出：
 
 ```text
-dist/shengjian-v0.7.50-windows-x64.zip
+dist/shengjian-v0.7.55-windows-x64.zip
 dist/SHA256SUMS.txt
 dist/声笺/声笺.exe
 dist/声笺/声笺服务.exe
 dist/声笺/声笺更新器.exe
 dist/声笺/program-files.json
+dist/声笺/_internal/docs/QWEN_BATCH_SETUP.md
+dist/声笺/_internal/legal/LICENSE
+dist/声笺/_internal/legal/THIRD_PARTY_NOTICES.md
+dist/声笺/_internal/legal/licenses/
 ```
+
+v0.7.53 起不再把开发文档和截图放入发行包，安装指南与完整授权文本放在 `_internal` 中。更新和重新打包会清理已知旧版文档，并移除空目录；自行添加的其他文件保留。
 
 正式发布时使用 `v主版本.次版本.修订号` 标签，将同版本 Windows ZIP 和 `SHA256SUMS.txt` 上传到 `weizhigao21/shengjian-tts` 的 GitHub Release。不要把源码 ZIP、其他架构或调试包命名为 Windows 完整包。预发行和草稿不会被当作正式更新。
 

@@ -40,6 +40,8 @@
 | `DELETE /jobs/{id}`、`POST /jobs/{id}/restore`、`PATCH /jobs/{id}` | 删除、恢复、重命名作品 |
 | `POST /jobs/{id}/retry`、`POST /jobs/{id}/cancel` | 重试失败片段、取消生成 |
 | `POST /jobs/{id}/generations/{generation}/cancel` | 取消指定批次 |
+| `GET /jobs/{id}/generations/{generation}/progress` | 批次总数、完成数与已结束片段的轻量进度，不返回声音配置快照 |
+| `POST /jobs/{id}/generations/{generation}/pause`、`POST /jobs/{id}/generations/{generation}/resume` | 暂停 / 恢复指定批次的后续调度，正在生成的片段继续完成 |
 | `GET /audio/{filename}`、`GET /logs/{id}/{index}` | 普通生成音频、错误详情 |
 | `GET /generated-audio`、`POST /generated-audio/delete` | 查询与批量删除生成音频 |
 | `GET /audio-editor/options`、`POST /audio-editor/models` | 编辑可用模型 / 参考声音与本地 Vevo2 GGUF 导入 |
@@ -67,6 +69,12 @@
 | `POST /engine/release` | 释放空闲推理引擎 |
 
 引擎操作使用 `{"backend":"cuda"}` 或 `{"backend":"cpu"}`。`GET /models` 中的 `engine.options` 提供分项下载与验证状态。
+
+v0.7.51 起，`POST /models/runtime/download` 和 `/models/runtime/upgrade` 可附加 `source`：`auto`（ghfast → GH-Proxy → 官方直连）、`ghproxy`、`ghfast` 或 `github`，例如 `{"backend":"cuda","source":"ghfast"}`。省略或传 `null` 时沿用上次来源，尚未选择则默认 `auto`；显式来源在接受下载任务时保存，非法来源返回 422。活动安装期间不能更换来源，先暂停再以新来源重新提交即可续传同一 `.part` 文件。
+
+`GET /models` 的 `engine.download_source` 返回保存的来源，`download_sources` 列出可用来源；活动选项的 `source` 是本次选择，`active_source` 是当前尝试的具体来源，`source_errors` 保存本个安装包先前来源的失败原因。自动模式遇到网络、响应范围 / 大小或 SHA-256 校验失败时换源；手动来源失败不自动切换，取消 / 暂停不触发换源。官方目录、大小和校验值不经过镜像改写；检查更新仍通过 GitHub 官方 API。下载来源仅影响引擎安装包，与模型下载来源独立。
+
+新服务在 `/health.capabilities` 中声明 `engine_download_sources`。新桌面端连接旧服务时提示关闭旧窗口和独立服务后重新启动，避免镜像选择被旧接口忽略。
 
 ## 高级参数预设
 
@@ -164,6 +172,14 @@ v0.7.19 起，生成时按当前模型定义兼容已知旧参数：Qwen 的旧 
 
 双语工作流另加 `record_only:true`、`delivery_ack:true` 和同一次运行共用的 `workflow_key`。生成记录保存模型、文本、预设、参数、时间和错误，侧栏不创建作品。工作流适配器要求声笺 v0.7.11+。
 
+未发布源码增加 `/health` 顶层标记 `workflow_incremental:true`。新适配器在单个声笺 API 且开启工作流批量模式时，先复用有效的工作流缓存，再一次提交剩余片段；超过每次 10,000 条的接口上限时分次提交，同一次运行继续使用相同 `workflow_key`。GPU 每批条数仍由声笺批量设置控制，与工作流原微批大小独立。旧服务沿用原微批与查询方式。
+
+进度接口返回 `job_id`、`generation`、`status`、`total`、`completed`、`paused` 和 `segments`。`segments` 只含当前已完成、失败或取消的片段，包含 `idx`、`status`、`audio`、`audio_url` 与 `error`；每次查询返回当前全部已结束片段，允许乱序完成，客户端按提交返回的 `segment_indices` 对应原字幕并去重。不要将 `segments` 数量视为整批总数。工作流音频下载后会释放，后续查询中已释放音频的 `audio_url` 为 `null`。
+
+暂停只阻止该批次尚未开始的片段被调度或合批，已开始的原生调用 / 张量批次继续完成，其他批次可以继续执行。恢复后继续处理剩余片段，取消清除暂停标记；重试失败或取消片段也会清除其暂停标记。暂停状态写入数据库，服务重启后仍可通过 `/resume` 恢复。批次或作品不存在 / 已删除时，进度与控制接口返回 404。客户端暂停期间继续接收已完成结果，暂停时长不计入其生成等待超时。
+
+适配器每收到一条成功结果即下载到同目录临时文件，核验完整 WAV 后替换目标音频，保存工作流缓存后再调用 `/release`。损坏、截断或失败的下载不覆盖原文件、不确认交付；取消或请求失败保留此前已下载的成功片段，未处理项带原字幕序号报错，不自动重复提交。交付确认丢失仍保留成功输出，服务副本等待到期清理。增量服务每出现一条新的结束结果便重新计算等待时限（默认无新结果 3600 秒），重复返回旧结果不会延长时限；旧服务仍使用原总等待时限。
+
 | 方法与路径 | 工作流用途 |
 | --- | --- |
 | `GET /workflow/records?limit=200` | 查询生成记录及音频清理状态，最多 500 条 |
@@ -187,13 +203,15 @@ Qwen 独立批量配置的 `predictor_fastpath` 默认 `true`，可通过 `PUT /
 | --- | --- |
 | `GET /inference/backends` | 后端能力、是否就绪、未就绪原因、是否驻留。 |
 | `GET /settings/batch-inference` | 配置、运行库版本、上批统计和近期回退；v0.7.45 新增 `setup`（本地候选、目录、大小、安装任务阶段 / 速度 / 状态），仅自动检测，不下载。 |
-| `POST /inference/setup` | v0.7.45 异步安装 / 关联，202。`action: all / runtime / model / detect`（默认 all），`source_model` 为已导入 Base GGUF 路径（空值自动选），`device: cuda / cpu`、`source: mirror / huggingface`。 |
+| `POST /inference/setup` | 异步安装 / 关联，202。`action: all / runtime / model / detect`（默认 all），`source_model` 为已导入 Base GGUF 路径（空值自动选），`device: cuda / cpu`。v0.7.52 的模型来源 `source: modelscope / mirror / huggingface`（默认 modelscope），运行环境来源 `runtime_source: mirror / official`（默认 mirror）。 |
 | `POST /inference/setup/pause` | 暂停专用安装，已下载文件保留；再次提交 setup 可复用 / 续传。 |
 | `GET /inference/benchmark` | v0.7.46：可选预设、测速状态 / 进度 / 最近报告。`GET /settings/batch-inference` 同时新增 `benchmark` 快照。 |
-| `POST /inference/benchmark` | v0.7.46：202 异步速度对比。`voice_id` 必填，`workload_name: bilingual / zh / en`，`warm_rounds` 为 1–3，默认 1。v0.7.47 每组增至 20 条；原生单实例与批量后端使用固定短句、种子 1234、每条不超过 256 tokens，不改预设。报告包含 `sample_count` 和冷 / 热组的 `seconds_per_item`（组耗时 / 条数）。 |
+| `POST /inference/benchmark` | v0.7.46：202 异步速度对比。`voice_id` 必填，`workload_name: bilingual / zh / en`，`warm_rounds` 为 1–3，默认 1。v0.7.47 每组增至 20 条；原生单实例与批量后端使用固定短句、种子 1234、每条不超过 256 tokens，不改预设。报告包含 `sample_count` 和冷 / 热组的 `seconds_per_item`（组耗时 / 条数）。v0.7.54 起报告另含 `ignored_options`：模型规范声明、但只对原生引擎生效或当前模型已不声明而剔除的参数，不参与对比。 |
 | `POST /inference/benchmark/cancel` | 取消测速，释放引擎并保留部分结果。 |
 | `PUT /settings/batch-inference` | 设置独立 `python`、原始 `model_dir`、关联 GGUF `source_model`、`enabled`、`device`、`dtype`、`max_batch_size`、`max_batch_chars`、`prompt_cache_slots`、`idle_seconds`。v0.7.48 新增 `min_batch_size`（2–8，默认 2，不能大于 `max_batch_size`），控制自动启动新批量模型的兼容文本门槛；不足走原生，已驻留模型继续处理尾段。显式 `inference_mode: batch` 仍允许两条合批。活动推理时拒绝修改。 |
 | `POST /inference/plan` | `{ "voice_id": "qwen-preset", "texts": ["第一句", "第二句"] }`，只读预览，不创建任务、复制参考音频或加载模型。 |
+
+`runtime_source` 控制 Python、PyTorch 与 SDK 安装来源，和模型 `source` 相互独立；`detect` 不下载任何文件。国内环境源按固定顺序尝试镜像，失败后回退官方，暂停不会触发切换；活动安装中先暂停后再换源。安装状态 `runtime_source` / `source` 表示本次选择，`download_source` 表示当前依赖来源，`source_errors` 为最近一组来源的失败记录。Python 与权重沿用固定文件大小 / SHA-256，权重在不同来源间共享同一份 `.part`；未完成安装不改写批量推理设置。新服务在 `/health` 声明 `batch_setup_sources:true`，新桌面端拒绝复用不支持这些字段的旧服务。
 
 每条生成结果新增 `inference_mode` 与 `inference`，记录实际后端 / 批大小 / 模型签名 / 缓存命中 / 整批耗时，回退时提供 `fallback_reason`。批量任务的 `generation_seconds` 是整批完成延迟，不是各条独立 GPU 耗时。取消、重试、框 ID、排序与工作流交付接口保留。
 

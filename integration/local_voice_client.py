@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import threading
 import time
+import os
+import tempfile
 from copy import deepcopy
 from urllib.parse import urlsplit, urljoin
 import wave
@@ -143,19 +145,66 @@ def _error(response):
         return f"HTTP {response.status_code}：{response.text[:2000]}"
 
 
-def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_check=None, workflow_context=None):
+def save_validated_audio(download, audio_url, save_path):
+    """Validate a complete PCM WAV before replacing the workflow's output."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=os.path.dirname(os.path.abspath(save_path)),
+                                         prefix='.tts-', suffix='.wav', delete=False) as target:
+            temporary = target.name
+        download(audio_url, temporary)
+        with wave.open(temporary, 'rb') as audio:
+            frames, rate = audio.getnframes(), audio.getframerate()
+            if not frames or not rate:
+                raise ValueError('下载的音频不是有效 WAV')
+            frame_bytes = audio.getnchannels() * audio.getsampwidth()
+            remaining = frames
+            while remaining:
+                count = min(remaining, 65536)
+                if len(audio.readframes(count)) != count * frame_bytes:
+                    raise ValueError('下载的 WAV 音频不完整')
+                remaining -= count
+        os.replace(temporary, save_path)
+    except (wave.Error, EOFError) as exc:
+        raise ValueError('下载的音频不是有效 WAV') from exc
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_check=None, workflow_context=None,
+                  on_result=None, pause_check=None):
     """返回每片段 (audio_url, error)，部分失败也保留成功片段。
 
     tasks 是工作流原有的 (idx, timestamp, text, save_dir, source_mtime) 列表。
     不自动重新提交超时任务，避免后台已生成时产生重复工作。
     """
     base = api_url.rstrip("/")
+    results = [None] * len(tasks)
+
+    def deliver(position, result):
+        if results[position] is None:
+            results[position] = result
+            if on_result:
+                on_result(position, result)
+
+    def finish_remaining(message):
+        for position, task in enumerate(tasks):
+            deliver(position, (None, f"第 {task[0]} 段 [{task[1]}]：{message}"))
+        return results
+
+    if not tasks:
+        return results
+
     try:
+        if cancel_check and cancel_check():
+            return finish_remaining('任务已取消，未提交服务任务。')
         payload = {"voice_id": model_name, "title": "双语工作流配音",
                    "segments": [{"text": task[2], "timestamp": task[1]} for task in tasks],
                    "record_only": True, "delivery_ack": True}
         health = session.get(base + "/health", timeout=3)
-        capabilities = health.json().get("capabilities", []) if health.status_code == 200 else []
+        health_body = health.json() if health.status_code == 200 else {}
+        capabilities = health_body.get("capabilities", [])
         if "workflow_record_only" not in capabilities:
             raise RuntimeError("当前声笺服务不支持工作流临时音频，请更新并重启声笺至 v0.7.11 或以上。")
         if workflow_context:
@@ -165,72 +214,111 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
         response = session.post(base + "/jobs", json=payload, timeout=15)
         if response.status_code != 202:
             error = _error(response)
-            return [(None, f"第 {t[0]} 段 [{t[1]}]：{error}") for t in tasks]
+            return finish_remaining(error)
         submitted = response.json()
         job_id = submitted["job_id"]
         indices = submitted.get("segment_indices", list(range(1, len(tasks) + 1)))
+        if len(indices) != len(tasks) or len(set(indices)) != len(indices):
+            raise RuntimeError('服务返回的片段编号与提交内容不一致，未重新提交。')
         generation = submitted.get("generation")
         status_url = base + "/jobs/" + job_id + (f"?generation={generation}" if generation else "")
+        incremental = bool(health_body.get('workflow_incremental') and generation)
+        control_url = base + f'/jobs/{job_id}/generations/{generation}'
+        if incremental:
+            status_url = control_url + '/progress'
+        paused = False
+        pause_started = None
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+
+        def cancel_submitted():
+            cancel_url = base + "/jobs/" + job_id + (f"/generations/{generation}/cancel" if generation else "/cancel")
+            stopped = session.post(cancel_url, timeout=15)
+            if stopped.status_code != 200:
+                raise RuntimeError("取消服务任务失败：" + _error(stopped))
+            return finish_remaining('任务已取消；服务保留生成记录，未接收音频已清理。')
+
+        while paused or time.monotonic() < deadline:
             if cancel_check and cancel_check():
-                cancel_url = base + "/jobs/" + job_id + (f"/generations/{generation}/cancel" if generation else "/cancel")
-                stopped = session.post(cancel_url, timeout=15)
-                if stopped.status_code != 200:
-                    raise RuntimeError("取消服务任务失败：" + _error(stopped))
-                return [(None, f"第 {t[0]} 段 [{t[1]}]：任务已取消；服务保留生成记录，未接收音频已清理。") for t in tasks]
+                return cancel_submitted()
+            desired = bool(pause_check and pause_check())
+            if incremental and desired != paused:
+                changed = session.post(control_url + ('/pause' if desired else '/resume'), timeout=15)
+                if changed.status_code != 200:
+                    raise RuntimeError('暂停 / 继续服务任务失败：' + _error(changed))
+                if desired:
+                    pause_started = time.monotonic()
+                else:
+                    deadline += time.monotonic() - pause_started
+                    pause_started = None
+                paused = desired
             result = session.get(status_url, timeout=10)
             if result.status_code != 200:
                 raise RuntimeError(_error(result))
             job = result.json()
-            if job["status"] in ("done", "failed", "cancelled"):
-                by_index = {s["idx"]: s for s in job["segments"]}
-                results = []
-                for i, task in zip(indices, tasks):
-                    item = by_index.get(i)
-                    if item and item["status"] == "done" and item.get("audio_url"):
-                        results.append((urljoin(base + "/", item["audio_url"]), None))
-                    else:
-                        error = (item.get("error") or {}) if item else {}
-                        message = error.get("message", "任务已取消或未返回该片段")
-                        hint = error.get("hint", "")
-                        detail = f"第 {task[0]} 段 [{task[1]}] {task[2][:40]}：{message}"
-                        if hint:
-                            detail += "；建议：" + hint
-                        detail += f"；服务任务 {job_id}"
-                        results.append((None, detail))
+            terminal = job['status'] in ('done', 'failed', 'cancelled')
+            by_index = {s['idx']: s for s in job['segments']}
+            for position, (i, task) in enumerate(zip(indices, tasks)):
+                if results[position] is not None:
+                    continue
+                if cancel_check and cancel_check():
+                    return cancel_submitted()
+                item = by_index.get(i)
+                if item and item['status'] == 'done' and item.get('audio_url'):
+                    deliver(position, (urljoin(base + '/', item['audio_url']), None))
+                elif terminal or item and item['status'] in ('failed', 'cancelled'):
+                    error = (item.get("error") or {}) if item else {}
+                    message = error.get("message", "任务已取消或未返回该片段")
+                    hint = error.get("hint", "")
+                    detail = f"第 {task[0]} 段 [{task[1]}] {task[2][:40]}：{message}"
+                    if hint:
+                        detail += "；建议：" + hint
+                    detail += f"；服务任务 {job_id}"
+                    deliver(position, (None, detail))
+                if incremental and results[position] is not None:
+                    # Whole subtitle runs may last hours. Only a lack of new
+                    # results should time out; repeated snapshots do not count.
+                    deadline = (pause_started if paused else time.monotonic()) + timeout
+            if terminal:
                 return results
             time.sleep(0.3)
-        return [(None, f"等待工作流记录 {job_id} 超过 {timeout} 秒；服务仍在生成或排队，记录可通过接口查询。") for _ in tasks]
+        return finish_remaining(f'等待工作流记录 {job_id} 超过 {timeout} 秒；服务仍在生成或排队，记录可通过接口查询。')
     except Exception as exc:
-        return [(None, f"第 {t[0]} 段 [{t[1]}]：本地配音服务请求失败：{exc}") for t in tasks]
+        return finish_remaining(f'本地配音服务请求失败：{exc}')
 
 
-def generate_local_tasks(session, api_url, model_name, tasks, audio_cache, cache_model, filename, download, cancel_check=None, workflow_context=None):
-    results = []
-    for task, (audio_url, error) in zip(tasks, run_local_job(session, api_url, model_name, tasks, cancel_check=cancel_check, workflow_context=workflow_context)):
+def generate_local_tasks(session, api_url, model_name, tasks, audio_cache, cache_model, filename, download,
+                         cancel_check=None, workflow_context=None, on_result=None, pause_check=None):
+    results = [None] * len(tasks)
+
+    def receive(position, result):
+        if results[position] is not None:
+            return
+        audio_url, error = result
+        task = tasks[position]
         index, timestamp, text, save_dir, mtime = task
         if error:
-            results.append((False, error))
-            continue
-        save_path = filename(index, timestamp, text, save_dir)
-        try:
-            download(audio_url, save_path)
-            # Acknowledge after the workflow's downloader commits a valid WAV.
-            with wave.open(str(save_path), "rb") as audio:
-                if not audio.getnframes() or not audio.getframerate() or not audio.readframes(1):
-                    raise ValueError("下载的音频不是有效 WAV")
-            audio_cache.save_audio_cache(text, save_path, cache_model, api_url, source_version=str(int(mtime)))
-        except Exception as exc:
-            results.append((False, f"第 {index} 段 [{timestamp}] 音频下载失败：{exc}"))
-            continue
-        message = f"完成：{index:04d} [{timestamp}]"
-        try:
-            released = session.post(audio_url + "/release", timeout=10)
-            if released.status_code != 200 or released.json().get("errors"):
-                raise RuntimeError("服务尚未确认清理")
-        except Exception:
-            # Saved output remains usable if the acknowledgement is lost.
-            message += "；临时音频将在服务端到期清理"
-        results.append((True, message))
+            results[position] = False, error
+        else:
+            try:
+                save_path = filename(index, timestamp, text, save_dir)
+                save_validated_audio(download, audio_url, save_path)
+                # Only acknowledge after both valid output and cache are committed.
+                audio_cache.save_audio_cache(text, save_path, cache_model, api_url, source_version=str(int(mtime)))
+                message = f'完成：{index:04d} [{timestamp}]'
+                try:
+                    released = session.post(audio_url + '/release', timeout=10)
+                    if released.status_code != 200 or released.json().get('errors'):
+                        raise RuntimeError('服务尚未确认清理')
+                except Exception:
+                    message += '；临时音频将在服务端到期清理'
+                results[position] = True, message
+            except Exception as exc:
+                results[position] = False, f'第 {index} 段 [{timestamp}] 音频下载失败：{exc}'
+        if on_result:
+            on_result(position, results[position])
+
+    returned = run_local_job(session, api_url, model_name, tasks, cancel_check=cancel_check,
+        workflow_context=workflow_context, on_result=receive, pause_check=pause_check)
+    for position, result in enumerate(returned):
+        receive(position, result)
     return results

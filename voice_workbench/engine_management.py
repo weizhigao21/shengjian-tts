@@ -15,7 +15,8 @@ import zipfile
 import httpx
 
 from .config import atomic_json, file_digest
-from .downloads import DownloadPaused, download_file
+from .downloads import DownloadPaused
+from .engine_sources import SOURCE_NAMES, download_archive
 from .errors import VoiceError
 from .engine_validation import CUDA_DLLS, clear_binary_cache, inspect_engine
 from .engine_updates import fetch_release, version_key
@@ -173,7 +174,14 @@ class EngineManager:
                 "directory": str(self.root), "supported": platform.system() == "Windows" and platform.machine().lower() in ("amd64", "x86_64"),
                 "options": options, "version": value.get("native_engine_version"),
                 "release": self.recommended.get("release"), "update_error": self.update_error,
-                "checking_updates": self.checking_updates}
+                "checking_updates": self.checking_updates,
+                "download_source": self.download_source,
+                "download_sources": [{'id': key, 'name': name} for key, name in SOURCE_NAMES.items()]}
+
+    @property
+    def download_source(self):
+        source = self.config.read().get('engine_download_source', 'auto')
+        return source if source in SOURCE_NAMES else 'auto'
 
     def _received(self, archive):
         try:
@@ -181,20 +189,28 @@ class EngineManager:
         except FileNotFoundError:
             return archive["size"] if (self.download_dir / archive["name"]).is_file() else 0
 
-    def start(self, backend, upgrade=False):
+    def start(self, backend, upgrade=False, source=None):
         if backend not in self.entries:
             raise VoiceError("ENGINE_BACKEND_UNSUPPORTED", "请选择 NVIDIA CUDA 或 CPU 引擎", stage="引擎下载")
         if not self.listing()["supported"]:
             raise VoiceError("ENGINE_PLATFORM_UNSUPPORTED", "在线安装暂支持 Windows 64 位系统", stage="引擎下载")
+        selected_source = self.download_source if source is None else source
+        if selected_source not in SOURCE_NAMES:
+            raise VoiceError('ENGINE_SOURCE_UNSUPPORTED', '请选择可用的引擎下载来源', stage='引擎下载')
         with self.lock:
             if self.closed or self.manager.stopping.is_set():
                 raise VoiceError("SERVICE_STOPPING", "服务正在停止", stage="引擎下载")
             if self.checking_updates or any(t.is_alive() for t in self.threads.values()):
                 raise VoiceError("DOWNLOAD_BUSY", "已有推理引擎正在下载或安装，请等待或暂停", stage="引擎下载")
+            if source is not None:
+                with self.config.lock:
+                    value = self.config.read()
+                    atomic_json(self.config.path, {**value, 'engine_download_source': selected_source})
             event = threading.Event()
             self.cancel[backend] = event
             release = self.recommended if upgrade else self.catalog
-            self.states[backend] = {"status": "downloading", "received": 0, "error": "", "upgrade": upgrade, "target_version": release["version"]}
+            self.states[backend] = {"status": "downloading", "received": 0, "error": "", "upgrade": upgrade,
+                                    "target_version": release["version"], "source": selected_source}
             thread = threading.Thread(target=self._install, args=(backend, event, release, upgrade), name="engine-download", daemon=True)
             self.threads[backend] = thread
             thread.start()
@@ -291,13 +307,8 @@ class EngineManager:
                     self._state(backend, archive=archive["name"], **changes)
                 url = f"https://github.com/0xShug0/audio.cpp/releases/download/{release['version']}/{archive['name']}"
                 cached = self.download_dir / archive["name"]
-                try:
-                    download_file(cached, archive, url, event, self.client_factory, progress)
-                except ValueError:
-                    # Complete archives are only our download cache; a corrupt one must not trap retries.
-                    if cached.is_file():
-                        cached.unlink()
-                    raise
+                download_archive(cached, archive, url, event, self.client_factory, progress,
+                                 self.states[backend].get('source', self.download_source))
                 completed += archive["size"]
             self._state(backend, status="extracting", received=completed)
             for archive in missing_archives:

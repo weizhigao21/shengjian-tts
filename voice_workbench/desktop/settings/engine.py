@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from ...ui import ElidedLabel, button, icon, label
+from ...engine_sources import SOURCE_NAMES
 from .common import size_text, DOWNLOAD_STATES, ARCHIVE_STATES
 
 
@@ -32,6 +33,13 @@ class EngineSettings:
         self.engine_backend.addItem("CPU 便携版", "cpu")
         self.engine_backend.setFixedWidth(240)
         self.engine_backend.currentIndexChanged.connect(self.render_engine)
+        self.engine_source = QComboBox()
+        for key, name in SOURCE_NAMES.items():
+            self.engine_source.addItem(name, key)
+        self.engine_source.setFixedWidth(240)
+        self.engine_source.setToolTip('自动模式依次尝试 ghfast、GH-Proxy 和官方直连。第三方仅用于下载，文件仍按官方 SHA-256 校验。暂停后可更换来源继续下载。')
+        self.engine_source_dirty = False
+        self.engine_source.currentIndexChanged.connect(self._engine_source_changed)
         self.engine_status = ElidedLabel("等待服务连接")
         self.engine_status.setProperty("role", "muted")
         self.engine_verify = button("验证", self.verify_engine, "check", "ghost")
@@ -54,6 +62,7 @@ class EngineSettings:
         self.engine_rollback.setEnabled(False)
         layout.addWidget(self.settings_group([
             self.settings_row("计算设备", controls=(self.engine_backend,)),
+            self.settings_row("下载来源", controls=(self.engine_source,)),
             self.settings_row("推理内核", self.engine_description, (self.engine_verify, self.engine_download, self.engine_more)),
             self.settings_row("版本维护", "新版本单独安装，旧版本保留供回退。", (self.engine_check, self.engine_rollback))]))
         state = QHBoxLayout()
@@ -160,6 +169,13 @@ class EngineSettings:
         self.engine_download.setEnabled(self.owner.ready and engine.get("supported", True) and status != "pausing"
                                         and not engine.get("checking_updates") and (busy or (not any_busy and (not active or upgrade))))
         self.engine_check.setEnabled(self.owner.ready and not any_busy and self.engine_check.text() != "检查中…")
+        self.engine_source.setEnabled(self.owner.ready and not any_busy)
+        if not self.engine_source_dirty:
+            index = self.engine_source.findData(engine.get('download_source', 'auto'))
+            if index >= 0:
+                self.engine_source.blockSignals(True)
+                self.engine_source.setCurrentIndex(index)
+                self.engine_source.blockSignals(False)
         self.engine_rollback.setEnabled(self.owner.ready and not any_busy and option.get("can_rollback", False))
         self.engine_rollback.setToolTip("回退到 " + (option.get("rollback_version") or "旧引擎"))
         self.local_engine_action.setEnabled(self.owner.ready and not any_busy)
@@ -168,7 +184,10 @@ class EngineSettings:
                                        "\n保存目录：" + str(self.owner.data_dir / "runtime"))
         self.engine_status.setText("等待服务连接" if not self.owner.ready else DOWNLOAD_STATES[status] if busy else
                                    "已拥有 · 当前使用" if active else "已拥有" if option.get("installed") else DOWNLOAD_STATES.get(status, status))
-        self.engine_status.setToolTip(self.engine_status.text() + "\n" + option.get("archive", "") + "\n" + option.get("description", entry["description"]))
+        source_detail = '下载来源：' + SOURCE_NAMES.get(option.get('active_source'), SOURCE_NAMES.get(option.get('source'), '未开始下载'))
+        source_detail += ''.join(f"\n{SOURCE_NAMES.get(e['source'], e['source'])}：{e['message']}" for e in option.get('source_errors', []))
+        self.engine_status.setToolTip(self.engine_status.text() + "\n" + option.get("archive", "") + "\n" +
+                                     option.get("description", entry["description"]) + "\n" + source_detail)
         archives = option.get("archives") or [{**a, "received": a["size"] if option.get("installed") else 0,
                                                "status": "done" if option.get("installed") else "available"}
                                               for a in entry["archives"]]
@@ -228,8 +247,14 @@ class EngineSettings:
         option = next((e for e in engine.get("options", []) if e["backend"] == backend), {})
         action = ("upgrade" if option.get("update_available") or option.get("upgrade") else
                   "use" if option.get("installed") and option.get("status") not in ("paused", "failed") else "download")
-        self.mutate(lambda c: c.post(f"/models/runtime/{action}", json={"backend": backend}),
+        payload = {'backend': backend}
+        if action != 'use':
+            payload['source'] = self.engine_source.currentData()
+        self.mutate(lambda c: c.post(f"/models/runtime/{action}", json=payload),
                     "已启用推理引擎。" if action == "use" else "引擎开始下载，完成后自动配置；设置中可查看进度。")
+
+    def _engine_source_changed(self, *_):
+        self.engine_source_dirty = True
 
     def pause_engine(self):
         backend = self.engine_backend.currentData()

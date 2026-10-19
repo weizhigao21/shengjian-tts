@@ -31,9 +31,9 @@ def batch_project(tmp_path):
     return environment / "Scripts/python.exe"
 
 
-def run_batch(tmp_path):
+def run_batch(tmp_path, **environment):
     return subprocess.run(["cmd.exe", "/d", "/c", "打包.bat", "--no-pause"], cwd=tmp_path,
-        env=dict(os.environ, PIP_NO_INDEX="1"), capture_output=True, text=True,
+        env=dict(os.environ, PIP_NO_INDEX="1", **environment), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=60)
 
 
@@ -61,3 +61,25 @@ def test_batch_explains_failed_pip_bootstrap_and_never_reaches_build(tmp_path):
     assert "无法自动安装 pip" in result.stdout
     assert "确保包含 pip 和 ensurepip" in result.stdout
     assert not (tmp_path / "build-reached.json").exists()
+
+
+def test_batch_skips_virtual_environment_from_another_machine(tmp_path):
+    if not shutil.which('py'):
+        pytest.skip('requires the Windows Python launcher')
+    probe = subprocess.run(['py', '-3.10', '-c',
+        'import sys,struct; assert sys.version_info >= (3,10) and struct.calcsize("P") == 8; print(sys.executable)'],
+        capture_output=True, text=True, encoding='utf-8')
+    if probe.returncode:
+        pytest.skip('requires a registered 64-bit Python 3.10')
+    python = batch_project(tmp_path)
+    config = tmp_path / '.venv/pyvenv.cfg'
+    config.write_text(f'home = {tmp_path / "removed-python"}\ninclude-system-site-packages = false\n')
+    broken = subprocess.run([str(python), '-c', 'pass'], capture_output=True)
+    assert broken.returncode != 0
+    # Reuse only the test's fake PyInstaller metadata. No packages are installed
+    # into the real interpreter selected by the launcher.
+    result = run_batch(tmp_path, PYTHONPATH=str(tmp_path / '.venv/Lib/site-packages'))
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads((tmp_path / 'build-reached.json').read_text())
+    assert Path(report['python']) == Path(probe.stdout.strip())
+    assert '项目虚拟环境已失效' in result.stdout

@@ -202,6 +202,20 @@ class PlaybackController:
         return [row for row, item in enumerate(self.visible_segments if self.job_data else [])
                 if item["status"] == "done" and item.get("audio") and (self.data_dir / "audio" / item["audio"]).is_file()]
 
+    def segment_audio_files(self, row):
+        """The dragged row's file; an empty result keeps the press an ordinary click."""
+        item = self.visible_segments[row] if self.job_data and 0 <= row < len(self.visible_segments) else None
+        if not item or item["status"] != "done" or not item.get("audio"):
+            return []
+        return [self.data_dir / "audio" / item["audio"]]
+
+    def segment_audio_title(self, row):
+        item = self.visible_segments[row] if self.job_data and 0 <= row < len(self.visible_segments) else None
+        if not item:
+            return ""
+        text = re.sub(r"\s+", " ", item["text"]).strip()
+        return f"{item['idx']:04d} · {text[:16] or '音频'}"
+
     def adjacent_row(self, direction, indices=None):
         row = self.segments_table.currentRow()
         playable = [i for i in self.playable_rows() if indices is None or self.visible_segments[i]["idx"] in indices]
@@ -332,9 +346,9 @@ class PlaybackController:
         self.retry_button.setVisible(self.editor_mode == "article")
         self.cancel_button.setVisible(self.editor_mode == "article")
         self.segments_table.setColumnHidden(5, not counts["failed"])
-        self.result_hint.setText("双击失败片段查看原因 · 已完成音频可右键保存到声音库" if counts["failed"] else
-            "仅显示当前对白框的音频 · 右键保存到声音库" if self.editor_mode == "dialogue" else
-            "点击片段播放 · 右键保存到声音库 · 每次生成保留在当前作品")
+        self.result_hint.setText("双击失败片段查看原因 · 已完成音频可右键保存到声音库，也可以直接拖到其他程序" if counts["failed"] else
+            "仅显示当前对白框的音频 · 可拖到其他程序或右键保存到声音库" if self.editor_mode == "dialogue" else
+            "点击片段播放 · 把音频拖到其他程序即可直接使用 · 右键保存到声音库")
         for row, item in enumerate(self.visible_segments):
             color = "#ad5427" if item["status"] == "failed" else "#3c7a51" if item["status"] == "done" else "#88888e"
             cell = self.segments_table.item(row, 4)

@@ -64,6 +64,31 @@ class PredictorGraphs:
             except RuntimeError as exc:
                 raise GraphStateError('图录制后无法恢复随机数状态，释放工作进程并回退。') from exc
 
+    def drop(self, entry):
+        import torch
+        torch.cuda.synchronize(entry[1].device)
+        del entry
+
+    def make_room(self, embeds):
+        """Release cached graph pools before the free-memory gate.
+
+        An earlier graph keeps its private pool reserved in PyTorch's allocator, so
+        the driver reports almost no free memory and a new batch shape (for example
+        a shorter trailing group) would be refused even though those blocks are
+        reclaimable. Evict, return the blocks, then re-check.
+        """
+        import torch
+        while len(self.entries) >= self.max_entries:
+            self.drop(self.entries.popitem(last=False)[1])
+        empty = getattr(torch.cuda, 'empty_cache', None)
+        if empty:
+            empty()
+        if self.entries and torch.cuda.mem_get_info(embeds.device)[0] < self.minimum_free_bytes:
+            # Only the current shape is worth keeping when memory is this tight.
+            self.drop(self.entries.popitem(last=False)[1])
+            if empty:
+                empty()
+
     def run(self, embeds, parameters, forward):
         import torch
         if (embeds.device.type != 'cuda' or embeds.dtype != torch.float16
@@ -78,15 +103,11 @@ class PredictorGraphs:
             self.fallbacks += 1
             return forward(embeds)
         if key not in self.entries:
+            self.make_room(embeds)
             if torch.cuda.mem_get_info(embeds.device)[0] < self.minimum_free_bytes:
                 self.reject(key, '空闲显存不足 512 MiB，保留专用循环。')
                 self.fallbacks += 1
                 return forward(embeds)
-            while len(self.entries) >= self.max_entries:
-                # Finish reads of the old output before dropping its private pool.
-                _, old_entry = self.entries.popitem(last=False)
-                torch.cuda.synchronize(old_entry[1].device)
-                del old_entry
             try:
                 self.entries[key] = self.capture(embeds, forward)
                 self.captures += 1

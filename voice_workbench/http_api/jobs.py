@@ -124,3 +124,35 @@ def cancel_generation(job_id: str, generation: int, request: Request):
     job(job_id, request, generation)
     m.cancel(job_id, generation)
     return job(job_id, request, generation)
+
+
+@router.get("/jobs/{job_id}/generations/{generation}/progress")
+def generation_progress(job_id: str, generation: int, request: Request):
+    result = manager(request).store.generation_progress(job_id, generation)
+    if result is None:
+        raise VoiceError('JOB_NOT_FOUND', '生成批次不存在', stage='批次查询')
+    for item in result['segments']:
+        # Workflow intake uses temporary delivery; ordinary jobs use /audio.
+        prefix = '/workflow/audio' if item.pop('audio_storage') == 'temporary' else '/audio'
+        item['audio_url'] = f"{prefix}/{item['audio']}" if item['audio'] else None
+    return result
+
+
+def pause_generation(job_id, generation, request, paused):
+    m = manager(request)
+    with m.lock:
+        if m.store.generation_progress(job_id, generation) is None:
+            raise VoiceError('JOB_NOT_FOUND', '生成批次不存在', stage='批次控制')
+        m.store.pause_generation(job_id, generation, paused)
+        m.wake.set()
+    return {'job_id': job_id, 'generation': generation, 'paused': paused}
+
+
+@router.post("/jobs/{job_id}/generations/{generation}/pause")
+def pause_generation_route(job_id: str, generation: int, request: Request):
+    return pause_generation(job_id, generation, request, True)
+
+
+@router.post("/jobs/{job_id}/generations/{generation}/resume")
+def resume_generation_route(job_id: str, generation: int, request: Request):
+    return pause_generation(job_id, generation, request, False)

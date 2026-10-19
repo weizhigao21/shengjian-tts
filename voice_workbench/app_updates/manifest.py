@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from .._vendor.pyupdater.apply import inspect_zip, payload_prefix, ApplyError
 from .._vendor.pyupdater.config import UpdateConfig
+from ..program_files import retired_documents
 
 MANIFEST = "program-files.json"
 UPDATER = "声笺更新器.exe"
@@ -133,4 +134,4 @@ def extract_verified(archive, staging, cfg, version):
             with zf.open(name) as source, target.open('wb') as dest:
                 import shutil
                 shutil.copyfileobj(source, dest, 1024 * 1024)
-    return tuple(n for n in files if n.split('/')[0] != '_internal' and n not in ('声笺.exe', '声笺服务.exe'))
+    return tuple(n for n in files if n.split('/')[0] != '_internal' and n not in ('声笺.exe', '声笺服务.exe')) + retired_documents(staging)
