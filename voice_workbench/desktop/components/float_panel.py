@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import QMimeData, QPoint, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QGuiApplication
+from PyQt6.QtCore import QMimeData, QPoint, QRectF, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QGuiApplication, QPainterPath, QPalette, QRegion
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QGraphicsDropShadowEffect,
-    QHBoxLayout, QHeaderView, QLabel, QPlainTextEdit, QPushButton, QSlider, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
+    QLabel, QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from ...library import friendly_name
@@ -17,6 +17,7 @@ from ...ui import AudioDrag, DragHandle, ORANGE
 from ..constants import STATES
 
 PANEL_WIDTH = 430
+CARD_RADIUS = 12
 ROW_HEIGHT = 28
 TABLE_MAX_HEIGHT = 196
 CHARS_PER_SECOND = 4.2
@@ -141,8 +142,12 @@ class FloatPanel(QWidget):
         self.signature = None
         self.collapsed = False
         self.busy = False
+        self.had_text = False
         self.setObjectName("floatPanel")
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # No WA_TranslucentBackground here on purpose: an ARGB window makes Windows
+        # fall back to grayscale antialiasing, so every label reads soft and the
+        # editor used to leave the placeholder behind the first typed characters.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("边剪边配")
         self.setFixedWidth(PANEL_WIDTH)
         self._build()
@@ -153,15 +158,11 @@ class FloatPanel(QWidget):
 
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.card = QFrame()
+        self.card = QFrame(self)
         self.card.setObjectName("floatCard")
-        shadow = QGraphicsDropShadowEffect(self.card)
-        shadow.setBlurRadius(26)
-        shadow.setOffset(0, 6)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        self.card.setGraphicsEffect(shadow)
+        self.card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         outer.addWidget(self.card)
 
         layout = QVBoxLayout(self.card)
@@ -232,7 +233,10 @@ class FloatPanel(QWidget):
         self.editor.setObjectName("floatEditor")
         self.editor.setPlaceholderText("输入台词，回车换行…")
         self.editor.setFixedHeight(84)
-        self.editor.textChanged.connect(self._refresh_stats)
+        palette = self.editor.palette()
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#9b9b9f"))
+        self.editor.setPalette(palette)
+        self.editor.textChanged.connect(self._text_changed)
         self.editor.submit.connect(self._request_generate)
         body_layout.addWidget(self.editor)
 
@@ -361,6 +365,15 @@ class FloatPanel(QWidget):
         speed = self.voice_speeds.get(self.voice_id())
         if speed:
             self.speed_slider.setValue(int(round(float(speed) * 100)))
+        self._refresh_stats()
+
+    def _text_changed(self):
+        """Going from empty to filled (or back) repaints the whole viewport, so the
+        placeholder can never stay half-covered by the first typed character."""
+        filled = bool(self.editor.toPlainText())
+        if filled != self.had_text:
+            self.had_text = filled
+            self.editor.viewport().update()
         self._refresh_stats()
 
     def _refresh_stats(self, *args):
@@ -505,11 +518,19 @@ class FloatPanel(QWidget):
         self.brand.setText("边剪边配" if not self.collapsed else f"边剪边配 · {self.state.text()}")
         self._resize()
 
+    def resizeEvent(self, event):
+        # An opaque window cannot round its own corners; the mask keeps the card's
+        # radius without handing the whole surface back to the compositor.
+        super().resizeEvent(event)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), CARD_RADIUS, CARD_RADIUS)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
     def _resize(self):
         self.setMaximumHeight(16777215)
         self.setMinimumHeight(0)
         if self.collapsed:
-            self.setFixedHeight(self.bar.sizeHint().height() + 24)
+            self.setFixedHeight(self.bar.sizeHint().height() + 2)
             return
         self.adjustSize()
 
@@ -572,42 +593,43 @@ class FloatPanel(QWidget):
 
 
 PANEL_STYLE = """
-QFrame#floatCard { background: #fffdfb; border: 1px solid #ded7cd; border-radius: 13px; }
-QWidget#floatBar { background: #f7f1e9; border-top-left-radius: 13px; border-top-right-radius: 13px; }
+QWidget#floatPanel { background: #fffdfb; }
+QFrame#floatCard { background: #fffdfb; border: 1px solid #ded7cd; border-radius: 12px; }
+QWidget#floatBar { background: #f7f1e9; border-top-left-radius: 12px; border-top-right-radius: 12px; }
 QLabel#floatMark { background: #e0651c; border-radius: 4px; }
-QLabel#floatBrand { font-size: 13px; font-weight: 600; color: #18181a; }
-QLabel#floatState { font-size: 11px; color: #8b8b90; }
-QLabel#floatHint { font-size: 11px; color: #77777c; }
-QLabel#floatSpeedValue { font-size: 11px; color: #55555a; }
-QLabel#floatEmpty { font-size: 11px; color: #a3a3a8; padding: 14px 0; line-height: 1.6; }
-QLabel#floatError { font-size: 11px; color: #b4453f; padding: 2px 0; }
+QLabel#floatBrand { font-size: 14px; font-weight: 600; color: #18181a; }
+QLabel#floatState { font-size: 12px; color: #7c7c82; }
+QLabel#floatHint { font-size: 12px; color: #6f6f75; }
+QLabel#floatSpeedValue { font-size: 12px; color: #4f4f55; }
+QLabel#floatEmpty { font-size: 12px; color: #9c9ca1; padding: 14px 0; line-height: 1.6; }
+QLabel#floatError { font-size: 12px; color: #b4453f; padding: 2px 0; }
 QFrame#floatSeparator { background: #efe8df; border: none; }
 QPushButton { font-family: inherit; }
 QPushButton#floatFlat { border: 1px solid #e2dbd1; border-radius: 6px; background: #ffffff;
-                        font-size: 11px; color: #55555a; padding: 0 8px; }
+                        font-size: 12px; color: #4f4f55; padding: 0 9px; }
 QPushButton#floatFlat:hover { background: #f6f0ea; border-color: #cfc5b8; }
-QPushButton#floatClose { border: none; background: transparent; font-size: 14px; color: #8b8b90; }
+QPushButton#floatClose { border: none; background: transparent; font-size: 15px; color: #7c7c82; }
 QPushButton#floatClose:hover { background: #f0d9cd; color: #b4453f; }
 QComboBox#floatVoice { border: 1px solid #e2dbd1; border-radius: 7px; background: #ffffff;
-                       padding: 3px 8px; font-size: 12px; color: #18181a; }
-QComboBox#floatVoice:disabled { color: #a3a3a8; }
+                       padding: 3px 8px; font-size: 13px; color: #18181a; }
+QComboBox#floatVoice:disabled { color: #9c9ca1; }
 QComboBox#floatVoice::drop-down { border: none; width: 16px; }
-QPlainTextEdit#floatEditor { border: 1px solid #e2dbd1; border-radius: 8px; background: #ffffff;
-                             padding: 5px 7px; font-size: 13px; color: #18181a;
+QPlainTextEdit#floatEditor { border: 1px solid #e2dbd1; border-radius: 8px; background-color: #ffffff;
+                             padding: 5px 7px; font-size: 14px; color: #18181a;
                              selection-background-color: #f4d9c5; selection-color: #18181a; }
 QPlainTextEdit#floatEditor:focus { border-color: #e0a173; }
 QSlider#floatSpeed::groove:horizontal { height: 3px; background: #e8e1d8; border-radius: 2px; }
 QSlider#floatSpeed::sub-page:horizontal { background: #e0651c; border-radius: 2px; }
 QSlider#floatSpeed::handle:horizontal { background: #ffffff; border: 1px solid #d8a273;
                                         width: 11px; height: 11px; margin: -5px 0; border-radius: 6px; }
-QCheckBox { font-size: 11px; color: #6f6f74; spacing: 5px; }
+QCheckBox { font-size: 12px; color: #66666c; spacing: 5px; }
 QCheckBox::indicator { width: 12px; height: 12px; border: 1px solid #cfc5b8; border-radius: 3px; background: #ffffff; }
 QCheckBox::indicator:checked { background: #e0651c; border-color: #e0651c; }
 QPushButton#floatGenerate { background: #e0651c; color: #ffffff; border: none; border-radius: 8px;
-                            font-size: 12px; font-weight: 600; padding: 6px 0; }
+                            font-size: 13px; font-weight: 600; padding: 7px 0; }
 QPushButton#floatGenerate:hover { background: #cc5a17; }
 QPushButton#floatGenerate:disabled { background: #e9dcd0; color: #a89c90; }
-QTableWidget#floatTasks { border: none; background: transparent; font-size: 12px; color: #2a2a2c; }
+QTableWidget#floatTasks { border: none; background: transparent; font-size: 13px; color: #2a2a2c; }
 QTableWidget#floatTasks::item { border-bottom: 1px solid #f1ebe3; padding: 0 2px; }
 QTableWidget#floatTasks::item:selected { background: #f4e7db; color: #18181a; }
 """

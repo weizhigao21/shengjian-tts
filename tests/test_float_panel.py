@@ -270,3 +270,40 @@ def test_the_panel_is_its_own_top_level_window(window):
 def test_the_creation_entry_offers_the_mode(window):
     assert "float" in window.creation_choices
     assert window.creation_choices["float"].text().startswith("边剪边配")
+
+
+def test_the_panel_paints_opaque_so_windows_keeps_clear_type(window):
+    """An ARGB window loses subpixel antialiasing; the labels turn grey and soft."""
+    panel = window.float_panel
+    assert not panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert panel.card.graphicsEffect() is None
+
+
+def test_the_first_typed_character_repaints_the_whole_editor(window):
+    panel = window.float_panel
+    panel.editor.clear()
+    assert panel.had_text is False
+    panel.editor.setPlainText("你")
+    assert panel.had_text is True
+    panel.editor.clear()
+    assert panel.had_text is False
+
+
+def test_creation_cards_wrap_three_per_row(window):
+    from PyQt6.QtWidgets import QGridLayout
+    from voice_workbench.desktop.layout.creation import creation_home
+
+    keep = window.creation_choices
+    try:
+        page = creation_home(window)
+        grid = page.findChildren(QGridLayout)[0]
+        placed = {}
+        for index in range(grid.count()):
+            row, column, _, _ = grid.getItemPosition(index)
+            placed[grid.itemAt(index).widget().text().split("\n")[0]] = (row, column)
+        assert placed["文章"] == (0, 0)
+        assert placed["音频编辑"] == (0, 2)
+        assert placed["语音识别"] == (1, 0)
+        assert placed["边剪边配"] == (1, 1)
+    finally:
+        window.creation_choices = keep
