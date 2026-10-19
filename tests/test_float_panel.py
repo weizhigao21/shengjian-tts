@@ -289,6 +289,29 @@ def test_the_first_typed_character_repaints_the_whole_editor(window):
     assert panel.had_text is False
 
 
+def test_the_panel_shrinks_back_when_the_list_shrinks(window):
+    """A batch of lines used to leave the window at its tallest height for good."""
+    panel = window.float_panel
+    panel.show_job({"segments": [{"idx": i, "text": f"第{i}句", "status": "done", "audio": None}
+                                 for i in range(4)]})
+    QApplication.processEvents()
+    tall = panel.height()
+    panel.show_job({"segments": [{"idx": 0, "text": "第一句", "status": "done", "audio": None}]})
+    QApplication.processEvents()
+    assert panel.height() < tall
+    assert panel.height() == panel.layout().sizeHint().height()
+    panel.show_job({"segments": []})
+    QApplication.processEvents()
+    assert panel.height() < tall
+    assert panel.height() == panel.layout().sizeHint().height()
+
+
+def test_the_layout_never_stretches_the_window_behind_our_back(window):
+    from PyQt6.QtWidgets import QLayout
+    layout = window.float_panel.layout()
+    assert layout.sizeConstraint() == QLayout.SizeConstraint.SetNoConstraint
+
+
 def test_creation_cards_wrap_three_per_row(window):
     from PyQt6.QtWidgets import QGridLayout
     from voice_workbench.desktop.layout.creation import creation_home

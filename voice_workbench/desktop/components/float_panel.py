@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import QMimeData, QPoint, QRectF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QCoreApplication, QEvent, QMimeData, QPoint, QRectF, Qt, QTimer, QUrl, pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QGuiApplication, QPainterPath, QPalette, QRegion
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QLabel, QLayout, QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from ...library import friendly_name
@@ -143,6 +145,10 @@ class FloatPanel(QWidget):
         self.collapsed = False
         self.busy = False
         self.had_text = False
+        self.resize_timer = QTimer(self)
+        self.resize_timer.setSingleShot(True)
+        self.resize_timer.setInterval(0)
+        self.resize_timer.timeout.connect(self._fit_height)
         self.setObjectName("floatPanel")
         # No WA_TranslucentBackground here on purpose: an ARGB window makes Windows
         # fall back to grayscale antialiasing, so every label reads soft and the
@@ -158,6 +164,10 @@ class FloatPanel(QWidget):
 
     def _build(self):
         outer = QVBoxLayout(self)
+        # Otherwise the layout keeps raising the window's minimum height to its
+        # own size, so a taller list permanently stretches the panel and every
+        # later shrink is refused — the window only ever grows.
+        outer.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.card = QFrame(self)
@@ -527,12 +537,33 @@ class FloatPanel(QWidget):
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _resize(self):
-        self.setMaximumHeight(16777215)
-        self.setMinimumHeight(0)
+        """Fit the window to what is on screen.
+
+        Reading the layout in the same call that changed a row still describes
+        the previous list: the per-item size caches are dropped by a
+        LayoutRequest the event loop has not dispatched yet. Folding is measured
+        right away (it only needs the title bar), everything else is measured on
+        the next turn, when the layouts have settled — otherwise the panel only
+        ever grew and pushed the body down, leaving a gap under the last row.
+        """
         if self.collapsed:
+            self._fit_height()
+        self.resize_timer.start()
+
+    def _fit_height(self):
+        if self.collapsed:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
             self.setFixedHeight(self.bar.sizeHint().height() + 2)
             return
-        self.adjustSize()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest.value)
+        self.layout().invalidate()
+        self.card.layout().invalidate()
+        self.body.layout().invalidate()
+        height = max(1, self.layout().sizeHint().height())
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+        self.setFixedHeight(height)
 
     def present(self):
         self.show()
