@@ -134,7 +134,7 @@ def test_recent_works_reads_all_modes_without_writing_or_creating_databases(tmp_
     assert [r['created'] for r in records] == sorted((r['created'] for r in records), reverse=True)
     assert len(read_recent(tmp_path, 2)) == 2
     assert {p: p.read_bytes() for p in before} == before
-    assert len(set(WORK_ICONS.values())) == 4
+    assert len(set(WORK_ICONS.values())) == 5
 
 
 def test_new_recent_endpoint_leaves_jobs_contract_and_workflow_filtering_unchanged(tmp_path, monkeypatch):

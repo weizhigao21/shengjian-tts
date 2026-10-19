@@ -6,12 +6,26 @@ import sqlite3
 from .naming import work_type
 from .store import Store
 
-WORK_NAMES = {"article": "文章", "dialogue": "对话", "audio": "音频编辑", "recognition": "语音识别"}
-WORK_ICONS = {"article": "article", "dialogue": "dialogue", "audio": "audio", "recognition": "recognize"}
+WORK_NAMES = {"article": "文章", "dialogue": "对话", "audio": "音频编辑", "recognition": "语音识别",
+              "float": "边剪边配"}
+WORK_ICONS = {"article": "article", "dialogue": "dialogue", "audio": "audio", "recognition": "recognize",
+              "float": "float"}
+# A float work is an ordinary job with segments, so it carries no mode of its own in
+# editor_state; the title the panel gives it is the mark that survives restarts.
+FLOAT_TITLE = "边剪边配"
+
+
+def is_float_work(value):
+    return str(value.get("title") or "").startswith(FLOAT_TITLE)
 
 
 def task_type(value):
-    return value.get("task_type") or work_type(value)
+    kind = value.get("task_type")
+    if kind:
+        return kind
+    if is_float_work(value):
+        return "float"
+    return work_type(value)
 
 
 def external_work(kind, identity, name, created, updated=None, status="done"):

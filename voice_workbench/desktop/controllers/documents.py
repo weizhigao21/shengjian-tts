@@ -49,7 +49,9 @@ class DocumentController:
                 stamp = datetime.fromtimestamp(value["created"]).strftime("%Y-%m-%d %H:%M:%S")
                 status = "导入中" if value["status"] == "importing" else STATES.get(value["status"], value["status"])
                 tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{status} · {value['completed']}/{value['total']}"
-                if task_type(value) not in ("audio", "recognition"):
+                if task_type(value) == "float":
+                    tooltip += "\n点击这一行，在小窗里接着配音"
+                elif task_type(value) not in ("audio", "recognition"):
                     tooltip += "\n把这一行拖到其他程序，可带走该作品最新生成的音频"
                 for col, text in enumerate((display_title(value), status, f"{value['completed']}/{value['total']}")):
                     cell = self.update_table_cell(self.jobs_table, row, col, text, tooltip)
@@ -130,6 +132,11 @@ class DocumentController:
         row = self.jobs_table.currentRow()
         if row >= 0 and self.jobs_table.item(row, 0):
             value = self.jobs_table.item(row, 0).data(257)
+            if task_type(value) == "float":
+                # A float work belongs to the panel, so picking its row must not load
+                # it into the article editor and take the page away from the timeline.
+                self.open_float_work(self.jobs_table.item(row, 0).data(256))
+                return
             if task_type(value) in ("audio", "recognition"):
                 self.open_other_recent(value)
                 return
@@ -195,10 +202,15 @@ class DocumentController:
             self.jobs_table.selectRow(row)
             self.jobs_table.blockSignals(False)
             self.select_job()
-        menu.addAction(icon("pen"), "打开任务", open_task)
+        floating = task_type(value) == "float"
+        if floating:
+            menu.addAction(icon("float"), "在小窗里打开", lambda: self.open_float_work(value["id"]))
+        else:
+            menu.addAction(icon("pen"), "打开任务", open_task)
         if task_type(value) in ("audio", "recognition"):
             return menu
-        menu.addAction(icon("pen"), "重命名", lambda: self.rename_job(value))
+        if not floating:
+            menu.addAction(icon("pen"), "重命名", lambda: self.rename_job(value))
         menu.addSeparator()
         action = menu.addAction(icon("trash", "#b24932"), "取消并删除任务" if value["status"] in ("running", "queued") else "删除任务",
                                lambda: self.delete_job(value["id"]))

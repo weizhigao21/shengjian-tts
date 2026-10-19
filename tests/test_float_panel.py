@@ -312,24 +312,29 @@ def test_the_layout_never_stretches_the_window_behind_our_back(window):
     assert layout.sizeConstraint() == QLayout.SizeConstraint.SetNoConstraint
 
 
-def test_the_sidebar_entry_carries_the_float_mark(window):
-    from voice_workbench.ui import ORANGE, icon
-
-    entry = window.float_entry
-    assert entry.text() == "边剪边配"
-    assert entry.icon().isNull() is False
-    shown = entry.icon().pixmap(18, 18).toImage()
-    assert shown == icon("float", ORANGE).pixmap(18, 18).toImage()
+float_job = {"id": "job-float", "title": "边剪边配 10-19 22:10", "status": "done", "completed": 1,
+             "total": 1, "created": 1760000000, "source_id": "job-float"}
 
 
-def test_the_sidebar_entry_hands_over_to_the_panel(window):
+def test_a_float_work_is_its_own_kind_in_the_task_list():
+    from voice_workbench.recent_works import WORK_ICONS, WORK_NAMES, task_type
+
+    assert task_type(float_job) == "float"
+    assert WORK_ICONS["float"] == "float"
+    assert WORK_NAMES["float"] == "边剪边配"
+    assert task_type({"title": "豆包", "editor_state": {"mode": "dialogue"}}) == "dialogue"
+
+
+def test_clicking_a_float_row_reopens_the_panel(window, monkeypatch):
+    attach(monkeypatch, window, FakeClient({"segments": []}))
     window.close_float_mode(restore=False)
+    window.selected_job = None
+    window.render_jobs([float_job])
+    window.jobs_table.selectRow(0)
     QApplication.processEvents()
-    assert window.float_panel.isVisible() is False
-    window.float_entry.click()
-    QApplication.processEvents()
+    assert window.float_job_id == "job-float"
     assert window.float_panel.isVisible() is True
-    assert window.float_timer.isActive()
+    assert window.selected_job is None
 
 
 def test_creation_cards_wrap_three_per_row(window):

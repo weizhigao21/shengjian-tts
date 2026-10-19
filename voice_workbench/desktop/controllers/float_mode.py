@@ -59,6 +59,17 @@ class FloatModeController:
             self.showMinimized()
         self.float_poll()
 
+    def open_float_work(self, job_id):
+        """Reopen an existing float work in the panel instead of the article editor."""
+        if self.closing:
+            return
+        self.float_job_id = job_id
+        self.float_polling = False
+        panel = self.ensure_float_panel()
+        self.open_float_mode()
+        panel.set_state("读取中")
+        self.float_poll()
+
     def close_float_mode(self, restore=True):
         if self.float_panel is not None:
             self.float_panel.save_state()
