@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 import json
 from pathlib import Path
+import queue
 import sys
 import threading
 import time
@@ -309,11 +310,61 @@ def test_real_worker_ipc_is_persistent_and_cancellable_without_torch(tmp_path, m
         process.interrupt()
 
 
-def test_batch_budget_scales_with_text_and_caps_at_preset_timeout():
-    from voice_workbench.batch_inference.process import batch_budget
-    assert batch_budget([{'text': '你好世界'}] * 8, 600) == 45
+def test_a_job_with_rows_still_waiting_keeps_the_batch_worker_resident(batch_manager, monkeypatch):
+    """Unloading between two batches of one job turned every later batch cold."""
+    manager, native, probe = batch_manager
+    assert manager.batch_idle() is True and manager.store.pending() is False
+    probe.block.set()
+    job_id = manager.submit('两批', 'qwen', [{'text': f'第{i}句'} for i in range(6)])
+    for _ in range(200):
+        if probe.calls:
+            break
+        time.sleep(.02)
+    assert probe.calls
+    assert manager.store.pending() is True
+    assert manager.batch_idle() is False
+    probe.block.clear()
+    wait_job(manager.store.get, job_id, ('done',))
+    assert manager.store.pending() is False
+    assert manager.batch_idle() is True
+    # The gap between two batches of one job looks idle to `active` alone.
+    monkeypatch.setattr(manager.store, 'pending', lambda: True)
+    assert manager.batch_idle() is False
+
+
+def test_batch_budget_scales_with_rows_text_and_caps_at_preset_timeout():
+    from voice_workbench.batch_inference.process import COLD_ALLOWANCE, batch_budget
+    # Every extra row widens each decoding frame: eight short lines is the slow case.
+    assert batch_budget([{'text': '你好世界'}] * 8, 600) == 8 * 14
+    assert batch_budget([{'text': '你好世界'}] * 2, 600) == 60
     assert batch_budget([{'text': '字' * 2400}], 600) == 600
     assert batch_budget([], 30) == 30
+    # A cold worker pays for loading the weights before it renders anything.
+    items = [{'text': '一' * 40}] * 8
+    assert batch_budget(items, 600, loaded=False) == batch_budget(items, 600) + COLD_ALLOWANCE
+    assert batch_budget([{'text': '字' * 2400}], 600, loaded=False) == 600
+
+
+def test_the_stall_guard_is_told_whether_the_worker_is_already_warm(monkeypatch):
+    """A cold worker loads its weights first, so the guard must know which one it is."""
+    seen = []
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget',
+                        lambda items, timeout, loaded=True: seen.append(loaded) or 5)
+    process = BatchProcess(Path('.'))
+
+    class Pipe:
+        def write(self, _): pass
+        def flush(self): pass
+
+    answers = queue.Queue()
+    answers.put({'ok': True})
+    answers.put({'ok': True})
+    monkeypatch.setattr(process, 'start', lambda settings, signature: (SimpleNamespace(stdin=Pipe()), answers))
+    for warm in (False, True):
+        assert process.loaded is warm
+        assert process.generate(BatchSettings(python=sys.executable), 'one',
+                                {'items': [{'text': '一条文本'}]}, threading.Event(), 600) == {'ok': True}
+    assert seen == [False, True]
 
 
 def test_stalled_batch_is_dropped_on_the_estimated_budget_not_the_preset_timeout(tmp_path, monkeypatch):
@@ -321,7 +372,7 @@ def test_stalled_batch_is_dropped_on_the_estimated_budget_not_the_preset_timeout
     folder.mkdir(parents=True)
     (folder/'qwen_worker.py').write_text("import sys,time\nfor line in sys.stdin:\n time.sleep(30)\n")
     monkeypatch.setattr('voice_workbench.batch_inference.process.resource_root', lambda: tmp_path)
-    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda items, timeout: .3)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda items, timeout, loaded=True: .3)
     process = BatchProcess(tmp_path)
     try:
         started = time.monotonic()

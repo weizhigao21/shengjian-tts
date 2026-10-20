@@ -11,17 +11,31 @@ from ..errors import VoiceError
 from ..runtime import external_environment, resource_root
 
 
-def batch_budget(items, timeout):
+COLD_ALLOWANCE = 60
+ROW_ALLOWANCE = 14
+
+
+def batch_budget(items, timeout, loaded=True):
     """Bound how long one batch may hold its rows before it is treated as stalled.
 
     The preset timeout is a user-facing ceiling (600 s by default) and is far too
     long for a stuck worker: the job would sit at "running" with no audio for ten
-    minutes. Chinese speech runs at roughly four characters per second and the
-    slowest path (no CUDA graph) stays near RTF 1, so 2.5x the estimated audio plus
-    a fixed allowance leaves headroom while surfacing a stall within a minute.
+    minutes. So the budget comes from what the batch has to do: the audio it will
+    speak, plus a floor that grows with the number of rows, because every extra
+    row widens each decoding frame. Measured on a 2080 Ti, eight short lines take
+    32–48 s warm — a budget derived from the text alone called that a stall, and
+    the retry went to the native engine, which then renders the same lines one at
+    a time: slower than the wait it was meant to avoid.
+
+    A batch that has to start the worker also pays for loading the weights and
+    capturing the graph before it renders anything, so a cold run gets its own
+    allowance instead of being judged against a warm one.
     """
     chars = sum(len(item.get("text") or "") for item in items)
-    return min(timeout, max(45, int(chars / 4 * 2.5 + 20)))
+    spoken = chars / 4 * 2.5 + 20
+    rows = len(items) * ROW_ALLOWANCE
+    cold = 0 if loaded else COLD_ALLOWANCE
+    return min(timeout, max(60, int(spoken), rows) + cold)
 
 
 class BatchProcess:
@@ -74,7 +88,7 @@ class BatchProcess:
             raise VoiceError("CANCELLED", "任务已取消")
         process, answers = self.start(settings, signature)
         items = payload.get("items") or []
-        budget = batch_budget(items, timeout)
+        budget = batch_budget(items, timeout, self.loaded)
         try:
             process.stdin.write(json.dumps({"settings": settings.model_dump(), **payload}, ensure_ascii=False) + "\n")
             process.stdin.flush()

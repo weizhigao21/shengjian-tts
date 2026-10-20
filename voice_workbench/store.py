@@ -259,6 +259,13 @@ class Store:
                 job["work_type"], job["display_title"] = work_type(job), display_title(job)
             return jobs
 
+    def pending(self):
+        """Anything still waiting for the queue, batched or native."""
+        with self.lock, self.db:
+            return self.db.execute("""SELECT 1 FROM segments s JOIN jobs j ON j.id=s.job_id
+                WHERE s.status IN ('queued','running') AND s.queue_paused=0 AND j.deleted=0
+                AND j.status IN ('queued','running') LIMIT 1""").fetchone() is not None
+
     def next(self, job_id=None, admitted=None):
         with self.lock, self.db:
             row = self.db.execute("""SELECT s.job_id,s.idx FROM segments s JOIN jobs j ON j.id=s.job_id

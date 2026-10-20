@@ -151,6 +151,15 @@ class Manager(BatchExecution, InferenceTelemetry):
                     "performance": self.config.performance(), "performance_notice": self.performance_notice,
                     "queue": self.store.queued_job_count()}
 
+    def batch_idle(self):
+        """Worth unloading the batch worker: nothing running and nothing waiting.
+
+        A long job arrives in several batches. Releasing the worker on the short
+        idle window between them made every later batch start cold, and the load
+        time is what the stall guard used to read as a stuck inference.
+        """
+        return not self.active and not self.store.pending()
+
     def release_runners(self):
         if hasattr(self, "batch"):
             self.batch.process.interrupt()
@@ -270,7 +279,7 @@ class Manager(BatchExecution, InferenceTelemetry):
                             self.workflow_audio.expired()
                             next_cleanup = time.monotonic() + 60
                         cohort = next(iter(self.active.values()), None)
-                        if not cohort:
+                        if self.batch_idle():
                             self.batch.expire()
                         capacity = cohort["capacity"] if cohort else 4
                         if cohort and cohort["job_id"] in self.serial_jobs:
