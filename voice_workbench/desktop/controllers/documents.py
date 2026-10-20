@@ -148,6 +148,7 @@ class DocumentController:
                 self.document_dirty = False
                 self.clear_autoplay()
                 self.job_data = None
+                self.editor_job_id = None
                 self.segments_table.setRowCount(0)
                 self.segments_table.setCurrentCell(-1, -1)
                 self.auto_select_audio = True
@@ -187,6 +188,7 @@ class DocumentController:
         if self.editor_mode == "dialogue":
             self.select_dialogue_entry(self.dialogue_editor.selected_id)
         self.render_job(job)
+        self.editor_job_id = job["id"]
         if pending:
             self.document_timer.start(650)
 
@@ -255,7 +257,7 @@ class DocumentController:
         self.deleted_job_ids.add(job_id)
         if self.selected_job == job_id:
             self.clear_autoplay()
-            self.selected_job = self.job_data = None
+            self.selected_job = self.job_data = self.editor_job_id = None
             self.active_voice_snapshot = None
             self.segments_table.setRowCount(0)
             self.segments_table.setCurrentCell(-1, -1)
@@ -376,7 +378,7 @@ class DocumentController:
         self.save_document()
         self.clear_autoplay()
         self.set_page(0)
-        self.selected_job = self.job_data = None
+        self.selected_job = self.job_data = self.editor_job_id = None
         self.active_voice_snapshot = None
         self.jobs_table.blockSignals(True)
         self.jobs_table.clearSelection()
@@ -403,12 +405,16 @@ class DocumentController:
     def update_script_stats(self):
         from ...subtitles import parse_text
         text = self.document_text()
-        try:
-            segments = self.document_segments() if text.strip() else []
-            count = len(segments)
-            self.script_stats.setText(f"{len(text.strip())} 字  ·  {count} 个片段")
-            self.script_stats.setToolTip("")
-        except ValueError as exc:
-            self.script_stats.setText(f"{len(text.strip())} 字  ·  请检查音色或文本")
-            self.script_stats.setToolTip(str(exc))
+        # Walking the script for its segment count was part of the per-refresh
+        # work, five times per switch. The count only moves with the text.
+        if (self.editor_mode, text) != getattr(self, "stats_key", None):
+            self.stats_key = (self.editor_mode, text)
+            try:
+                segments = self.document_segments() if text.strip() else []
+                count = len(segments)
+                self.script_stats.setText(f"{len(text.strip())} 字  ·  {count} 个片段")
+                self.script_stats.setToolTip("")
+            except ValueError as exc:
+                self.script_stats.setText(f"{len(text.strip())} 字  ·  请检查音色或文本")
+                self.script_stats.setToolTip(str(exc))
         self.update_generation_actions()

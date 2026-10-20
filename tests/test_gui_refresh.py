@@ -108,3 +108,24 @@ def test_read_recent_is_read_only_and_handles_the_legacy_schema(tmp_path):
     assert path.read_bytes() == before
     with sqlite3.connect(path) as db:
         assert "deleted" not in {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
+
+
+def test_a_poll_cannot_fill_the_clip_list_of_a_task_the_editor_does_not_show(tmp_path, qtbot):
+    """A poll that beats the editor load left text and clip list from two works."""
+    window = populated_window(tmp_path, qtbot)
+    job = {"id": "work", "title": "片段列表", "created": time.time(), "status": "queued", "segments": [
+        {"idx": i, "text": f"片段{i}", "timestamp": "00:05.00", "created": time.time(),
+         "generation": 1, "status": "queued", "audio": "", "error": None, "cached": 0}
+        for i in range(1, 31)]}
+    window.editor_job_id = None
+    window.job_data = None
+    window.visible_segments = []
+    window.segments_table.setRowCount(0)
+    health = {"current": None, "queue": 0, "engine": {}}
+    window.render([health, window.voices, window.jobs, job, []])
+    assert window.segments_table.rowCount() == 0
+    window.open_job_data(job)
+    assert window.editor_job_id == "work" and window.segments_table.rowCount() == 30
+    window.render([health, window.voices, window.jobs, job, []])
+    assert window.segments_table.rowCount() == 30
+    window.close()

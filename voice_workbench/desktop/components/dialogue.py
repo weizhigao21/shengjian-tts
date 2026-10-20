@@ -1,11 +1,13 @@
 """Dialogue rows: a voice label, growing text editor and per-row actions."""
 from __future__ import annotations
+import json
 import uuid
 import math
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCharFormat
+from PyQt6.QtGui import QStandardItemModel
 from PyQt6.QtWidgets import (
     QApplication, QHBoxLayout, QLineEdit, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -13,15 +15,15 @@ from PyQt6.QtWidgets import (
 from ...services.dialogue import entry_revision, dialogue_id
 from ...ui import DragHandle, button, generation_elapsed, icon, ElidedLabel
 from ..model_labels import model_label
-from .voice_mentions import PresetScriptEditor, VOICE_ROLE
+from .voice_mentions import PresetScriptEditor, VOICE_ROLE, fill_voice_model
 from .delayed_tooltip import DelayedToolTip
 
 
 class DialogueInput(PresetScriptEditor):
     next_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, parent=None, model=None):
+        super().__init__(parent, model)
         self.setAcceptRichText(False)
         self.setObjectName("dialogueText")
         self.setStyleSheet("QTextEdit#dialogueText { background: white; font-size: 15px; }")
@@ -63,6 +65,14 @@ class DialogueInput(PresetScriptEditor):
         super().keyPressEvent(event)
 
 
+def _entry_key(entry):
+    """Everything a row shows, with blanks folded so a reload compares clean."""
+    return (entry.get("id"), (entry.get("text") or "").strip(), entry.get("voice_id"),
+            entry.get("voice_name") or "", entry.get("model_id"),
+            json.dumps(entry.get("overrides") or {}, sort_keys=True),
+            (entry.get("role_name") or "").strip())
+
+
 class DialogueRow(QWidget):
     def __init__(self, panel, entry):
         super().__init__(panel.body)
@@ -72,6 +82,7 @@ class DialogueRow(QWidget):
         self.latest = None
         self.record_count = 0
         self.effective_voice = None
+        self.status_signature = None
         self.press = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.setObjectName("dialogueRow")
@@ -128,7 +139,7 @@ class DialogueRow(QWidget):
         self.delete_button.setStyleSheet("QPushButton:hover { background: #fff0eb; }")
         header.addWidget(self.delete_button)
         layout.addLayout(header)
-        self.text = DialogueInput(self)
+        self.text = DialogueInput(self, panel.voice_model)
         self.text.setPlainText(entry.get("text", ""))
         self.text.set_voices(panel.voices)
         self.text.textChanged.connect(self.changed)
@@ -216,12 +227,14 @@ class DialogueRow(QWidget):
         return "\n".join(lines)
 
     def changed(self):
+        self.panel.invalidate_records()
         self.panel.changed.emit()
 
     def set_voice(self, voice):
         self.voice_id, self.voice_name = voice["id"], voice["name"]
         self.model_id, self.overrides = None, None
         self.refresh_voice()
+        self.panel.invalidate_records()
         self.panel.changed.emit()
         self.panel.voice_changed.emit(self.identity)
         self.text.setFocus()
@@ -258,35 +271,48 @@ class DialogueRow(QWidget):
         self.voice_id, self.voice_name = None, ""
         self.model_id, self.overrides = None, None
         self.refresh_voice()
+        self.panel.invalidate_records()
         self.panel.changed.emit()
         self.panel.voice_changed.emit(self.identity)
 
     def update_status(self, records, default_voice, ready):
         self.effective_voice = default_voice
-        self.record_count = sum(s.get("source_id") == self.identity for s in records)
-        latest = next((s for s in reversed(records) if s.get("source_id") == self.identity), None)
-        self.latest = next((s for s in reversed(records) if s.get("source_id") == self.identity and s["status"] == "done" and s.get("audio")), None)
-        self.play_button.setEnabled(bool(self.latest))
-        self.generate_button.setEnabled(ready and bool(self.text.toPlainText().strip()) and not (latest and latest["status"] in ("queued", "running")))
-        action = "重新生成这条对白" if latest else "生成这条对白"
-        self.generate_button.setIcon(icon("retry" if latest else "play", "#ffffff"))
+        self.record_count = len(records)
+        latest = next((s for s in reversed(records) if s["status"] == "done" and s.get("audio")), None)
+        self.latest = latest
+        newest = records[-1] if records else None
+        # Every refresh used to redo this row from scratch -- hash the entry,
+        # re-price the tooltip, repaint the label -- even when nothing about the
+        # line had changed. Ten of those passes ran inside one task switch, and
+        # the rows are the bulk of it. Compare what the row draws instead.
+        signature = (newest and newest.get("idx"), newest and newest.get("status"),
+                     newest and newest.get("source_revision"), bool(latest),
+                     ready, (default_voice or {}).get("id"), self.voice_id,
+                     self.text.toPlainText().strip(), len(self.panel.voices))
+        if signature == self.status_signature:
+            return
+        self.status_signature = signature
+        self.play_button.setEnabled(bool(latest))
+        self.generate_button.setEnabled(ready and bool(self.text.toPlainText().strip()) and not (newest and newest["status"] in ("queued", "running")))
+        action = "重新生成这条对白" if newest else "生成这条对白"
+        self.generate_button.setIcon(icon("retry" if newest else "play", "#ffffff"))
         self.generate_button.setToolTip(action)
         self.generate_button.setAccessibleName(action)
         if self.voice_id and not any(v["id"] == self.voice_id for v in self.panel.voices):
             status = "音色已删除"
-        elif latest and latest.get("source_revision") != entry_revision(self.entry(), self.panel.voices, default_voice):
-            status = "已修改" if latest["status"] in ("done", "failed", "cancelled") else "生成中 · 已修改"
-        elif latest:
+        elif newest and newest.get("source_revision") != entry_revision(self.entry(), self.panel.voices, default_voice):
+            status = "已修改" if newest["status"] in ("done", "failed", "cancelled") else "生成中 · 已修改"
+        elif newest:
             from ..constants import STATES
-            status = STATES[latest["status"]]
-            if latest["status"] == "done":
+            status = STATES[newest["status"]]
+            if newest["status"] == "done":
                 status = "已生成"
         else:
             status = "待生成"
         self.status.setText(status)
         color = "#a2462e" if "失败" in status or "已删除" in status else "#3c7a51" if "已生成" in status else "#c76726" if "修改" in status or "生成中" in status or "排队" in status else "#85858a"
         self.status.setStyleSheet("color: " + color + ";")
-        detail = generation_elapsed(latest)[1] if latest and latest["status"] == "done" else ((latest or {}).get("error") or {}).get("message", "")
+        detail = generation_elapsed(newest)[1] if newest and newest["status"] == "done" else ((newest or {}).get("error") or {}).get("message", "")
         self.status.setToolTip(status + ("\n" + detail if detail else ""))
         self.drag_handle.refresh()
 
@@ -302,6 +328,11 @@ class DialogueEditor(QScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.voices, self.rows = [], []
+        self.voices_key = ()
+        self.records_signature = None
+        self.voice_model = QStandardItemModel(self)
+        self.voice_presets = []
+        fill_voice_model(self.voice_model, [])
         self.selected_id = None
         self.audio_root = None
         self.reveal_row, self.reveal_margin, self.reveal_frames = None, 16, 0
@@ -323,13 +354,19 @@ class DialogueEditor(QScrollArea):
         self.load([])
 
     def load(self, entries):
+        entries = list(entries or [{"id": uuid.uuid4().hex, "text": ""}])
+        # Opening the task that is already in the editor rebuilt every row: a
+        # fresh text editor, completer and voice picker for each line. Compare
+        # the content first and leave the rows standing when nothing differs.
+        if self.rows and [_entry_key(r.entry()) for r in self.rows] == [_entry_key(e) for e in entries]:
+            return
         for row in self.rows:
             self.layout.removeWidget(row)
             row.hide()
             row.deleteLater()
         self.rows = []
         self.selected_id = None
-        for entry in entries or [{"id": uuid.uuid4().hex, "text": ""}]:
+        for entry in entries:
             self._insert(len(self.rows), entry)
 
     def _insert(self, index, entry):
@@ -404,9 +441,18 @@ class DialogueEditor(QScrollArea):
         return [r.entry() for r in self.rows]
 
     def set_voices(self, voices):
+        # Every poll handed the same presets to every row and re-rendered each
+        # voice chip for nothing; the list only changes when the library does.
+        key = tuple((v["id"], v.get("name"), v.get("model_name")) for v in voices)
+        if key == self.voices_key:
+            return
+        self.voices_key = key
+        self.records_signature = None
         self.voices = list(voices)
+        self.voice_presets = [dict(v) for v in self.voices if not v.get("is_template")]
+        fill_voice_model(self.voice_model, self.voice_presets)
         for row in self.rows:
-            row.text.set_voices(self.voices)
+            row.text.voices = self.voice_presets
             row.refresh_voice()
 
     def segments(self, default_voice=None, identity=None, force=False):
@@ -435,11 +481,25 @@ class DialogueEditor(QScrollArea):
                           for r in self.rows if r.text.toPlainText().strip())
 
     def update_records(self, records, default_voice, ready):
+        # One switch walked the whole row list a dozen times because each
+        # refresh asked this to run again with the same records. Anything that
+        # changes a row -- typing, picking a voice -- clears the signature.
+        newest = records[-1] if records else None
+        signature = (len(records), newest and newest["idx"], newest and newest["status"],
+                     newest and newest.get("source_revision"), ready,
+                     (default_voice or {}).get("id"), self.voices_key)
+        if signature == self.records_signature:
+            return
+        self.records_signature = signature
         grouped = {}
         for record in records:
             grouped.setdefault(record.get("source_id"), []).append(record)
         for row in self.rows:
             row.update_status(grouped.get(row.identity, []), default_voice, ready)
+
+    def invalidate_records(self, *_):
+        """A row changed on its own, so the next refresh must look at it again."""
+        self.records_signature = None
 
     def close_popups(self):
         for row in self.rows:

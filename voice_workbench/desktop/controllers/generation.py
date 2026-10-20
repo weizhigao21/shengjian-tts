@@ -69,6 +69,7 @@ class GenerationController:
             self.auto_select_audio = True
             self.preview_segment()
         self.selected_job = result["job_id"]
+        self.editor_job_id = result["job_id"]
         indices = result.get("segment_indices", [])
         self.pending_autoplay = {"job_id": result["job_id"], "indices": set(indices)} if indices else None
         if result.get("title") and self.title_edit.text() == getattr(self, "submission_title", None):

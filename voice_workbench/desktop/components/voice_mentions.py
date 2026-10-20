@@ -58,16 +58,39 @@ class PresetDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def fill_voice_model(model, presets):
+    """Fill a completer model with the presets every editor shares."""
+    from ...model_info import MODES, selected_mode
+    model.clear()
+    for voice in presets:
+        detail = model_label(voice) + " · " + MODES.get(selected_mode(voice), "系统声音")
+        if sum(v["name"] == voice["name"] and model_label(v) == model_label(voice) for v in presets) > 1:
+            detail += " · " + voice["id"]
+        item = QStandardItem(voice["name"] + "\n" + detail)
+        item.setData(voice, VOICE_ROLE)
+        item.setData(detail, DETAIL_ROLE)
+        item.setToolTip(voice["name"] + "\n" + detail + "\n" + ((voice.get("error") or {}).get("message")
+            or "点击使用此预设的模型、模式和已保存参数"))
+        model.appendRow(item)
+    if not presets:
+        item = QStandardItem("还没有声音预设")
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        model.appendRow(item)
+
+
 class PresetScriptEditor(ScriptEditor):
     preset_chosen = pyqtSignal(dict)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, model=None):
         super().__init__(parent)
         self.voices = []
         self.suppress_completion = False
         self.dismissed_prefix = None
         self.enable_mentions = True
-        self.model = QStandardItemModel(self)
+        # Dialogue rows share one completer model: building five presets into
+        # seventeen separate models was most of the cost of opening a task.
+        self.owns_model = model is None
+        self.model = QStandardItemModel(self) if model is None else model
         self.completer = QCompleter(self.model, self)
         self.completer.setWidget(self)
         self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -91,22 +114,8 @@ class PresetScriptEditor(ScriptEditor):
         if presets == self.voices and self.model.rowCount():
             return
         self.voices = presets
-        self.model.clear()
-        for voice in presets:
-            from ...model_info import MODES, selected_mode
-            detail = model_label(voice) + " · " + MODES.get(selected_mode(voice), "系统声音")
-            if sum(v["name"] == voice["name"] and model_label(v) == model_label(voice) for v in presets) > 1:
-                detail += " · " + voice["id"]
-            item = QStandardItem(voice["name"] + "\n" + detail)
-            item.setData(voice, VOICE_ROLE)
-            item.setData(detail, DETAIL_ROLE)
-            item.setToolTip(voice["name"] + "\n" + detail + "\n" + ((voice.get("error") or {}).get("message")
-                or "点击使用此预设的模型、模式和已保存参数"))
-            self.model.appendRow(item)
-        if not presets:
-            item = QStandardItem("还没有声音预设")
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.model.appendRow(item)
+        if self.owns_model:
+            fill_voice_model(self.model, presets)
         if self.completer.popup().isVisible():
             self.refresh_completion()
 

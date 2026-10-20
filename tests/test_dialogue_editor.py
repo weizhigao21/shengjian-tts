@@ -241,3 +241,57 @@ def test_adding_a_row_from_the_top_scrolls_down_to_it(qtbot):
     qtbot.wait(250)
     assert bar.value() > 0
     assert row.mapTo(widget.viewport(), row.rect().bottomLeft()).y() <= widget.viewport().height()
+
+
+def test_reloading_the_same_lines_keeps_the_rows_already_on_screen(qtbot):
+    """Re-opening the same work rebuilt every row: a new editor and completer each."""
+    widget = panel(qtbot)
+    entries = [{"id": f"id{index:06d}", "text": f"第 {index} 条", "role_name": f"角色{index}"}
+               for index in range(4)]
+    widget.load(entries)
+    rows = list(widget.rows)
+    widget.load([dict(entry) for entry in entries])
+    assert widget.rows == rows
+
+
+def test_a_cached_refresh_still_notices_an_edited_line(qtbot):
+    """The row list is only skipped while nothing about a line changed."""
+    from voice_workbench.services.dialogue import entry_revision
+    widget = panel(qtbot)
+    row = widget.rows[0]
+    voice = widget.voices[1]
+    row.set_voice(voice)
+    row.text.setPlainText("第一版台词")
+    record = {"idx": 1, "status": "done", "audio": "1.wav", "source_id": row.identity,
+              "source_revision": entry_revision(row.entry(), widget.voices, voice)}
+    widget.update_records([record], voice, True)
+    assert row.status.text() == "已生成"
+    widget.update_records([dict(record)], voice, True)
+    assert row.status.text() == "已生成"
+    row.text.setPlainText("改过的台词")
+    widget.update_records([dict(record)], voice, True)
+    assert row.status.text() == "已修改"
+
+
+def test_a_second_identical_refresh_does_not_walk_every_row(qtbot, monkeypatch):
+    widget = panel(qtbot)
+    seen = []
+    for row in widget.rows:
+        monkeypatch.setattr(row, "update_status", lambda *args, _row=row: seen.append(_row))
+    widget.update_records([], {}, True)
+    widget.update_records([], {}, True)
+    assert len(seen) == 1
+
+
+def test_an_unchanged_row_is_not_repainted(qtbot):
+    widget = panel(qtbot)
+    row = widget.rows[0]
+    row.text.setPlainText("一句台词")
+    painted, original = [], row.status.setText
+    row.status.setText = lambda text: (painted.append(text), original(text))[1]
+    widget.update_records([], {}, True)
+    assert painted
+    painted.clear()
+    widget.invalidate_records()          # the row pass runs again, the row did not change
+    widget.update_records([], {}, True)
+    assert painted == []

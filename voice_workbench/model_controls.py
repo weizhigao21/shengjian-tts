@@ -23,6 +23,13 @@ class DescriptionInput(QPlainTextEdit):
 
 
 def populate(combo, entries, current=None):
+    # Rebuilding an unchanged combo resets its model and view, which on a task
+    # switch showed up as a visible blink of the model and preset pickers.
+    entries = list(entries)
+    target = max(0, combo.findData(current))
+    if (combo.count() == len(entries) and combo.currentIndex() == target
+            and all(combo.itemData(i) == value and combo.itemText(i) == name for i, (value, name) in enumerate(entries))):
+        return
     combo.blockSignals(True)
     combo.clear()
     for value, name in entries:

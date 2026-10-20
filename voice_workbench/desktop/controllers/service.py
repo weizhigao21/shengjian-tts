@@ -162,7 +162,10 @@ class ServiceController:
         self.model_controls.update_engine_download(health.get("engine", {}))
         self.library.bind()
         self.update_voice_summary()
-        if job and job["id"] == self.selected_job:
+        # The clip list may only follow the text that is on screen: filling it
+        # from a poll that beat the editor load left the two showing different
+        # tasks, which reads as the click never connecting.
+        if job and job["id"] == self.selected_job and self.editor_job_id == job["id"]:
             self.render_job(job)
         if not was_ready:
             self.save_document()

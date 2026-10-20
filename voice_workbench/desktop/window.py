@@ -55,6 +55,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.pending_autoplay = None
         self.autoplay_indices = None
         self.selected_job = None
+        self.editor_job_id = None
         self.job_data = None
         self.visible_segments = []
         self.polling = False
@@ -62,6 +63,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.submitting = False
         self.loading_document = False
         self.editor_mode = "article"
+        self.stats_key = None
         self._binding_dialogue = False
         self.audio_scope = None
         self.document_dirty = False

@@ -43,6 +43,7 @@ class CreationController:
             def created(job):
                 self.submitting = False
                 self.selected_job = job["id"]
+                self.editor_job_id = job["id"]
                 self.render_job(job)
                 self.update_generation_actions()
                 self.document_changed()

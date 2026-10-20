@@ -8,6 +8,7 @@ import sys
 import time
 import wave
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 from PyQt6.QtCore import (QByteArray, QCoreApplication, QMimeData, QObject, QPoint, QPointF, QRect, QSize, Qt, QUrl,
@@ -104,7 +105,15 @@ ICONS = {
 }
 
 
+@lru_cache(maxsize=256)
 def icon(name, color=INK, size=20):
+    """Rasterise an icon once: every row and every refresh asks for the same few.
+
+    Rendering was measurable on its own: a task switch asked for the same play,
+    retry and trash glyphs hundreds of times, and each call re-parsed the SVG and
+    painted a fresh pixmap. QIcon is shared by value here, so the cache hands the
+    same glyph to every button instead of rasterising it again.
+    """
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>'
     renderer = QSvgRenderer(QByteArray(svg.encode()))
     # Render at 2x for crisp icons on high-density displays.
