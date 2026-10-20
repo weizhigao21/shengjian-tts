@@ -8,7 +8,7 @@ from time import perf_counter
 from ..config import atomic_json, file_digest, voice_fingerprint
 from ..errors import describe_error, VoiceError
 from ..runner import validate_wave
-from .policy import LANGUAGES, PARAMETERS, model_signature, options
+from .policy import LANGUAGES, PARAMETERS, model_signature, options, token_budget
 
 
 class BatchExecution:
@@ -50,10 +50,14 @@ class BatchExecution:
                         runner.interrupt()
                 first = items[0]['voice']
                 request = options(first)
+                decoding = {target: request[source] for source, target in PARAMETERS.items() if source in request}
+                if 'max_new_tokens' in decoding:
+                    decoding['max_new_tokens'] = token_budget([item['text'] for item in items],
+                                                              decoding['max_new_tokens'])
                 payload = {"voice": {k: first[k] for k in ('reference_audio', 'reference_text')},
                            "seed": request.get('seed', -1),
                            "cpu_threads": self.config.performance()['cpu_threads'],
-                           "options": {target: request[source] for source, target in PARAMETERS.items() if source in request},
+                           "options": decoding,
                            "items": [{"text": item['text'], "language": LANGUAGES[item['voice']['language']], "output": str(path)}
                                      for item, path in zip(items, paths)]}
                 started = perf_counter()

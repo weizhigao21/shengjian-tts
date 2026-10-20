@@ -77,6 +77,22 @@ def test_unsupported_runtime_calls_are_forwarded_without_partial_sampling(predic
     assert path.status()['predictor_mode'] == 'standard'
 
 
+def test_every_rendered_frame_is_reported_so_the_parent_can_judge_pace(predictor, monkeypatch):
+    """The stall guard watches frames now, so one frame must mean one report."""
+    model, p, _original, _calls = predictor
+    path = fast.install(model)
+    assert path.predictor is p and path.progress is None
+    reported = []
+    path.warper_key = (False, 1., 50, 1.)   # already built: no transformers import
+    monkeypatch.setattr(path, 'loop', lambda embeds, sample: 'codes')
+    kw = dict(inputs_embeds=SimpleNamespace(ndim=3, shape=(2, 2, 8)), max_new_tokens=15,
+              output_hidden_states=True, return_dict_in_generate=True)
+    path.progress = lambda: reported.append(len(reported) + 1)
+    assert path.generate(**kw).sequences == 'codes' and reported == [1]
+    path.progress = None
+    assert path.generate(**kw).sequences == 'codes' and reported == [1]
+
+
 def test_acceleration_option_and_revision_partition_audio_cache(batch_manager, monkeypatch):
     manager, _, _ = batch_manager
     settings = manager.batch.settings

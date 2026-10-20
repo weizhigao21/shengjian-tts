@@ -22,6 +22,9 @@ class PredictorPath:
         self.calls = self.fallbacks = 0
         self.predictor = self.original = None
         self.graphs = None
+        # One call renders one frame. The worker reports each one so the parent can
+        # tell a slow batch from a wedged one instead of timing the whole batch.
+        self.progress = None
 
     def snapshot(self):
         return (self.calls, self.fallbacks, self.graphs.captures if self.graphs else 0,
@@ -74,6 +77,8 @@ class PredictorPath:
         self.calls += 1
         forward = lambda value: self.loop(value, sample)
         output = self.graphs.run(embeds, key, forward) if self.graphs else forward(embeds)
+        if self.progress:
+            self.progress()
         return SimpleNamespace(sequences=output)
 
     def loop(self, embeds, sample):

@@ -15,7 +15,7 @@ class QwenEngine:
         self.prompts = OrderedDict()
         self.predictor_path = None
 
-    def run(self, message):
+    def run(self, message, progress=None):
         import torch
         import soundfile as sf
         from qwen_tts import Qwen3TTSModel
@@ -59,9 +59,13 @@ class QwenEngine:
             if message.get("seed", -1) >= 0:
                 torch.manual_seed(message["seed"])
             counts = self.predictor_path.snapshot()
-            wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],
-                language=[i["language"] for i in message["items"]], voice_clone_prompt=prompt,
-                **message["options"])
+            self.predictor_path.progress = progress
+            try:
+                wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],
+                    language=[i["language"] for i in message["items"]], voice_clone_prompt=prompt,
+                    **message["options"])
+            finally:
+                self.predictor_path.progress = None
             if len(wavs) != len(message["items"]):
                 raise RuntimeError("批量后端返回的音频数量与请求不符")
             for item, audio in zip(message["items"], wavs):
@@ -79,11 +83,24 @@ def main():
         line = sys.stdin.readline(1048577)
         if not line:
             break
+        frames = 0
+
+        def report():
+            # Frames arrive every 0.15-1.2 s. Reporting each one lets the parent
+            # distinguish "this machine is slow" from "this batch is wedged", which
+            # a total-time budget cannot: a slow GPU used to be killed and retried
+            # one line at a time, which is slower than the wait it avoided.
+            nonlocal frames
+            frames += 1
+            protocol.write(json.dumps({"progress": frames}) + "\n")
+            protocol.flush()
+
         try:
             if len(line) > 1048576:
                 raise ValueError("批量请求过大")
             with redirect_stdout(sys.stderr):
-                result = engine.run(json.loads(line))
+                result = engine.run(json.loads(line), progress=report)
+            result["frames"] = frames
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "traceback": traceback.format_exc()}
         protocol.write(json.dumps(result, ensure_ascii=False) + "\n")

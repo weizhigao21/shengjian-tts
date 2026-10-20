@@ -70,6 +70,26 @@ def unsupported(voice, text, settings):
     return ""
 
 
+FRAME_RATE = 12            # The 12 Hz codec emits twelve frames per second of audio.
+CHARS_PER_SECOND = 4.2     # Chinese and Japanese speech, measured over saved runs.
+FRAME_MARGIN = 2.0         # A line with pauses can run twice as long as its text suggests.
+FRAME_ALLOWANCE = 60       # Room for a closing pause, however short the line is.
+MIN_TOKENS = 96
+
+
+def token_budget(texts, ceiling):
+    """Bound one batch's decoding by the longest line it has to speak.
+
+    ``max_tokens`` is a per-voice preset of 1024 frames, which is 85 seconds of
+    audio — a runaway row that never emits its end token drags every row in the
+    batch to that cap, and the batch then looks wedged. Decoding eight short
+    lines to their own length costs about 60 frames, so the cap only ever hurts.
+    """
+    longest = max((len(text or '') for text in texts), default=0)
+    frames = int(longest / CHARS_PER_SECOND * FRAME_RATE * FRAME_MARGIN) + FRAME_ALLOWANCE
+    return min(ceiling, max(MIN_TOKENS, frames))
+
+
 def group_key(voice):
     # Language may vary in a tensor batch. Seeds and all other generation options
     # remain equal; the official backend has one RNG seed per batch, not per row.

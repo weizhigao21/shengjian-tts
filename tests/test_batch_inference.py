@@ -332,24 +332,21 @@ def test_a_job_with_rows_still_waiting_keeps_the_batch_worker_resident(batch_man
     assert manager.batch_idle() is False
 
 
-def test_batch_budget_scales_with_rows_text_and_caps_at_preset_timeout():
-    from voice_workbench.batch_inference.process import COLD_ALLOWANCE, batch_budget
-    # Every extra row widens each decoding frame: eight short lines is the slow case.
-    assert batch_budget([{'text': '你好世界'}] * 8, 600) == 8 * 14
-    assert batch_budget([{'text': '你好世界'}] * 2, 600) == 60
-    assert batch_budget([{'text': '字' * 2400}], 600) == 600
-    assert batch_budget([], 30) == 30
-    # A cold worker pays for loading the weights before it renders anything.
-    items = [{'text': '一' * 40}] * 8
-    assert batch_budget(items, 600, loaded=False) == batch_budget(items, 600) + COLD_ALLOWANCE
-    assert batch_budget([{'text': '字' * 2400}], 600, loaded=False) == 600
+def test_the_guard_bounds_the_wait_for_a_first_frame_not_the_whole_batch():
+    from voice_workbench.batch_inference.process import COLD_ALLOWANCE, FIRST_FRAME, batch_budget, batch_stall
+    # A batch that is producing frames is judged by its pace, not by the clock.
+    assert batch_budget(600) == FIRST_FRAME
+    assert batch_budget(600, loaded=False) == FIRST_FRAME + COLD_ALLOWANCE
+    assert batch_stall(600) == 90
+    # The user's preset stays the ceiling for both.
+    assert batch_budget(20) == 20 and batch_budget(20, loaded=False) == 20 and batch_stall(30) == 30
 
 
 def test_the_stall_guard_is_told_whether_the_worker_is_already_warm(monkeypatch):
     """A cold worker loads its weights first, so the guard must know which one it is."""
     seen = []
     monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget',
-                        lambda items, timeout, loaded=True: seen.append(loaded) or 5)
+                        lambda timeout, loaded=True: seen.append(loaded) or 5)
     process = BatchProcess(Path('.'))
 
     class Pipe:
@@ -367,12 +364,76 @@ def test_the_stall_guard_is_told_whether_the_worker_is_already_warm(monkeypatch)
     assert seen == [False, True]
 
 
+def stall_worker(tmp_path, monkeypatch, body, first=.8, stall=.4):
+    folder = tmp_path/'voice_workbench/batch_inference'
+    folder.mkdir(parents=True)
+    (folder/'qwen_worker.py').write_text(body)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.resource_root', lambda: tmp_path)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda timeout, loaded=True: first)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_stall', lambda timeout: stall)
+    return BatchProcess(tmp_path)
+
+
+def test_frames_arriving_keep_a_slow_batch_alive_past_its_first_frame_budget(tmp_path, monkeypatch):
+    """A batch that is still drawing frames is slow, not wedged, and must not be killed."""
+    process = stall_worker(tmp_path, monkeypatch, "import json,sys,time\n"
+                          "for line in sys.stdin:\n"
+                          " for n in range(1, 11):\n"
+                          "  print(json.dumps({'progress': n}), flush=True)\n"
+                          "  time.sleep(.1)\n"
+                          " print(json.dumps({'ok': True, 'count': 1, 'frames': 10}), flush=True)\n")
+    try:
+        started = time.monotonic()
+        answer = process.generate(BatchSettings(python=sys.executable), 'one',
+                                  {'items': [{'text': '一条文本'}]}, threading.Event(), 600)
+        assert answer['count'] == 1 and answer['frames'] == 10
+        assert time.monotonic() - started > .9      # well past the .8 s first-frame budget
+    finally:
+        process.interrupt()
+
+
+def test_a_batch_that_stops_drawing_frames_is_dropped_and_says_how_far_it_got(tmp_path, monkeypatch):
+    process = stall_worker(tmp_path, monkeypatch, "import json,sys,time\n"
+                          "for line in sys.stdin:\n"
+                          " for n in (1, 2, 3): print(json.dumps({'progress': n}), flush=True)\n"
+                          " time.sleep(30)\n")
+    try:
+        with pytest.raises(Exception, match='已渲染 3 帧'):
+            process.generate(BatchSettings(python=sys.executable), 'one',
+                             {'items': [{'text': '一条文本'}]}, threading.Event(), 600)
+        assert process.process is None
+    finally:
+        process.interrupt()
+
+
+def test_a_runaway_line_cannot_drag_a_batch_to_the_voice_token_cap():
+    from voice_workbench.batch_inference.policy import token_budget
+    # 20 characters is 57 frames of speech; the cap leaves room for pauses, not for
+    # the 1024-frame preset, which is 85 seconds of audio for a five second line.
+    assert token_budget(['看来封口还不太够呢', '既然已经被人知道了 那也没必要再隐瞒了吧'], 1024) == 174
+    assert token_budget(['短句'], 1024) >= 96
+    assert token_budget(['字' * 4000], 1024) == 1024      # never above the preset
+    assert token_budget(['短句'], 64) == 64               # nor above a tighter voice
+    assert token_budget([], 1024) >= 96
+
+
+def test_a_batch_cannot_decode_past_what_its_longest_line_needs(batch_manager):
+    """The preset is 1024 frames; a five second line needs about sixty."""
+    manager, _, probe = batch_manager
+    voice = next(v for v in manager.config.voices() if v['id'] == 'qwen')
+    manager.config.save_voice({**voice, 'request_options': {'seed': 42, 'max_tokens': 1024}})
+    texts = ['看来封口还不太够呢', '既然已经被人知道了 那也没必要再隐瞒了吧']
+    identity = manager.submit('令牌上限', 'qwen', [{'text': text} for text in texts])
+    wait_job(manager.store.get, identity, ('done',))
+    assert probe.calls[0]['options']['max_new_tokens'] == 174
+
+
 def test_stalled_batch_is_dropped_on_the_estimated_budget_not_the_preset_timeout(tmp_path, monkeypatch):
     folder = tmp_path/'voice_workbench/batch_inference'
     folder.mkdir(parents=True)
     (folder/'qwen_worker.py').write_text("import sys,time\nfor line in sys.stdin:\n time.sleep(30)\n")
     monkeypatch.setattr('voice_workbench.batch_inference.process.resource_root', lambda: tmp_path)
-    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda items, timeout, loaded=True: .3)
+    monkeypatch.setattr('voice_workbench.batch_inference.process.batch_budget', lambda timeout, loaded=True: .3)
     process = BatchProcess(tmp_path)
     try:
         started = time.monotonic()

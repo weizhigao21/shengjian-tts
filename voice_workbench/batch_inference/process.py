@@ -11,31 +11,31 @@ from ..errors import VoiceError
 from ..runtime import external_environment, resource_root
 
 
-COLD_ALLOWANCE = 60
-ROW_ALLOWANCE = 14
+FIRST_FRAME = 45
+COLD_ALLOWANCE = 90
+STALL_SECONDS = 90
 
 
-def batch_budget(items, timeout, loaded=True):
-    """Bound how long one batch may hold its rows before it is treated as stalled.
+def batch_budget(timeout, loaded=True):
+    """How long a batch may go before its first frame arrives.
 
-    The preset timeout is a user-facing ceiling (600 s by default) and is far too
-    long for a stuck worker: the job would sit at "running" with no audio for ten
-    minutes. So the budget comes from what the batch has to do: the audio it will
-    speak, plus a floor that grows with the number of rows, because every extra
-    row widens each decoding frame. Measured on a 2080 Ti, eight short lines take
-    32–48 s warm — a budget derived from the text alone called that a stall, and
-    the retry went to the native engine, which then renders the same lines one at
-    a time: slower than the wait it was meant to avoid.
+    A total-time budget cannot tell a slow batch from a wedged one. Measured on
+    the same eight lines, the worker moves between 0.15 s and 1.15 s per frame
+    depending on GPU clocks (825 vs 1900 MHz) and whether anything else holds
+    VRAM on an 11 GiB card that the batch already fills to 10.4 GiB. So a budget
+    guessed from the text declared a working batch stalled, and the retry went to
+    the native engine, which renders those lines one at a time -- slower than the
+    wait it was meant to avoid.
 
-    A batch that has to start the worker also pays for loading the weights and
-    capturing the graph before it renders anything, so a cold run gets its own
-    allowance instead of being judged against a warm one.
+    The worker now reports every frame, so only the two stretches that produce no
+    frames need a bound: starting the worker, and starting to speak.
     """
-    chars = sum(len(item.get("text") or "") for item in items)
-    spoken = chars / 4 * 2.5 + 20
-    rows = len(items) * ROW_ALLOWANCE
-    cold = 0 if loaded else COLD_ALLOWANCE
-    return min(timeout, max(60, int(spoken), rows) + cold)
+    return min(timeout, FIRST_FRAME if loaded else FIRST_FRAME + COLD_ALLOWANCE)
+
+
+def batch_stall(timeout):
+    """How long a batch may go without a frame once it has started producing them."""
+    return min(timeout, STALL_SECONDS)
 
 
 class BatchProcess:
@@ -88,17 +88,24 @@ class BatchProcess:
             raise VoiceError("CANCELLED", "任务已取消")
         process, answers = self.start(settings, signature)
         items = payload.get("items") or []
-        budget = batch_budget(items, timeout, self.loaded)
+        started, frames = time.monotonic(), 0
+        ceiling = started + timeout
+        deadline = started + batch_budget(timeout, self.loaded)
+        stall = batch_stall(timeout)
         try:
             process.stdin.write(json.dumps({"settings": settings.model_dump(), **payload}, ensure_ascii=False) + "\n")
             process.stdin.flush()
-            deadline = time.monotonic() + budget
             while time.monotonic() < deadline:
                 if cancelled.is_set():
                     raise VoiceError("CANCELLED", "任务已取消")
                 try:
                     answer = answers.get(timeout=.1)
                 except queue.Empty:
+                    continue
+                if answer.get("progress"):
+                    # A frame landed: judge the worker by its pace, not by the clock.
+                    frames = answer["progress"]
+                    deadline = min(ceiling, time.monotonic() + stall)
                     continue
                 if not answer.get("ok"):
                     error = VoiceError("BATCH_BACKEND_FAILED", answer.get("message", "批量推理失败"), stage="批量推理")
@@ -107,8 +114,12 @@ class BatchProcess:
                 self.last_used = time.monotonic()
                 self.loaded = True
                 return answer
-            raise VoiceError("INFERENCE_TIMEOUT", f"批量推理超时：{len(items)} 条等待超过 {budget} 秒，已改用原生引擎重试",
-                             stage="批量推理")
+            waited = time.monotonic() - started
+            raise VoiceError("INFERENCE_TIMEOUT", (
+                f"批量推理超时：{len(items)} 条已渲染 {frames} 帧后 {waited:.0f} 秒没有任何进展，已改用原生引擎重试"
+                if frames else
+                f"批量推理超时：{len(items)} 条等待超过 {waited:.0f} 秒仍未开始出帧，已改用原生引擎重试"),
+                stage="批量推理")
         except BaseException:
             self.interrupt()
             raise
