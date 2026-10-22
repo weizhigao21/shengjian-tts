@@ -5,6 +5,7 @@ import threading
 import time
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from urllib.parse import urlsplit, urljoin
 import wave
@@ -226,6 +227,10 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
         control_url = base + f'/jobs/{job_id}/generations/{generation}'
         if incremental:
             status_url = control_url + '/progress'
+            if 'workflow_progress_pending' in capabilities:
+                # Long subtitles: the service only sends clips we have not
+                # released yet instead of replaying every completed segment.
+                status_url += '?pending=1'
         paused = False
         pause_started = None
         deadline = time.monotonic() + timeout
@@ -286,39 +291,71 @@ def run_local_job(session, api_url, model_name, tasks, timeout=3600, cancel_chec
         return finish_remaining(f'本地配音服务请求失败：{exc}')
 
 
+DOWNLOAD_WORKERS = 3
+_PENDING = object()
+
+
 def generate_local_tasks(session, api_url, model_name, tasks, audio_cache, cache_model, filename, download,
                          cancel_check=None, workflow_context=None, on_result=None, pause_check=None):
     results = [None] * len(tasks)
+    state_lock = threading.Lock()
+    callback_lock = threading.Lock()
+    pool = ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS, thread_name_prefix='tts-download')
+
+    def finish(position, result):
+        with state_lock:
+            if results[position] not in (None, _PENDING):
+                return
+            results[position] = result
+        if on_result:
+            # The bridge slots are DirectConnection in the workflow, so callbacks
+            # are serialized to keep its progress counters race-free.
+            with callback_lock:
+                on_result(position, result)
+
+    def process(position, audio_url):
+        index, timestamp, text, save_dir, mtime = tasks[position]
+        try:
+            save_path = filename(index, timestamp, text, save_dir)
+            save_validated_audio(download, audio_url, save_path)
+            # Only acknowledge after both valid output and cache are committed.
+            audio_cache.save_audio_cache(text, save_path, cache_model, api_url, source_version=str(int(mtime)))
+            message = f'完成：{index:04d} [{timestamp}]'
+            try:
+                released = session.post(audio_url + '/release', timeout=10)
+                if released.status_code != 200 or released.json().get('errors'):
+                    raise RuntimeError('服务尚未确认清理')
+            except Exception:
+                message += '；临时音频将在服务端到期清理'
+            finish(position, (True, message))
+        except Exception as exc:
+            finish(position, (False, f'第 {index} 段 [{timestamp}] 音频下载失败：{exc}'))
 
     def receive(position, result):
-        if results[position] is not None:
-            return
+        with state_lock:
+            if results[position] is not None:
+                return
+            results[position] = _PENDING
         audio_url, error = result
-        task = tasks[position]
-        index, timestamp, text, save_dir, mtime = task
         if error:
-            results[position] = False, error
+            finish(position, (False, error))
+        elif audio_url:
+            # Downloads must not block the progress poll; otherwise the last
+            # clips are transferred after generation already finished.
+            pool.submit(process, position, audio_url)
         else:
-            try:
-                save_path = filename(index, timestamp, text, save_dir)
-                save_validated_audio(download, audio_url, save_path)
-                # Only acknowledge after both valid output and cache are committed.
-                audio_cache.save_audio_cache(text, save_path, cache_model, api_url, source_version=str(int(mtime)))
-                message = f'完成：{index:04d} [{timestamp}]'
-                try:
-                    released = session.post(audio_url + '/release', timeout=10)
-                    if released.status_code != 200 or released.json().get('errors'):
-                        raise RuntimeError('服务尚未确认清理')
-                except Exception:
-                    message += '；临时音频将在服务端到期清理'
-                results[position] = True, message
-            except Exception as exc:
-                results[position] = False, f'第 {index} 段 [{timestamp}] 音频下载失败：{exc}'
-        if on_result:
-            on_result(position, results[position])
+            index, timestamp = tasks[position][0], tasks[position][1]
+            finish(position, (False, f'第 {index} 段 [{timestamp}]：服务未返回音频'))
 
-    returned = run_local_job(session, api_url, model_name, tasks, cancel_check=cancel_check,
-        workflow_context=workflow_context, on_result=receive, pause_check=pause_check)
-    for position, result in enumerate(returned):
-        receive(position, result)
+    try:
+        returned = run_local_job(session, api_url, model_name, tasks, cancel_check=cancel_check,
+            workflow_context=workflow_context, on_result=receive, pause_check=pause_check)
+        for position, result in enumerate(returned):
+            receive(position, result)
+    finally:
+        pool.shutdown(wait=True)
+    for position, result in enumerate(results):
+        if result is _PENDING:
+            index, timestamp = tasks[position][0], tasks[position][1]
+            results[position] = (False, f'第 {index} 段 [{timestamp}]：音频下载未完成')
     return results

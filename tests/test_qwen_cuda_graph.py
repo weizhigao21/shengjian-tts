@@ -132,7 +132,7 @@ def test_reclaimable_pool_does_not_block_a_new_batch_shape(cuda):
     cuda.empty_cache = lambda: setattr(cuda, 'free', 6 * 1024**3)
     result = cache.run(Tensor(5, shape=(4, 2, 4)), (True, .9, 50, 1.), cuda.forward)
     assert cache.captures == 2 and cache.fallbacks == 0
-    assert len(cache.entries) == 2 and result.value is not None
+    assert len(cache.entries) == 1 and result.value is not None
 
 
 def test_new_shape_is_still_refused_when_memory_stays_exhausted(cuda):
@@ -143,6 +143,67 @@ def test_new_shape_is_still_refused_when_memory_stays_exhausted(cuda):
     cache.run(Tensor(5, shape=(4, 2, 4)), (True, .9, 50, 1.), cuda.forward)
     assert cache.captures == 1 and cache.fallbacks == 1 and '512' in cache.reason
     assert not cache.entries
+
+
+def test_relief_costs_nothing_while_vram_is_plentiful(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    emptied = []
+    cuda.empty_cache = lambda: emptied.append(1)
+    cuda.free = 4 * 1024**3
+    assert cache.relief('cuda') is False
+    assert not emptied and len(cache.entries) == 1 and cache.reliefs == 0
+
+
+def test_relief_keeps_captured_graphs_when_cached_blocks_suffice(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    cuda.free = 0
+    cuda.empty_cache = lambda: setattr(cuda, 'free', 4 * 1024**3)
+    assert cache.relief('cuda') is False
+    assert cache.reliefs == 1 and len(cache.entries) == 1
+    # The next batch still replays instead of paying for a fresh capture.
+    assert cache.captures == 1
+    assert cache.run(Tensor(8), (True,.9,50,1.), cuda.forward).value == 8 + 26
+
+
+def test_relief_evicts_graph_pools_that_keep_the_card_at_its_limit(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    assert len(cache.entries) == 1
+    cuda.free = 0
+    cuda.empty_cache = lambda: None   # cached blocks alone cannot help here
+    assert cache.relief('cuda') is True
+    assert not cache.entries and cache.reliefs == 1
+
+
+def test_evicted_pool_is_recaptured_instead_of_degrading_to_the_slow_path(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    cuda.free = 0
+    cuda.empty_cache = lambda: None
+    cache.relief('cuda')
+    cuda.free = 4 * 1024**3
+    recordings = cuda.recordings
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    assert cuda.recordings == recordings + 1 and cache.captures == 2 and cache.fallbacks == 0
+
+
+def test_mid_batch_reclaim_returns_blocks_without_evicting_a_graph(cuda):
+    cache = PredictorGraphs()
+    cache.run(Tensor(3), (True,.9,50,1.), cuda.forward)
+    cuda.free = 0
+    cuda.empty_cache = lambda: setattr(cuda, 'free', 4 * 1024**3)
+    assert cache.light('cuda') is True
+    # A batch must not pay for a re-capture in the middle of its own render.
+    assert len(cache.entries) == 1 and cache.lights == 1 and cache.reliefs == 0
+
+
+def test_mid_batch_reclaim_is_free_while_there_is_room(cuda):
+    cache = PredictorGraphs()
+    cuda.empty_cache = lambda: pytest.fail('不该在显存充足时回收')
+    cuda.free = 4 * 1024**3
+    assert cache.light('cuda') is False and cache.lights == 0
 
 
 def test_graph_storage_and_failed_shapes_are_bounded(cuda):

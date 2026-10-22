@@ -12,14 +12,21 @@ class GraphStateError(RuntimeError):
 
 
 class PredictorGraphs:
-    max_entries = 2
+    # Every entry keeps a private pool alive. Two of them, plus the model, plus a
+    # desktop that moves gigabytes in and out of the same 11 GiB card, is how a
+    # batch ends up paging; one held shape is enough to keep the fast path fast.
+    max_entries = 1
     max_failures = 8
     minimum_free_bytes = 512 * 1024**2
+    # Well above minimum_free_bytes: capture is still allowed at 512 MiB, but a
+    # batch should not start there. See relief().
+    relief_free_bytes = 1536 * 1024**2
 
     def __init__(self):
         self.entries = OrderedDict()
         self.failed = OrderedDict()
         self.captures = self.replays = self.fallbacks = 0
+        self.reliefs = self.lights = 0
         self.reason = ''
 
     @staticmethod
@@ -88,6 +95,81 @@ class PredictorGraphs:
             self.drop(self.entries.popitem(last=False)[1])
             if empty:
                 empty()
+
+    def relief(self, device):
+        """Return pooled VRAM between batches when the card is close to its limit.
+
+        Measured on one 11 GiB card, same job, same graph, same batch size of 8:
+        0.118 s/frame, then four batches at 1.24-1.56 s/frame, then 0.086 s/frame
+        again. No capture, no fallback, no model reload in between -- only an
+        unrelated batch that happened to capture a new shape, which evicts graph
+        pools and empties the allocator first, and the speed came straight back.
+        VRAM had drifted to the driver limit (other applications on this machine
+        move several GiB in and out), so every frame round-tripped through WDDM
+        paging. Leaving that recovery to an unrelated cache miss made it luck, so
+        it now runs before each batch.
+
+        Called per batch, never per frame: it costs nothing while memory is
+        plentiful, and evicting pools forces a re-capture (about a second) only
+        when the alternative is a fifty-second batch.
+        """
+        import torch
+        free_bytes = self._free(device)
+        if free_bytes is None or free_bytes >= self.relief_free_bytes:
+            return False
+        self.reliefs += 1
+        empty = getattr(torch.cuda, 'empty_cache', None)
+        if empty:
+            # Cached blocks are reclaimable without losing a single graph.
+            empty()
+            free_bytes = self._free(device)
+            if free_bytes is None or free_bytes >= self.relief_free_bytes:
+                return False
+        # Each graph holds a private pool that only dies with the graph itself.
+        evicted = False
+        while self.entries:
+            self.drop(self.entries.popitem(last=False)[1])
+            evicted = True
+            if empty:
+                empty()
+            free_bytes = self._free(device)
+            if free_bytes is None or free_bytes >= self.relief_free_bytes:
+                break
+        return evicted
+
+    def light(self, device):
+        """Return cached allocator blocks mid-batch, without evicting a graph.
+
+        A batch starts with room and then fills it as it renders: measured here at
+        0.090, 0.209, 0.262, 0.265, 0.305, 0.342 s/frame over six batches of four,
+        with free VRAM falling from 254 MiB to 120 MiB. Checking only between
+        batches misses that entirely.
+
+        Evicting a graph mid-batch would force a re-capture inside the same batch,
+        which costs more than the paging it avoids, so this only hands back blocks
+        the allocator is not using. That was enough in the one batch that happened
+        to do it: 1.29 s/frame down to 0.21.
+        """
+        free_bytes = self._free(device)
+        if free_bytes is None or free_bytes >= self.relief_free_bytes:
+            return False
+        empty = getattr(__import__('torch').cuda, 'empty_cache', None)
+        if empty is None:
+            return False
+        empty()
+        self.lights += 1
+        return True
+
+    @staticmethod
+    def _free(device):
+        import torch
+        probe = getattr(torch.cuda, 'mem_get_info', None)
+        if probe is None:
+            return None
+        try:
+            return probe(device)[0]
+        except (RuntimeError, TypeError):
+            return None
 
     def run(self, embeds, parameters, forward):
         import torch

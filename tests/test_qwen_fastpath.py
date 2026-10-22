@@ -93,6 +93,71 @@ def test_every_rendered_frame_is_reported_so_the_parent_can_judge_pace(predictor
     assert path.generate(**kw).sequences == 'codes' and reported == [1]
 
 
+def test_pooled_blocks_are_reclaimed_while_a_batch_is_still_rendering(predictor, monkeypatch):
+    """A batch fills the card as it renders: 0.090 s/frame, then six batches later
+    0.342 s/frame, with free VRAM down from 254 MiB to 120 MiB. Reclaiming only
+    between batches never saw it, so it has to happen mid-batch too -- often enough
+    to matter, rarely enough not to show up in the frame time itself.
+    """
+    model, p, _original, _calls = predictor
+    path = fast.install(model, cuda_graph=True)
+    path.device = 'cuda'
+    lights = []
+
+    class Graphs:
+        captures = replays = fallbacks = reliefs = lights = 0
+        reason = ''
+        def run(self, embeds, key, forward): return forward(embeds)
+        def light(self, device): lights.append(path.calls)
+
+    path.graphs = Graphs()
+    monkeypatch.setattr(path, 'loop', lambda embeds, sample: 'codes')
+    path.warper_key = (False, 1., 50, 1.)   # already built: no transformers import
+    kw = dict(inputs_embeds=SimpleNamespace(ndim=3, shape=(2, 2, 8)), max_new_tokens=15,
+              output_hidden_states=True, return_dict_in_generate=True)
+    for _ in range(fast.FRAMES_PER_RELIEF * 2 + 3):
+        path.generate(**kw)
+    assert lights == [fast.FRAMES_PER_RELIEF, fast.FRAMES_PER_RELIEF * 2]
+    assert 8 <= fast.FRAMES_PER_RELIEF <= 16   # about once a second at 0.09 s/frame
+
+
+def test_sustained_slow_frames_keep_the_plain_loop_for_this_worker(predictor, monkeypatch):
+    """Graph replay wins 0.09 s to 0.15 s with room and loses 1.3 s to 0.43 s
+    without. Trading 1.7x for never losing 14x must not wait for the batch to end.
+    """
+    model, p, _original, _calls = predictor
+    path = fast.install(model, cuda_graph=True)
+    path.device = 'cuda'
+    runs = []
+
+    class Graphs:
+        captures = replays = fallbacks = reliefs = lights = 0
+        reason = ''
+        def run(self, embeds, key, forward):
+            runs.append(1)
+            return forward(embeds)
+        def light(self, device): pass
+
+    path.graphs = Graphs()
+    monkeypatch.setattr(path, 'loop', lambda embeds, sample: 'codes')
+    path.warper_key = (False, 1., 50, 1.)   # already built: no transformers import
+    kw = dict(inputs_embeds=SimpleNamespace(ndim=3, shape=(2, 2, 8)), max_new_tokens=15,
+              output_hidden_states=True, return_dict_in_generate=True)
+    for _ in range(4):
+        path.generate(**kw)
+    assert not path.downgraded and path.baseline is not None
+    path.baseline = 1e-9   # every real frame now looks three times slower
+    path.slow = 0
+    for _ in range(fast.SLOW_FRAMES):
+        path.generate(**kw)
+    assert path.downgraded and '专用循环' in path.reason
+    assert path.status()['predictor_graph_downgraded'] is True
+    replaying = len(runs)
+    path.generate(**kw)
+    assert len(runs) == replaying   # the graph is not driven any more this worker
+    assert path.tidy() is False     # and no pooling work is spent on it either
+
+
 def test_acceleration_option_and_revision_partition_audio_cache(batch_manager, monkeypatch):
     manager, _, _ = batch_manager
     settings = manager.batch.settings

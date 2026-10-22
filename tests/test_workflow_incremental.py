@@ -89,9 +89,10 @@ def test_paused_generation_does_not_block_other_work_and_can_resume(tmp_path):
 
 
 class FakeSession:
-    def __init__(self, snapshots, incremental=True):
+    def __init__(self, snapshots, incremental=True, pending=False):
         self.snapshots = iter(snapshots)
         self.incremental = incremental
+        self.pending = pending
         self.posts, self.gets = [], []
 
     def post(self, url, **kwargs):
@@ -102,11 +103,43 @@ class FakeSession:
     def get(self, url, **kwargs):
         self.gets.append(url)
         if url.endswith('/health'):
-            value = {'capabilities':['workflow_record_only'],'workflow_incremental':self.incremental}
+            capabilities = ['workflow_record_only']
+            if self.pending:
+                capabilities.append('workflow_progress_pending')
+            value = {'capabilities':capabilities,'workflow_incremental':self.incremental}
         else:
             value = next(self.snapshots)
             if isinstance(value, Exception): raise value
         return SimpleNamespace(status_code=200, json=lambda:value)
+
+
+def test_pending_progress_capability_asks_for_unreleased_clips_only():
+    session = FakeSession([{'status': 'done', 'segments': [
+        {'idx': 5, 'status': 'done', 'audio_url': '/audio/a.wav'},
+        {'idx': 7, 'status': 'done', 'audio_url': '/audio/b.wav'}]}], pending=True)
+    result = run_local_job(session, 'http://testserver', 'default',
+        [(1, '', 'a', '', 0), (2, '', 'b', '', 0)])
+    assert all(url for url, _ in result)
+    assert any(url.endswith('/progress?pending=1') for url in session.gets)
+
+
+def test_pending_progress_only_returns_unreleased_audio(tmp_path):
+    with TestClient(create_app(tmp_path/'data', ControlledRunner())) as client:
+        manager = client.app.state.manager
+        submitted = client.post('/jobs', json={'record_only': True, 'delivery_ack': True,
+            'segments': [{'text': 'first'}, {'text': 'second'}]}).json()
+        wait_job(manager.store.get, submitted['job_id'], ('done',))
+        control = f"/jobs/{submitted['job_id']}/generations/{submitted['generation']}"
+        full = client.get(control + '/progress').json()
+        pending = client.get(control + '/progress?pending=1').json()
+        assert full['status'] == pending['status'] == 'done'
+        assert (full['total'], full['completed']) == (2, 2)
+        assert len(pending['segments']) == 2
+        released = client.post(pending['segments'][0]['audio_url'] + '/release')
+        assert released.status_code == 200
+        remaining = client.get(control + '/progress?pending=1').json()
+        assert [row['idx'] for row in remaining['segments']] == [full['segments'][1]['idx']]
+        assert len(client.get(control + '/progress').json()['segments']) == 2
 
 
 def test_out_of_order_partial_results_survive_transport_error_without_resubmission():

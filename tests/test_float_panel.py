@@ -289,6 +289,67 @@ def test_the_first_typed_character_repaints_the_whole_editor(window):
     assert panel.had_text is False
 
 
+def test_selecting_a_row_brings_its_line_back(window):
+    """The list is the only history of what was said; selecting a row should hand
+    that line back for editing instead of leaving the editor empty."""
+    panel = window.float_panel
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "第一步：安装播放器", "status": "done", "audio": None, "duration": 3.9},
+        {"idx": 1, "text": "第二步：拖进时间线", "status": "done", "audio": None, "duration": 3.3},
+    ]})
+    # Newest first, so row 0 is idx 1.
+    panel.table.setCurrentCell(0, 0)
+    assert panel.editor.toPlainText() == "第二步：拖进时间线"
+    panel.table.setCurrentCell(1, 0)
+    assert panel.editor.toPlainText() == "第一步：安装播放器"
+
+
+def test_a_stray_click_costs_one_undo(window):
+    """Clicking the list can wipe a script being typed; the old draft has to stay
+    one Ctrl+Z away, which setPlainText would have thrown away."""
+    panel = window.float_panel
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "上一次生成的那句", "status": "done", "audio": None, "duration": 2.0},
+    ]})
+    panel.editor.setPlainText("我正在写的新台词")
+    panel.table.setCurrentCell(0, 0)
+    assert panel.editor.toPlainText() == "上一次生成的那句"
+    panel.editor.undo()
+    assert panel.editor.toPlainText() == "我正在写的新台词"
+
+
+def test_a_refresh_never_wipes_what_is_being_typed(window):
+    """Polling rebuilds the rows as statuses change; rebuilding must not look like
+    the user selecting a row and overwrite the editor."""
+    panel = window.float_panel
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "已完成的那句", "status": "done", "audio": None, "duration": 2.0},
+    ]})
+    panel.table.setCurrentCell(0, 0)
+    panel.editor.setPlainText("改到一半的稿子")
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "已完成的那句", "status": "running", "audio": None, "duration": None},
+    ]})
+    assert panel.editor.toPlainText() == "改到一半的稿子"
+
+
+def test_a_refresh_keeps_the_selected_row_marked(window):
+    """Rows are rebuilt whenever a status flips; the row someone picked has to
+    stay highlighted, otherwise the recall looks like it did not take."""
+    panel = window.float_panel
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "第一句", "status": "done", "audio": None, "duration": 2.0},
+        {"idx": 1, "text": "第二句", "status": "running", "audio": None, "duration": None},
+    ]})
+    panel.table.setCurrentCell(0, 0)
+    assert panel.table._index(panel.table.currentRow()) == 1
+    panel.show_job({"segments": [
+        {"idx": 0, "text": "第一句", "status": "done", "audio": None, "duration": 2.0},
+        {"idx": 1, "text": "第二句", "status": "done", "audio": None, "duration": 3.0},
+    ]})
+    assert panel.table._index(panel.table.currentRow()) == 1
+
+
 def test_the_panel_keeps_one_height_however_many_lines_arrive(window):
     """Every batch used to add a row and a few pixels; the list now has its own box."""
     from voice_workbench.desktop.components.float_panel import TABLE_HEIGHT

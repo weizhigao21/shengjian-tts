@@ -77,7 +77,7 @@ class BatchExecution:
                         "model_signature": signature, **{k: answer[k] for k in
                         ('warm_model', 'prompt_cache_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds',
                          'predictor_mode', 'predictor_revision', 'predictor_calls', 'predictor_fallback_calls', 'predictor_reason',
-                         'predictor_graph_captures', 'predictor_graph_replays', 'predictor_graph_fallbacks', 'predictor_graph_reason') if k in answer}}
+                         'predictor_graph_captures', 'predictor_graph_replays', 'predictor_graph_fallbacks', 'predictor_graph_reliefs', 'predictor_graph_lights', 'predictor_graph_downgraded', 'predictor_graph_reason') if k in answer}}
             with self.lock:
                 if cancelled.is_set() or self.stopping.is_set():
                     return

@@ -59,6 +59,11 @@ class QwenEngine:
             if message.get("seed", -1) >= 0:
                 torch.manual_seed(message["seed"])
             counts = self.predictor_path.snapshot()
+            # Between batches, not between frames: a batch that starts near the
+            # driver's VRAM limit pays 1.2 s per frame in WDDM paging instead of
+            # 0.09 s, and only handing the pooled blocks back fixes it. Runs after
+            # the snapshot so this batch reports its own reclamation.
+            self.predictor_path.tidy()
             self.predictor_path.progress = progress
             try:
                 wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],

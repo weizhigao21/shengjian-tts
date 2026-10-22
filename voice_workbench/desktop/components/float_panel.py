@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import (
     QCoreApplication, QEvent, QMimeData, QPoint, QRectF, Qt, QTimer, QUrl, pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QGuiApplication, QPainterPath, QPalette, QRegion
+from PyQt6.QtGui import QColor, QGuiApplication, QPainterPath, QPalette, QRegion, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QLayout, QPlainTextEdit, QPushButton, QSlider, QTableWidget, QTableWidgetItem,
@@ -331,6 +331,9 @@ class FloatPanel(QWidget):
         self.table.setFixedHeight(TABLE_HEIGHT)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.cellDoubleClicked.connect(self._play_row)
+        # Grabbing a finished line back into the editor is the whole point of the
+        # list: select a row, tweak the wording, generate again.
+        self.table.itemSelectionChanged.connect(self._selection_changed)
         body_layout.addWidget(self.table)
 
         self.empty = QLabel("生成的音频会出现在这里\n抓住每行右侧的六点，拖进时间线")
@@ -502,6 +505,10 @@ class FloatPanel(QWidget):
 
     def _rebuild(self):
         rows = sorted(self.records.values(), key=lambda item: item["idx"], reverse=True)
+        # Status changes during a batch rebuild the rows; without carrying the
+        # selection over, the row someone just clicked loses its highlight and the
+        # recall looks like it did not take.
+        selected = self.table._index(self.table.currentRow())
         self.table.blockSignals(True)
         # Dropping the rows also drops their grip widgets; clearContents would leak them.
         self.table.setRowCount(0)
@@ -535,6 +542,13 @@ class FloatPanel(QWidget):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        # Restore while the signals are still blocked: re-selecting after that
+        # would fire _selection_changed and overwrite a draft being typed.
+        if selected is not None:
+            for row, item in enumerate(rows):
+                if item["idx"] == selected:
+                    self.table.setCurrentCell(row, 0)
+                    break
         self.table.blockSignals(False)
         self.table.setFixedHeight(TABLE_HEIGHT)
         self.table.setVisible(bool(rows))
@@ -545,6 +559,28 @@ class FloatPanel(QWidget):
         index = self.table._index(row)
         if index is not None and self.audio_path(index):
             self.play_requested.emit(index)
+
+    def _selection_changed(self):
+        """Selecting a row brings its line back into the editor."""
+        row = self.table.currentRow()
+        index = self.table._index(row) if row >= 0 else None
+        if index is None:
+            return
+        self.fill_editor(str((self.segment(index) or {}).get("text", "")))
+
+    def fill_editor(self, text):
+        """Put a finished line back for editing.
+
+        Replace through the cursor instead of setPlainText: that keeps the
+        previous draft in the undo stack, so a stray click on the list costs one
+        Ctrl+Z rather than the whole script.
+        """
+        text = text.strip()
+        if not text or self.editor.toPlainText() == text:
+            return
+        self.editor.selectAll()
+        self.editor.insertPlainText(text)
+        self.editor.moveCursor(QTextCursor.MoveOperation.End)
 
     # ---------- window shape ----------
 

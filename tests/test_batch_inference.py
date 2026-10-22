@@ -289,6 +289,53 @@ def test_worker_sdk_contract_reuses_one_model_and_one_prompt_for_real_batch_list
     assert (tmp_path/'一.wav').is_file() and (tmp_path/'二.wav').is_file()
 
 
+def test_each_batch_tidies_pooled_vram_once_before_it_generates(tmp_path, monkeypatch):
+    """Same graph, same batch size: 0.118 s/frame, then 1.3 s/frame for four batches.
+
+    Nothing was captured or evicted in between; the card had simply drifted to its
+    VRAM limit, and only the batch that happened to capture a new shape got its
+    speed back. So the tidy has to be a per-batch step, never a per-frame one.
+    """
+    voice, settings = assets(tmp_path)
+    tidies, calls = [], []
+
+    class FakePath:
+        progress = None
+        calls = fallbacks = 0
+        reliefs = 0
+        def snapshot(self): return (0, 0, 0, 0, 0, FakePath.reliefs)
+        def status(self, before=(0, 0, 0, 0, 0, 0)):
+            return {'predictor_graph_reliefs': FakePath.reliefs - before[5]}
+        def tidy(self):
+            FakePath.reliefs += 1
+            tidies.append(len(calls))
+            return True
+
+    model = SimpleNamespace(
+        create_voice_clone_prompt=lambda **kw: ['cached-prompt'],
+        generate_voice_clone=lambda **kw: (calls.append(kw) or [[0] for _ in kw['text']], 24000))
+    torch = SimpleNamespace(float32='float32', cuda=SimpleNamespace(is_available=lambda: False),
+        inference_mode=nullcontext, set_num_threads=lambda _: None, manual_seed=lambda _: None)
+    monkeypatch.setitem(sys.modules, 'torch', torch)
+    monkeypatch.setitem(sys.modules, 'soundfile',
+                        SimpleNamespace(write=lambda path, *a, **kw: make_wave(Path(path))))
+    monkeypatch.setitem(sys.modules, 'qwen_tts', SimpleNamespace(Qwen3TTSModel=SimpleNamespace(
+        from_pretrained=lambda *a, **kw: model)))
+    monkeypatch.setattr('voice_workbench.batch_inference.qwen_fastpath.install', lambda *a, **kw: FakePath())
+    message = {'settings': settings.model_copy(update={'device': 'cpu'}).model_dump(), 'voice': voice,
+        'seed': 42, 'options': {'max_new_tokens': 64, 'subtalker_dosample': False},
+        'items': [{'text': '你好', 'language': 'Chinese', 'output': str(tmp_path / '一.wav')},
+                  {'text': 'Hello', 'language': 'English', 'output': str(tmp_path / '二.wav')}]}
+    engine = QwenEngine()
+    first, second = engine.run(message), engine.run(message)
+    # One tidy per batch, and it runs before that batch calls generate -- not once
+    # per rendered frame.
+    assert tidies == [0, 1] and len(calls) == 2
+    # Each batch reports its own reclamation. Taking the snapshot after the tidy
+    # would fold it into the baseline and always report zero.
+    assert first['predictor_graph_reliefs'] == 1 and second['predictor_graph_reliefs'] == 1
+
+
 def test_real_worker_ipc_is_persistent_and_cancellable_without_torch(tmp_path, monkeypatch):
     folder = tmp_path/'voice_workbench/batch_inference'
     folder.mkdir(parents=True)

@@ -127,8 +127,8 @@ def cancel_generation(job_id: str, generation: int, request: Request):
 
 
 @router.get("/jobs/{job_id}/generations/{generation}/progress")
-def generation_progress(job_id: str, generation: int, request: Request):
-    result = manager(request).store.generation_progress(job_id, generation)
+def generation_progress(job_id: str, generation: int, request: Request, pending: bool = False):
+    result = manager(request).store.generation_progress(job_id, generation, pending=pending)
     if result is None:
         raise VoiceError('JOB_NOT_FOUND', '生成批次不存在', stage='批次查询')
     for item in result['segments']:

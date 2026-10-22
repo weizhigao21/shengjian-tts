@@ -345,22 +345,39 @@ class Store:
                                      (int(paused), job_id, generation))
             return bool(cursor.rowcount)
 
-    def generation_progress(self, job_id, generation):
-        """Compact completion feed; never deserialize all voice/model snapshots."""
+    def generation_progress(self, job_id, generation, pending=False):
+        """Compact completion feed; never deserialize all voice/model snapshots.
+
+        pending=True only returns rows the workflow still has to take: finished
+        audio that was not released yet, plus failures/cancellations. This keeps
+        long subtitle runs from re-sending every completed segment on each poll.
+        """
         with self.lock:
-            rows = self.db.execute("""SELECT s.idx,s.status,s.audio,s.error,s.audio_storage,s.queue_paused FROM segments s
-                JOIN jobs j ON j.id=s.job_id WHERE s.job_id=? AND s.generation=? AND j.deleted=0
-                ORDER BY s.idx""", (job_id, generation)).fetchall()
-            if not rows:
+            counts = self.db.execute("""SELECT s.status,COUNT(*) AS n,
+                SUM(CASE WHEN s.queue_paused=1 AND s.status IN ('queued','running') THEN 1 ELSE 0 END) AS paused
+                FROM segments s JOIN jobs j ON j.id=s.job_id
+                WHERE s.job_id=? AND s.generation=? AND j.deleted=0 GROUP BY s.status""",
+                (job_id, generation)).fetchall()
+            if not counts:
                 return None
-            states = {r['status'] for r in rows}
+            states = {r['status'] for r in counts}
+            if pending:
+                condition = ("(s.status='done' AND s.audio IS NOT NULL AND s.audio_deleted=0) "
+                             "OR s.status IN ('failed','cancelled')")
+            else:
+                condition = "s.status IN ('done','failed','cancelled')"
+            rows = self.db.execute(f"""SELECT s.idx,s.status,s.audio,s.error,s.audio_storage FROM segments s
+                JOIN jobs j ON j.id=s.job_id
+                WHERE s.job_id=? AND s.generation=? AND j.deleted=0 AND ({condition}) ORDER BY s.idx""",
+                (job_id, generation)).fetchall()
             status = next(s for s in ('running','queued','failed','cancelled','done') if s in states)
-            return {'job_id': job_id, 'generation': generation, 'status': status, 'total': len(rows),
-                    'paused': any(r['queue_paused'] and r['status'] in ('queued','running') for r in rows),
-                    'completed': sum(r['status']=='done' for r in rows),
+            return {'job_id': job_id, 'generation': generation, 'status': status,
+                    'total': sum(r['n'] for r in counts),
+                    'paused': any(r['paused'] for r in counts),
+                    'completed': sum(r['n'] for r in counts if r['status'] == 'done'),
                     'segments': [{'idx': r['idx'], 'status': r['status'], 'audio': r['audio'], 'audio_storage': r['audio_storage'],
                                   'error': json.loads(r['error']) if r['error'] else None}
-                                 for r in rows if r['status'] in ('done','failed','cancelled')]}
+                                 for r in rows]}
 
     def cancel(self, job_id, generation=None):
         with self.lock, self.db:
