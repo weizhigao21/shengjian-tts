@@ -19,6 +19,7 @@ from voice_workbench.batch_inference.process import BatchProcess
 from voice_workbench.batch_inference.qwen_worker import QwenEngine
 from voice_workbench.batch_inference.schemas import BatchSettings
 from voice_workbench.config import ConfigStore
+from voice_workbench.errors import VoiceError
 from voice_workbench.manager import Manager
 from test_inline_generation import index_voice
 from test_model_capabilities import gguf
@@ -34,6 +35,7 @@ class BatchProbe:
         self.last_used = time.monotonic()
         self.block = threading.Event()
         self.fail = False
+        self.stall = 0
 
     def generate(self, settings, signature, payload, cancelled, timeout):
         self.calls.append(deepcopy(payload))
@@ -44,6 +46,10 @@ class BatchProbe:
             time.sleep(.01)
         if cancelled.is_set():
             raise RuntimeError('cancelled')
+        if self.stall:
+            self.stall -= 1
+            raise VoiceError('INFERENCE_TIMEOUT', '批量推理超时：已渲染 78 帧后 95 秒没有任何进展，已缩小批量重试',
+                             stage='批量推理')
         if self.fail:
             raise RuntimeError('CUDA out of memory')
         for item in payload['items']:
@@ -182,6 +188,57 @@ def test_backend_failure_requeues_once_and_falls_back_to_native(batch_manager):
     assert [s['attempts'] for s in done['segments']] == [2, 2, 1]
     assert all(s['inference']['backend'] == 'native' and '显存' in s['inference']['fallback_reason'] for s in done['segments'])
     assert not list((manager.root / 'temporary').glob('*-batch.wav'))
+
+
+def test_a_stalled_batch_retries_smaller_before_the_native_engine(batch_manager):
+    """A stall is resource pressure, not a broken batch: trim by two rows and stay."""
+    manager, native, probe = batch_manager
+    manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 8, 'min_batch_size': 8})
+    manager.batch.adaptive.reset(manager.batch.settings)
+    probe.stall = 1
+    identity = manager.submit('缩批重试', 'qwen', [{'text': f'row {i}'} for i in range(8)])
+    done = wait_job(manager.store.get, identity, ('done',))
+    assert [len(call['items']) for call in probe.calls] == [8, 6, 2]
+    assert not native.calls and done['completed'] == 8
+    assert manager.batch.adaptive.cap == 6
+    assert all(s['inference']['backend'] == 'qwen3_batch' for s in done['segments'])
+    assert not manager.batch.failures
+
+
+def test_a_batch_that_keeps_stalling_past_the_floor_falls_back_to_native(batch_manager):
+    """Below four rows the native engine is not slower, so stop trimming there."""
+    manager, native, probe = batch_manager
+    manager.batch.settings = manager.batch.settings.model_copy(update={'max_batch_size': 8, 'min_batch_size': 8})
+    manager.batch.adaptive.reset(manager.batch.settings)
+    probe.stall = 4
+    identity = manager.submit('降到底', 'qwen', [{'text': f'row {i}'} for i in range(8)])
+    done = wait_job(manager.store.get, identity, ('done',))
+    assert [len(call['items']) for call in probe.calls] == [8, 6, 4, 4]
+    assert len(native.calls) == 8 and done['completed'] == 8
+    assert all(s['inference'].get('fallback_reason') for s in done['segments'])
+
+
+def test_three_finished_batches_restore_the_trimmed_size():
+    from voice_workbench.batch_inference.adaptation import AdaptiveBatches
+    adaptive = AdaptiveBatches(BatchSettings(max_batch_size=8))
+    stalled = {'code': 'INFERENCE_TIMEOUT', 'message': '批量推理超时'}
+    assert adaptive.cap == 8
+    assert '6' in adaptive.degrade('job', stalled) and adaptive.cap == 6
+    assert '4' in adaptive.degrade('job', stalled) and adaptive.cap == 4
+    assert [adaptive.succeeded('job') for _ in range(2)] == ['', '']
+    assert '6' in adaptive.succeeded('job') and adaptive.cap == 6
+    assert [adaptive.succeeded('job') for _ in range(2)] == ['', '']
+    assert '8' in adaptive.succeeded('job') and adaptive.cap == 8
+    assert adaptive.status()['degraded'] is False
+
+
+def test_a_size_that_cannot_be_trimmed_or_an_unrelated_failure_is_not_retried():
+    from voice_workbench.batch_inference.adaptation import AdaptiveBatches
+    adaptive = AdaptiveBatches(BatchSettings(max_batch_size=8))
+    assert adaptive.degrade('job', {'code': 'BATCH_MODEL_CHANGED', 'message': '模型变化'}) == ''
+    assert adaptive.cap == 8
+    small = AdaptiveBatches(BatchSettings(max_batch_size=2))
+    assert small.degrade('job', {'code': 'GPU_OUT_OF_MEMORY', 'message': 'GPU 显存不足'}) == ''
 
 
 def test_cancellation_is_scoped_to_one_generation_and_never_triggers_fallback(batch_manager):

@@ -11,6 +11,7 @@ from ..config import atomic_json
 from ..errors import VoiceError
 from ..runtime import external_environment
 from ..model_info import _read_package
+from .adaptation import AdaptiveBatches
 from .policy import group_key, model_signature, unsupported
 from .process import BatchProcess
 from .schemas import BatchSettings
@@ -20,6 +21,7 @@ class BatchBackend:
     def __init__(self, manager):
         self.manager = manager
         self.settings = BatchSettings(**manager.config.read().get("batch_inference", {}))
+        self.adaptive = AdaptiveBatches(self.settings)
         self.process = BatchProcess(manager.root)
         self.failures = OrderedDict()
         self.last_result = None
@@ -95,6 +97,7 @@ class BatchBackend:
                 atomic_json(self.manager.config.path, {**self.manager.config.read(), "batch_inference": settings.model_dump()})
             self.settings, self.reason = settings, reason
             self.versions = versions
+            self.adaptive.reset(settings)
             self.failures.clear()
             self.last_result = None
         return self.status()
@@ -104,7 +107,7 @@ class BatchBackend:
         reason = '批量环境正在检测或安装，暂时使用原生引擎。' if self.setup.busy else self.reason
         result = {"backend": "qwen3_batch", "ready": not bool(reason),
                 "reason": reason, "loaded": bool(process and process.poll() is None and self.process.loaded),
-                "last_result": self.last_result}
+                "last_result": self.last_result, "adaptive": self.adaptive.status()}
         if not compact:
             result.update(settings=self.settings.model_dump(), versions=self.versions,
                 fallbacks=[{"job_id": key[0], "generation": key[1], "reason": value} for key, value in self.failures.items()])
@@ -141,8 +144,12 @@ class BatchBackend:
                         and group_key(candidate["voice"]) == key)
             warm = self.status()['loaded'] and self.process.key == model_signature(self.settings, self.versions)
             minimum = 2 if warm or item.get('inference_mode') == 'batch' else self.settings.min_batch_size
-            batch = store.claim_batch(job, item, compatible, self.settings.max_batch_size,
-                                      self.settings.max_batch_chars, minimum=minimum)
+            # A degraded batch is smaller than the startup threshold by design:
+            # holding the configured minimum here would send every row to the
+            # native engine, which is the fallback the trim was meant to avoid.
+            limit = self.adaptive.limit(self.settings)
+            batch = store.claim_batch(job, item, compatible, limit,
+                                      self.settings.max_batch_chars, minimum=min(minimum, limit))
             # Finish a trailing row on the already loaded model, avoiding a costly
             # switch to GGUF solely because a micro-batch has an odd row count.
             return batch or ([item] if warm else [])
@@ -158,10 +165,12 @@ class BatchBackend:
         reason = self.status()['reason'] or next((r for text in texts if (r := unsupported(voice, text, self.settings))), "")
         if len(texts) < 2 and not self.status()['loaded']:
             reason = "单条文本使用现有引擎。"
+        limit = self.adaptive.limit(self.settings)
+        minimum = min(self.settings.min_batch_size, limit)
         sizes, size, chars = [], 0, 0
         if not reason:
             for text in texts:
-                if size >= self.settings.max_batch_size or chars + len(text) > self.settings.max_batch_chars:
+                if size >= limit or chars + len(text) > self.settings.max_batch_chars:
                     sizes.append(size)
                     size, chars = 0, 0
                 size += 1
@@ -170,8 +179,8 @@ class BatchBackend:
                 sizes.append(size)
             if max(sizes) < 2 and not self.status()['loaded']:
                 reason = '当前长度限制下无法合并两条文本，使用现有引擎。'
-            elif max(sizes) < self.settings.min_batch_size and not self.status()['loaded']:
-                reason = f'兼容文本不足 {self.settings.min_batch_size} 条，使用原生引擎，避免小批量加载开销。'
+            elif max(sizes) < minimum and not self.status()['loaded']:
+                reason = f'兼容文本不足 {minimum} 条，使用原生引擎，避免小批量加载开销。'
         return {"backend": "native" if reason else "qwen3_batch", "reason": reason,
                 "batch_sizes": sizes, "single_count": sizes.count(1) if not reason else len(texts),
                 "model_loaded": self.status()["loaded"], "requires_setup": bool(self.reason) or self.setup.busy}

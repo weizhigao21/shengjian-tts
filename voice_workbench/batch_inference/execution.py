@@ -89,6 +89,10 @@ class BatchExecution:
                     details = validate_wave(output)
                     self.store.finish(job['id'], item['idx'], audio=output.name, cached=all(cached),
                         duration=details['duration'], generation_seconds=elapsed, inference=metadata)
+                # Only real inference proves the pressure is gone; a fully cached
+                # batch never touched the GPU and must not restore the size.
+                if not all(cached):
+                    self.batch.adaptive.succeeded(job['id'])
                 self.batch.last_result = dict(metadata, job_id=job['id'], indices=[i['idx'] for i in items])
                 self.execution_finished(slot, 'done', cached=all(cached), inference=metadata)
         except Exception as exc:
@@ -103,8 +107,16 @@ class BatchExecution:
                 with self.lock:
                     if cancelled.is_set() or self.stopping.is_set():
                         return
-                    self.batch.fallback(job, items[0], error['message'])
-                    self.execution_finished(slot, 'fallback', inference={'fallback_reason': error['message']})
+                    # A retryable failure first trims the micro-batch and keeps the
+                    # rows on this engine; only a batch that stalls at the floor
+                    # hands them to the native engine.
+                    retry = self.batch.adaptive.degrade(job['id'], error)
+                    if retry:
+                        self.execution_finished(slot, 'degraded', inference={
+                            'degraded_reason': retry, 'batch_limit': self.batch.adaptive.cap})
+                    else:
+                        self.batch.fallback(job, items[0], error['message'])
+                        self.execution_finished(slot, 'fallback', inference={'fallback_reason': error['message']})
                     for item in items:
                         self.store.requeue(job['id'], item['idx'])
         finally:

@@ -116,9 +116,9 @@ class BatchProcess:
                 return answer
             waited = time.monotonic() - started
             raise VoiceError("INFERENCE_TIMEOUT", (
-                f"批量推理超时：{len(items)} 条已渲染 {frames} 帧后 {waited:.0f} 秒没有任何进展，已改用原生引擎重试"
+                f"批量推理超时：{len(items)} 条已渲染 {frames} 帧后 {waited:.0f} 秒没有任何进展，已缩小批量重试"
                 if frames else
-                f"批量推理超时：{len(items)} 条等待超过 {waited:.0f} 秒仍未开始出帧，已改用原生引擎重试"),
+                f"批量推理超时：{len(items)} 条等待超过 {waited:.0f} 秒仍未开始出帧，已缩小批量重试"),
                 stage="批量推理")
         except BaseException:
             self.interrupt()

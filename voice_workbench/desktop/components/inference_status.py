@@ -18,7 +18,7 @@ def execution_details(item):
         lines.append('片段：' + '、'.join(map(str, item['indices'])))
     if item.get('cached'):
         lines.append('本次复用成品音频缓存，未执行推理；上方引擎为缓存来源。')
-    for key, title in (('fallback_reason', '回退原因'), ('route_reason', '调度原因')):
+    for key, title in (('fallback_reason', '回退原因'), ('degraded_reason', '降级原因'), ('route_reason', '调度原因')):
         if item.get(key):
             lines.append(title + '：' + str(item[key]))
     mode = item.get('predictor_mode')
@@ -70,12 +70,18 @@ def status_presentation(health):
             tip += '\n批量模型：' + ('已确认驻留。' if batch.get('loaded') else '本次调用完成后确认驻留状态。')
         return name + (' · 已回退' if fallback else '') + ' · ' + phase, tip, 'fallback' if fallback else 'running'
     last = health.get('last_execution')
+    adaptive = batch.get('adaptive') or {}
     text = '空闲 · 批量模型驻留' if batch.get('loaded') else '空闲 · 批量已就绪' if batch.get('ready') else '空闲 · 原生引擎'
     tip = '当前没有语音生成正在执行。\n' + ('批量模型已加载，可复用。' if batch.get('loaded') else
         '批量环境已就绪；达到合批条件才会启用。' if batch.get('ready') else '批量不可用：' + batch.get('reason', '未配置'))
     color = 'idle'
+    if adaptive.get('degraded'):
+        text += f" · 批量降级 {adaptive.get('batch_limit')} 条"
+        tip += '\n资源被占用时已自动缩小批量，连续成功后会逐级恢复。' + (
+            '\n最近一次调整：' + adaptive.get('reason', '') if adaptive.get('reason') else '')
     if last:
-        result = '缓存命中' if last.get('cached') else {'done': '已完成', 'failed': '失败', 'cancelled': '已取消', 'fallback': '待原生重试'}.get(last.get('status'), '结束')
+        result = '缓存命中' if last.get('cached') else {'done': '已完成', 'failed': '失败',
+                   'cancelled': '已取消', 'fallback': '待原生重试', 'degraded': '已降批重试'}.get(last.get('status'), '结束')
         text += ' · 上次' + (result if last.get('cached') else '批量' if last.get('backend') == 'qwen3_batch' else '原生')
         if last.get('fallback_reason'):
             text += '回退'
