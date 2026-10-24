@@ -1,7 +1,9 @@
 """Paper tickets and small editors for voices and reference audio."""
 import hashlib
 import math
+from datetime import datetime
 from pathlib import Path
+import shutil
 import uuid
 import wave
 
@@ -11,11 +13,12 @@ from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QLineEdit, QPlainTextEdit, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
+from .desktop.microphone import MAX_SECONDS, RECORD_PREFIX, MicrophoneRecorder
 from .model_controls import ModelControls, populate, voice_label
 from .model_info import MODES, selected_mode
 from .runner import check_voice, validate_wave
 from .schemas import VoiceConfig
-from .ui import Waveform, button, label
+from .ui import INK, Waveform, button, icon, label
 
 
 def friendly_name(voice):
@@ -528,7 +531,21 @@ class ReferencePicker(PaperDialog):
         self.owner, self.controls, self.selection = owner, controls, None
         self.confirm.setText("使用演绎参考" if emotion else "使用这个声音")
         self.confirm.setEnabled(False)
-        self.content.addWidget(button("导入参考声音", lambda: owner.import_reference(selected=lambda r: (self.choose(r), self.apply())), "import", "small"))
+        entry = QHBoxLayout()
+        entry.setSpacing(8)
+        self.import_button = button("导入参考声音", lambda: owner.import_reference(selected=lambda r: (self.choose(r), self.apply())), "import", "small")
+        entry.addWidget(self.import_button, 1)
+        self.record_button = button("录音", self.toggle_recording, "voices", "small")
+        self.record_button.setToolTip(f"用麦克风录一段 1–{MAX_SECONDS:.0f} 秒的参考音频，说完点停止再起名字")
+        # Fixed width: the elapsed counter must not resize the row every 0.1 seconds.
+        self.record_button.setMinimumWidth(128)
+        entry.addWidget(self.record_button)
+        self.content.addLayout(entry)
+        self.recorder = MicrophoneRecorder(self)
+        self.recorder.ticked.connect(self.show_elapsed)
+        self.recorder.finished.connect(self.take_recorded)
+        self.recorder.failed.connect(self.record_failed)
+        self.recording_path = ""
         search = QLineEdit()
         search.setPlaceholderText("搜索参考声音")
         self.content.addWidget(search)
@@ -557,12 +574,80 @@ class ReferencePicker(PaperDialog):
         self.content.addWidget(self.preview_button)
         self.confirm.clicked.connect(self.apply)
         self.finished.connect(owner.stop_reference)
+        self.finished.connect(self.discard_recording)
 
     def choose(self, reference):
         self.selection = reference
         self.confirm.setEnabled(True)
         for row, item in self.reference_buttons:
             row.setChecked(item["id"] == reference["id"])
+
+    def toggle_recording(self):
+        if self.recorder.recording:
+            self.recorder.stop()
+        else:
+            self.start_recording()
+
+    def start_recording(self):
+        self.error.hide()
+        # A preview through the speakers would end up inside the take.
+        self.owner.stop_reference()
+        self.import_button.setEnabled(False)
+        self.preview_button.setEnabled(False)
+        self.record_button.setText("停止 · 0.0 秒")
+        self.record_button.setIcon(icon("stop", "#b4552b"))
+        self.dress("recording")
+        self.recorder.start()
+
+    def show_elapsed(self, seconds):
+        self.record_button.setText(f"停止 · {seconds:.1f} 秒")
+
+    def dress(self, kind):
+        """Re-polish after a property change, otherwise the old rule keeps painting."""
+        self.record_button.setProperty("kind", kind)
+        self.record_button.style().unpolish(self.record_button)
+        self.record_button.style().polish(self.record_button)
+
+    def undress(self):
+        self.record_button.setText("录音")
+        self.record_button.setIcon(icon("voices"))
+        self.dress("small")
+        self.import_button.setEnabled(True)
+        self.preview_button.setEnabled(True)
+
+    def record_failed(self, message):
+        self.undress()
+        self.error.setText(message)
+        self.error.show()
+        self.confirm.setEnabled(self.selection is not None)
+
+    def take_recorded(self, path):
+        """Name the take and save it, the same way an imported file is saved."""
+        self.undress()
+        self.recording_path = path
+        try:
+            seconds = validate_wave(Path(path))["duration"]
+        except Exception as exc:
+            self.record_failed(str(exc))
+            self.discard_recording()
+            return
+        dialog = self.owner.import_reference(
+            source={"reference_audio": path, "name": f"录音 {datetime.now():%m-%d %H:%M}",
+                    "source_label": f"麦克风录音 · {seconds:.1f} 秒 · 点击更换",
+                    "source_hint": "这段是刚才的麦克风录音。保存后音频会复制到数据目录，临时录音随即删除。"},
+            selected=lambda r: (self.choose(r), self.apply()))
+        if dialog is not None:
+            dialog.finished.connect(lambda _: self.discard_recording())
+
+    def discard_recording(self):
+        """Drop the take once it is saved or abandoned; the copy in data/ stays."""
+        self.recorder.cancel()
+        path, self.recording_path = self.recording_path, ""
+        if not path:
+            return
+        folder = Path(path).parent
+        if folder.name.startswith(RECORD_PREFIX):
+            shutil.rmtree(folder, ignore_errors=True)
 
     def apply(self):
         if self.selection:

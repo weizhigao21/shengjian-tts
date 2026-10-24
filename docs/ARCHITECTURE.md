@@ -82,6 +82,8 @@ v0.7.35 的生成记录右键菜单由 `desktop/controllers/playback.py` 捕获�
 
 v0.7.34 的 `desktop/audio_output.py` 统一管理系统默认输出跟随。`QMediaDevices` 监视器属于各自的 `QAudioOutput`，收到默认输出 / 插拔通知后比较设备 ID，只在改变时重新绑定；四处播放器复用此策略，Qt 对象释放时自动断开通知，不需要轮询或重新创建播放器。通知依据 [Qt 默认输出契约](https://doc.qt.io/qt-6/qmediadevices.html#defaultAudioOutput-prop)。
 
+v0.7.72 的 `desktop/microphone.py` 用 `QAudioSource` 直接录参考声音。格式在入口处收敛：先试 48 kHz / 44.1 kHz 的 16 位单声道，设备都不接受才用它的首选格式，浮点或 32 位样本在这里转成 16 位——否则字节按 16 位解释出来就是噪音。立体声设备取两声道平均后按单声道写出，保证下游读到的是一条语音而不是快一倍的双声道数据。录音只落在临时目录，保存时仍走 `/references` 由 `ConfigStore.copy_reference_audio` 按内容复制进 `data/voices/`，成功后删除临时副本，取消则整份丢弃；界面的秒数、1 秒下限与 60 秒上限都属于这一层，服务端校验不变。
+
 v0.7.33 的 `app_updates/` 将发行解析 / 下载、清单校验和独立安装分离。Qt 页面只组织后台任务与进程交接，不在界面线程解压。更新器单独打包，不导入 Qt、后端或 HTTPX；包内文件清单和覆盖策略由构建及更新共用。`_vendor/pyupdater/` 仅保留有明确来源的配置、进程与进度窗原语。
 
 v0.7.32 新增 `audio_editing/`，分别管理 PCM 处理、版本存储、应用服务和 Vevo2 请求。音频编辑通过单独的 API 和 SQLite 保存项目，复用原生服务启动；AI 处理与原配音队列在管理器锁下互斥。Qt 的页面、控制器和波形组件独立，不把音频编辑任务写入文章 / 对话数据库。
@@ -96,6 +98,7 @@ voice_workbench/
 │  ├─ window.py                窗口装配、Qt 初始化和退出
 │  ├─ api_client.py            异步 HTTP 请求与响应解析
 │  ├─ audio_output.py          各处播放器跟随系统默认输出设备
+│  ├─ microphone.py            麦克风录音与参考 WAV 规整
 │  ├─ draft_saves.py           按任务与版本保存草稿、断线恢复
 │  ├─ voice_checks.py          界面校验缓存、文件与参数失效
 │  ├─ constants.py             界面状态文字

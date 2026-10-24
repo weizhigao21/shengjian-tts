@@ -845,6 +845,8 @@ QLabel#banner { background:transparent; padding:3px 6px; }
 QLabel#banner[state="ready"] { background:transparent; color:#83907c; }
 QPushButton { border-radius:6px; font-weight:400; }
 QPushButton[kind="small"] { padding:5px 11px; min-height:18px; font-size:12px; background:#f7f7f5; }
+QPushButton[kind="recording"] { padding:5px 11px; min-height:18px; font-size:12px; background:#fdf0e8; border-color:#e0b49a; color:#b4552b; font-weight:600; }
+QPushButton[kind="recording"]:hover { background:#fbeadb; }
 QPushButton#emotionPreset:checked { color:#a34c1b; background:#fff1e7; border-color:#e3a578; }
 QPushButton[kind="icon"] { border:0; background:transparent; padding:4px; min-width:22px; min-height:22px; }
 QPushButton[kind="icon"]:hover { background:#e8e8e5; }
