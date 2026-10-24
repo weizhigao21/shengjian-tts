@@ -223,7 +223,7 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 <summary>作品、生成耗时与参考声音</summary>
 
 - 作品可重命名、删除和撤销；任务列表用图标区分文章和对话，时间记录在详情中。
-- 对白框、生成记录和侧栏任务行都可以直接拖到其他程序：拖起时交出真实 WAV 文件，播放器、音频编辑软件、聊天窗口都能接收，不需要先导出。拖出去的文件按「生成文本_生成时间」命名，例如「姐姐你在干什么呀？_20261019-180407.wav」，落到目标程序里一眼就能认出是哪一句。
+- 对白框、生成记录和侧栏任务行都可以直接拖到其他程序：拖起时交出真实 WAV 文件，播放器、音频编辑软件、聊天窗口都能接收，不需要先导出。拖出去的文件按「生成文本_生成时间」命名，例如「姐姐你在干什么呀？_20261019-180407.wav」，落到目标程序里一眼就能认出是哪一句。交出去的副本放在本地数据目录的 `drag-cache` 下、每次拖拽一个子文件夹，保留 30 天——剪辑软件把路径记进工程，过几天重新打开工程还找得到；只有 30 天以前的会话文件夹才会被清掉。
 - 「边剪边配」小窗里的任务行同样可以整行拖出，也可以通过「复制最新」把音频放进剪贴板，在剪辑软件的时间线直接 `Ctrl+V`。小窗关掉就回到主窗口，没有完成的任务仍在服务里继续生成。
 - 音频列表默认最新在前，可切换排序。生成耗时包含推理时的模型加载，不含排队；缓存与旧记录分别显示「缓存」「未记录」。
 - 手动播放结束后停止；再次生成保留旧音频。对话中角色名字可以相同，历史记录仍按每框的固定 ID 区分。
@@ -396,6 +396,7 @@ flowchart LR
 │  └─ check_packaged_app.py        发布包启动、引擎安装、真实配音与退出检查
 ├─ docs/
 │  ├─ ARCHITECTURE.md               模块职责、目录与依赖规则
+│  ├─ TESTING.md                    测试运行、临时目录清理与排查
 │  ├─ DIALOGUE_MODE_PLAN.md         当前对话功能与后续计划
 │  └─ images/                      README 项目图标与界面截图
 ├─ tests/                          服务、模型、任务、界面与资产管理测试
@@ -415,6 +416,7 @@ flowchart LR
 ├─ 打包.bat                        Windows 一键打包脚本
 ├─ 声笺.spec                       图标、资源、依赖与双 EXE 打包配置
 ├─ pyproject.toml                  Python 打包、依赖与测试配置
+├─ conftest.py                     每轮测试前清扫临时目录，避免无限累积
 ├─ requirements-release.txt        v0.7.28 发行版的固定构建环境
 ├─ LICENSE                        GPLv3 许可证
 ├─ licenses/                      依赖版本、来源与完整许可声明
@@ -444,7 +446,9 @@ python scripts/check_packaged_app.py
 python scripts/check_advanced_generation.py
 ```
 
-实际推理检查需要对应模型、引擎与正常 Windows 用户权限。
+实际推理检查需要对应模型、引擎与正常 Windows 用户权限。界面用例需设置 `QT_QPA_PLATFORM=offscreen`。
+
+测试的 `tmp_path` 落在 `%LOCALAPPDATA%\Temp\pytest-of-<用户>` 下，而 Windows 每次登录都会遍历整个 `%TEMP%`：4 万个文件就是 23 秒黑屏，6 千多个是 2 秒。pytest 自己的三轮清理在有句柄占用时会静默失败，实测 620 轮攒到 35,369 个文件 / 609 MB。根目录 `conftest.py` 因此在每轮开始前清掉删不掉的 `garbage-*` 墓碑与超量轮次（默认保留 2 轮、只动 1 小时前的），位置和目录结构不变。可用 `WB_PYTEST_KEEP_RUNS`、`WB_PYTEST_SWEEP_MIN_AGE` 调整，详见[测试](docs/TESTING.md)。
 
 使用已配置的 VoxCPM2、Qwen3 CustomVoice、Kokoro 模型刷新演示截图：
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import array
+import os
 import re
 import shutil
 import sys
@@ -12,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from PyQt6.QtCore import (QByteArray, QCoreApplication, QMimeData, QObject, QPoint, QPointF, QRect, QSize, Qt, QUrl,
-                           QEvent, QStandardPaths, pyqtSignal)
+                           QEvent, pyqtSignal)
 from PyQt6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat,
                          QTextCursor, QWheelEvent)
 from PyQt6.QtSvg import QSvgRenderer
@@ -368,7 +369,9 @@ def audio_mime_data(paths):
 
 
 DRAG_NAME_CHARS = 60
-DRAG_CACHE_MINUTES = 30
+DRAG_CACHE_DAYS = 30
+DRAG_CACHE_ENV = "SHENGJIAN_DRAG_CACHE"
+DRAG_CACHE_NAME = "drag-cache"
 _ILLEGAL_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
@@ -382,23 +385,62 @@ def audio_drag_name(text, when=None):
 
 
 def drag_cache_dir():
-    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)
-    folder = Path(base or ".") / "shengjian-drag"
+    """Where a dropped clip waits for the program that received it.
+
+    Deliberately not %TEMP%: Windows and disk cleaners empty it, and a video
+    editor stores the handed-over path in its project file — reopening that
+    project then reports the media as missing.  `SHENGJIAN_DRAG_CACHE` relocates
+    the folder (the test suite points it at a throwaway directory).
+    """
+    override = os.environ.get(DRAG_CACHE_ENV)
+    if override:
+        folder = Path(override)
+    else:
+        local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        folder = local / "声笺" / DRAG_CACHE_NAME
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 
-def prune_drag_cache(folder, minutes=DRAG_CACHE_MINUTES):
-    """Drop clips handed out long ago; a just-dropped file may still be read by the target."""
-    deadline = time.time() - minutes * 60
+def drag_session_dir(folder=None):
+    """One folder per drag, so a drop and the files it handed out stay together."""
+    folder = folder or drag_cache_dir()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate, serial = folder / stamp, 2
+    while True:
+        try:
+            candidate.mkdir()
+            return candidate
+        except FileExistsError:
+            candidate, serial = folder / f"{stamp}-{serial}", serial + 1
+        except OSError:
+            # No rights or no space left: a flat drop under the cache root still works.
+            return folder
+
+
+def prune_drag_cache(folder, days=DRAG_CACHE_DAYS):
+    """Drop drag sessions handed out long ago; recent ones may still be open somewhere.
+
+    Age is read from the session folder, never from the clip inside it: copies keep
+    the audio's own mtime, so a clip generated last week would otherwise look
+    stale the moment it was dropped and vanish on the very next drag.
+    """
+    deadline = time.time() - days * 86400
     try:
         entries = list(folder.iterdir())
     except OSError:
         return
     for entry in entries:
         try:
-            if entry.is_file() and entry.stat().st_mtime < deadline:
-                entry.unlink(missing_ok=True)
+            if entry.stat().st_mtime >= deadline:
+                continue
+        except OSError:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
+        try:
+            entry.unlink(missing_ok=True)
         except OSError:
             continue
 
@@ -407,13 +449,15 @@ def prepare_drag_files(files, texts=None):
     """Copies each clip under its text and generation time.
 
     Windows hands the target a path, so a readable name has to be a real file: the
-    original stays untouched under its opaque id, the copy carries the name.
+    original stays untouched under its opaque id, the copy carries the name and
+    lives in a per-drag folder that outlives the session.
     """
     files = existing_audio_files(files)
     if not files:
         return []
     folder = drag_cache_dir()
     prune_drag_cache(folder)
+    session = drag_session_dir(folder)
     prepared = []
     for index, path in enumerate(files):
         try:
@@ -422,7 +466,7 @@ def prepare_drag_files(files, texts=None):
             prepared.append(path)
             continue
         text = texts[index] if texts and index < len(texts) else ""
-        target = folder / (audio_drag_name(text or path.stem, when) + path.suffix.lower())
+        target = session / (audio_drag_name(text or path.stem, when) + path.suffix.lower())
         try:
             shutil.copy2(path, target)
             prepared.append(target)

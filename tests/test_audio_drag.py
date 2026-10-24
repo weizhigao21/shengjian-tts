@@ -97,7 +97,8 @@ def test_prepared_copies_carry_the_audio_and_leave_the_original_alone(tmp_path):
     os.utime(source, (stamp, stamp))
     prepared = prepare_drag_files([source], ["一段测试对白"])
     assert len(prepared) == 1 and prepared[0] != source.resolve()
-    assert prepared[0].parent == drag_cache_dir().resolve()
+    # One folder per drag, itself under the persistent cache root.
+    assert prepared[0].parent.parent == drag_cache_dir().resolve()
     assert prepared[0].read_bytes() == source.read_bytes()
     assert abs(prepared[0].stat().st_mtime - stamp) < 1
     expected = "一段测试对白_" + time.strftime("%Y%m%d-%H%M%S", time.localtime(stamp)) + ".wav"
@@ -118,15 +119,63 @@ def test_a_batch_keeps_one_name_per_clip(tmp_path):
     assert prepared[0].stem.startswith("第一句_") and prepared[1].stem.startswith("第二句_")
     assert prepared[2].stem.startswith("clip-2_")
     assert len({path.name for path in prepared}) == 3
+    # Everything one drag handed over lands in the same folder.
+    assert len({path.parent for path in prepared}) == 1
 
 
-def test_old_drag_copies_are_pruned(tmp_path):
+def test_drag_cache_follows_local_app_data_not_the_temp_folder(tmp_path, monkeypatch):
+    """Windows and cleaners empty %TEMP%; a video project must still find its media.
+
+    The suite redirects the cache into its own tmp dir, so the default branch is
+    exercised here by pointing LOCALAPPDATA at scratch space.
+    """
+    import voice_workbench.ui as ui_module
+    from PyQt6.QtCore import QStandardPaths
+
+    monkeypatch.delenv("SHENGJIAN_DRAG_CACHE", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    cache = drag_cache_dir().resolve()
+    assert cache == (tmp_path / "local" / "声笺" / "drag-cache").resolve()
+    legacy = Path(QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.TempLocation)) / "shengjian-drag"
+    assert cache != legacy.resolve()
+    # No code path may stage drops in the throwaway tree again.
+    assert "shengjian-drag" not in Path(ui_module.__file__).read_text(encoding="utf-8")
+
+
+def test_each_drag_gets_its_own_folder(tmp_path):
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"RIFF")
+    first = prepare_drag_files([source], ["第一句"])
+    second = prepare_drag_files([source], ["第二句"])
+    assert first[0].parent != second[0].parent
+    assert first[0].parent.parent == second[0].parent.parent == drag_cache_dir().resolve()
+    assert first[0].is_file() and second[0].is_file()
+
+
+def test_a_clip_generated_hours_ago_survives_the_next_drag(tmp_path):
+    """Copies keep the audio's own mtime; pruning must not read that as "stale".
+
+    The old 30-minute rule deleted a freshly dropped copy the next time anything
+    else was dragged, which is exactly how an open video project lost its media.
+    """
+    source = tmp_path / "old.wav"
+    source.write_bytes(b"RIFF")
+    long_ago = time.time() - 60 * 86400
+    os.utime(source, (long_ago, long_ago))
+    prepared = prepare_drag_files([source], ["两个月前生成的一句"])
+    prune_drag_cache(drag_cache_dir())
+    assert prepared[0].is_file()
+
+
+def test_stale_drag_sessions_are_pruned(tmp_path):
     folder = tmp_path / "cache"
     folder.mkdir()
-    stale, fresh = folder / "old.wav", folder / "new.wav"
-    stale.write_bytes(b"RIFF")
-    fresh.write_bytes(b"RIFF")
-    long_ago = time.time() - 3600
+    stale, fresh = folder / "20260101-000000", folder / "20261023-120000"
+    for entry in (stale, fresh):
+        entry.mkdir()
+        (entry / "a.wav").write_bytes(b"RIFF")
+    long_ago = time.time() - 40 * 86400
     os.utime(stale, (long_ago, long_ago))
     prune_drag_cache(folder)
     assert not stale.exists() and fresh.exists()
