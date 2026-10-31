@@ -1,7 +1,7 @@
 """Audio HTTP responsibilities."""
 from __future__ import annotations
 from fastapi import Request, APIRouter
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from ..schemas import AudioDeletion
 from .context import manager
 
@@ -10,7 +10,15 @@ router = APIRouter()
 
 @router.get("/generated-audio")
 def generated_audio(request: Request):
-    return manager(request).generated_audio()
+    # The manager page polls this list. An unchanged library answers 304 from a
+    # few aggregate queries instead of rebuilding and re-sending every record;
+    # the header is read straight off the request so the published contract is
+    # untouched.
+    target = manager(request)
+    tag = '"%s"' % target.generated_audio_revision()
+    if request.headers.get("if-none-match") == tag:
+        return Response(status_code=304, headers={"ETag": tag})
+    return JSONResponse(target.generated_audio(), headers={"ETag": tag})
 
 
 @router.post("/generated-audio/delete")

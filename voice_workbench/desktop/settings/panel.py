@@ -20,6 +20,7 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.owner = owner
         self.model_data = None
         self.audio_data = []
+        self.audio_revision = None
         self.loading = False
         self.deleting = False
         self.selected_ids = set()
@@ -45,7 +46,7 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.open_files_button = button("打开本地文件", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(self.owner.data_dir))), "folder", "ghost")
         self.open_files_button.setToolTip(f"打开配置、任务、模型和音频所在的数据目录\n{self.owner.data_dir}")
-        heading.addWidget(button("刷新", self.refresh, "retry", "ghost"))
+        heading.addWidget(button("刷新", self.reload, "retry", "ghost"))
         layout.addLayout(heading)
         tabs = QHBoxLayout()
         self.tab_buttons = []
@@ -74,8 +75,14 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.pages.setCurrentIndex(index)
         for i, control in enumerate(self.tab_buttons):
             control.setChecked(control.property("section_index") == index)
+        self.audio_revision = None
         if hasattr(self, "timer"):
             self.refresh()
+
+    def reload(self, *args):
+        """The 刷新 button: always ask for the full list, token or not."""
+        self.audio_revision = None
+        self.refresh()
 
     def refresh(self, *_):
         if not self.isVisible() or not self.owner.ready or self.loading or self.deleting:
@@ -105,8 +112,13 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
             if section in (0, 4) and values != self.model_data:
                 self.model_data = values
                 self.render_models()
-            if section == 1 and values != self.audio_data:
-                audio = values
+        def audio_fetched(answer):
+            self.loading = False
+            if answer is None:
+                # The list said it had not changed; keep what is on screen.
+                return
+            audio, self.audio_revision = answer
+            if audio != self.audio_data:
                 self.audio_data = audio
                 self.selected_ids.intersection_update(a["id"] for a in audio)
                 if self.playing_id and self.playing_id not in {a["id"] for a in audio}:
@@ -115,13 +127,32 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         def failed(message):
             self.loading = False
             self.owner.statusBar().showMessage("管理列表刷新失败：" + message, 6000)
-        endpoint = "/generated-audio" if section == 1 else "/models"
-        self.owner.call(lambda c: checked(c.get(endpoint)), fetched, failed)
+        if section == 1:
+            self.owner.call(lambda c: self.audio_library(c), audio_fetched, failed)
+            return
+        self.owner.call(lambda c: checked(c.get("/models")), fetched, failed)
+
+    def audio_library(self, client):
+        """Fetch the audio list, or nothing when it has not changed since last time.
+
+        The page polls every 1.8 s; rebuilding, re-sending and re-decoding thousands
+        of records for an unchanged list was the most expensive thing the desktop
+        did while sitting idle on this tab.
+        """
+        from ..api_client import checked
+        headers = {"If-None-Match": self.audio_revision} if self.audio_revision else {}
+        response = client.get("/generated-audio", headers=headers)
+        if response.status_code == 304:
+            return None
+        return checked(response), response.headers.get("etag")
 
     def mutate(self, action, message=""):
         from ..api_client import checked
         def done(value):
             self.owner.active_voice_snapshot = None
+            # A mutation can change the list in ways the token does not see
+            # (a deleted file, a backfilled duration), so ask for it in full.
+            self.audio_revision = None
             self.refresh()
             self.owner.poll()
             if message:

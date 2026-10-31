@@ -44,6 +44,22 @@ def file_digest(path: str) -> str:
     return digest.hexdigest()
 
 
+def path_key(value) -> str:
+    """Absolute, case-folded path for comparing one configuration with another.
+
+    ``Path.resolve()`` walks the whole path (and every junction in it) through
+    the Windows filter chain: 171 resolutions cost 90 ms, which was most of what
+    the model page spent per poll. Two configuration entries only have to agree
+    on which file they name, and absolute + case-folded already settles that.
+    Real-path resolution stays where it is a storage key (reference ids, model
+    file versions) rather than a comparison.
+    """
+    try:
+        return os.path.normcase(os.path.abspath(str(value or ".")))
+    except (OSError, ValueError, TypeError):
+        return os.path.normcase(str(value or "."))
+
+
 def voice_fingerprint(voice: dict) -> str:
     value = {k: v for k, v in voice.items() if k not in ("name", "id", *EMOTION_FIELDS)}
     mode = emotion_mode(voice)
@@ -140,7 +156,7 @@ class ConfigStore:
     @staticmethod
     def model_identity(voice):
         return json.dumps([voice["backend"], voice.get("family"),
-            *(os.path.normcase(str(Path(voice.get(k) or ".").resolve())) for k in ("model_dir", "engine_executable", "repo_dir", "python")),
+            *(path_key(voice.get(k)) for k in ("model_dir", "engine_executable", "repo_dir", "python")),
             voice.get("index_version") if voice["backend"] == "index_tts" else None])
 
     def save_voice(self, voice: dict):

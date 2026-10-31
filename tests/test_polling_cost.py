@@ -44,7 +44,7 @@ def test_settings_only_requests_the_visible_section(tmp_path, qtbot, monkeypatch
     monkeypatch.setattr(panel, "render_models", lambda: None)
     monkeypatch.setattr(panel, "render_audio", lambda: None)
     class Client:
-        def get(self, path):
+        def get(self, path, **kwargs):
             paths.append(path)
             if path == '/settings/batch-inference':
                 from voice_workbench.batch_inference.schemas import BatchSettings

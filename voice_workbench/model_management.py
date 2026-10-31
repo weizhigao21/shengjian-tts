@@ -134,7 +134,11 @@ class ModelManager:
     def runtime(self):
         value = self.config.read()
         configured = value.get("native_engine") or ""
-        candidates = [configured] + [v.get("engine_executable", "") for v in self.config.voices() if v.get("backend") == "audio_cpp"]
+        # Read the saved entries directly: this only needs their engine paths, and
+        # building every voice's identity (plus a second config read) was most of
+        # what the model page spent per poll.
+        saved = [v for group in ("voices", "model_templates") for v in value.get(group, [])]
+        candidates = [configured] + [v.get("engine_executable", "") for v in saved if v.get("backend") == "audio_cpp"]
         for path in candidates:
             if path and Path(path).is_file():
                 return path

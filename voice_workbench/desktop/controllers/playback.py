@@ -199,8 +199,14 @@ class PlaybackController:
         self.details()
 
     def playable_rows(self):
-        return [row for row, item in enumerate(self.visible_segments if self.job_data else [])
-                if item["status"] == "done" and item.get("audio") and (self.data_dir / "audio" / item["audio"]).is_file()]
+        """Rows whose clip is on disk. One directory read, not one open per row."""
+        segments = self.visible_segments if self.job_data else []
+        if not segments:
+            return []
+        from ...audio_files import present_audio
+        present = present_audio(self.data_dir)
+        return [row for row, item in enumerate(segments)
+                if item["status"] == "done" and item.get("audio") in present]
 
     def segment_audio_files(self, row):
         """The dragged row's file; an empty result keeps the press an ordinary click."""

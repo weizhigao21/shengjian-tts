@@ -12,6 +12,7 @@ from .config import ConfigStore, atomic_json, file_digest, voice_fingerprint
 from .errors import VoiceError, describe_error
 from .runner import check_voice, validate_wave
 from .audio_cpp import UnifiedRunner
+from .audio_files import present_audio
 from .store import Store, WORKFLOW_TITLES
 from .model_info import MODES
 from .services.service_lock import ServiceLock
@@ -214,6 +215,11 @@ class Manager(BatchExecution, InferenceTelemetry):
     def generated_audio(self):
         from .services.dialogue import audio_name, dialogue_id
         result = self.store.generated_audio()
+        # One directory read answers "is this clip still on disk" for every row.
+        # Asking per row cost 0.3-0.55 ms each through the Windows filter chain,
+        # which is seconds of blocking for a library of a few thousand clips.
+        present = present_audio(self.root)
+        durations = {}
         for item in result:
             voice = item["voice"]
             item["model"] = Path(voice.get("model_dir") or "").name or ("Windows 系统声音" if voice.get("backend") == "windows_sapi" else voice.get("family", "未知模型"))
@@ -223,15 +229,39 @@ class Manager(BatchExecution, InferenceTelemetry):
             item["mode"] = MODES.get(mode, "自动模式（旧记录）")
             path = self.root / "audio" / item["audio"]
             item["audio_url"] = f"/audio/{item['audio']}"
-            item["available"] = path.is_file()
+            item["available"] = item["audio"] in present
             item["source_label"] = dialogue_id(item["source_id"]) if item.get("source_id") else None
             item["audio_label"] = audio_name(item) if item.get("source_id") else item["display_title"]
             if item["duration"] is None and item["available"]:
-                try:
-                    item["duration"] = validate_wave(path)["duration"]
-                except VoiceError:
-                    pass
+                # A shared take appears once per record; read its header once.
+                if item["audio"] not in durations:
+                    try:
+                        durations[item["audio"]] = validate_wave(path)["duration"]
+                    except VoiceError:
+                        durations[item["audio"]] = None
+                if durations[item["audio"]] is not None:
+                    item["duration"] = durations[item["audio"]]
         return result
+
+    def generated_audio_revision(self):
+        """Cheap token for the audio library: it moves when the list changes.
+
+        Aggregates over indexed columns plus one directory stamp, so an unchanged
+        poll costs a few milliseconds instead of rebuilding and re-sending every
+        record (measured 550 ms and 6 MB for a 4,900-clip library).
+        """
+        with self.store.lock:
+            segments = self.store.db.execute("""SELECT COUNT(*),COALESCE(SUM(s.audio_deleted),0),
+                COALESCE(SUM(CASE WHEN s.status='done' AND s.audio IS NOT NULL AND s.audio<>'' THEN 1 ELSE 0 END),0),
+                COALESCE(MAX(s.duration),0),COALESCE(MAX(s.created),0)
+                FROM segments s JOIN jobs j ON j.id=s.job_id WHERE j.record_only=0""").fetchone()
+            jobs = self.store.db.execute("""SELECT COUNT(*),COALESCE(SUM(deleted),0),
+                COALESCE(MAX(updated),0) FROM jobs WHERE record_only=0""").fetchone()
+        try:
+            stamp = (self.root / "audio").stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        return hashlib.sha256(repr((tuple(segments), tuple(jobs), stamp)).encode()).hexdigest()[:32]
 
     def delete_generated_audio(self, ids=None, delete_all=False):
         with self.lock:

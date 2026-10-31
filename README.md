@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.72-E87936?style=flat-square" alt="源码版本 v0.7.72" />
+  <img src="https://img.shields.io/badge/源码-v0.7.73-E87936?style=flat-square" alt="源码版本 v0.7.73" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,7 +26,7 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.72。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.73。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
 **未发布实验：** CUDA Graph 默认关闭，已在本机 RTX 2080 Ti 完成编码 / 随机数 / 音频一致性、取消恢复及回退验证。20 条中文和中英混合短句相对当前专用批量循环的热模型耗时均减少约 50%，详见[验证报告](docs/CUDA_GRAPH_VALIDATION.md)。现有 v0.7.50 构建包不包含此实验功能。
 
