@@ -14,11 +14,16 @@ def main():
         return
     parser = argparse.ArgumentParser(description="本地配音工作台")
     parser.add_argument("--version", action="version", version=f"声笺 {__version__}")
-    parser.add_argument("mode", choices=["gui", "serve"], nargs="?", default="gui")
+    parser.add_argument("mode", choices=["gui", "serve", "mcp"], nargs="?", default="gui")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--data-dir", type=Path, default=None,
                         help="指定数据目录；安装版默认使用用户目录并迁移旧版 data")
     args = parser.parse_args()
+    if args.mode == "mcp":
+        # MCP 只做协议翻译，复用已在运行的服务，因此不准备数据目录、不碰 ServiceLock。
+        from .mcp_server import main as mcp_main
+        mcp_main()
+        return
     try:
         args.data_dir = args.data_dir if args.data_dir is not None else prepare_data_dir(args.port)
     except (OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
@@ -31,12 +36,19 @@ def main():
     if args.mode == "serve":
         import uvicorn
         from .api import create_app
+        from .services.port_guard import clear_identity, write_identity
         app = create_app(args.data_dir)
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port,
                                              log_level="info", timeout_graceful_shutdown=3,
                                              loop="asyncio", http="h11", ws="none", lifespan="on"))
         app.state.server = server
-        server.run()
+        # A killed parent leaves this service listening; the marker is how the next
+        # launch knows the occupant is its own leftover rather than another program.
+        write_identity(args.data_dir, args.port)
+        try:
+            server.run()
+        finally:
+            clear_identity(args.data_dir)
     else:
         from .gui import launch
         launch(args.port, args.data_dir)

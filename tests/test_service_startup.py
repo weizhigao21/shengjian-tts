@@ -4,6 +4,7 @@ import pytest
 
 from voice_workbench.gui import Window
 from voice_workbench.service_status import startup_failure
+from voice_workbench.services.port_guard import Occupant, Release
 
 
 @pytest.mark.parametrize("output,title", [
@@ -63,7 +64,7 @@ def test_restart_diagnoses_only_new_log_and_late_poll_cannot_replace_it(tmp_path
         return process
     monkeypatch.setattr("voice_workbench.gui.subprocess.Popen", spawn)
     monkeypatch.setattr("voice_workbench.gui.QTimer.singleShot", lambda *args: None)
-    window._start_service("Connection refused")
+    window._launch_service()
     assert old_handle.closed and window.port == 8765
     assert window.reconnect_button.isEnabled()
     window.poll()
@@ -89,7 +90,7 @@ def test_failed_process_launch_does_not_keep_the_old_process(tmp_path, qtbot, mo
     def denied(*args, **kwargs):
         raise PermissionError("Executable access denied")
     monkeypatch.setattr("voice_workbench.gui.subprocess.Popen", denied)
-    window._start_service("Connection refused")
+    window._launch_service()
     assert window.process is None and not window.owns_service
     assert not window.connecting_service and window.reconnect_button.isEnabled()
     assert "Executable access denied" in window.banner.toolTip()
@@ -108,4 +109,74 @@ def test_reconnect_can_adopt_an_existing_service_after_its_own_process_exits(tmp
     window.reconnect_service()
     assert window.process is None and not window.owns_service
     assert window.service_launch_error is None and len(calls) == 1
+    window.close()
+
+
+def probe_inline(window, monkeypatch):
+    """Run the off-thread port probe inline so assertions stay synchronous."""
+    def call_task(task, success=None, failure=None):
+        try:
+            value = task()
+        except Exception as exc:
+            if failure:
+                failure(str(exc))
+            else:
+                raise
+        else:
+            if success:
+                success(value)
+    monkeypatch.setattr(window, "call_task", call_task)
+
+
+def test_a_foreign_port_holder_is_reported_and_never_started_over(tmp_path, qtbot, monkeypatch):
+    window = window_without_service(tmp_path, qtbot, monkeypatch)
+    probe_inline(window, monkeypatch)
+    launched = []
+    monkeypatch.setattr("voice_workbench.gui.subprocess.Popen", lambda *a, **k: launched.append(a))
+    monkeypatch.setattr("voice_workbench.desktop.controllers.service.release",
+                        lambda *a, **k: Release(Occupant(4242, r"C:\tools\other.exe", False)))
+
+    window._start_service("Connection refused")
+
+    assert launched == [], "端口属于别人时不能再起一个服务"
+    assert window.service_blocked and not window.ready
+    assert "other.exe" in window.banner.text()
+    assert "4242" in window.banner.toolTip()
+
+    window.poll()
+    assert "other.exe" in window.banner.text(), "被挡住时轮询不该把它改回通用的失败提示"
+    window.close()
+
+
+def test_a_cleared_leftover_lets_the_service_start(tmp_path, qtbot, monkeypatch):
+    window = window_without_service(tmp_path, qtbot, monkeypatch)
+    probe_inline(window, monkeypatch)
+    monkeypatch.setattr("voice_workbench.desktop.controllers.service.release",
+                        lambda *a, **k: Release(None))
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr("voice_workbench.gui.subprocess.Popen", lambda *a, **k: process)
+    monkeypatch.setattr("voice_workbench.gui.QTimer.singleShot", lambda *args: None)
+
+    window._start_service("Connection refused")
+
+    assert window.process is process and window.owns_service
+    assert not window.service_blocked and window.banner.text() == "服务启动中…"
+    window.owns_service, window.process = False, None
+    window.close()
+
+
+def test_a_failing_probe_still_launches_instead_of_locking_the_window(tmp_path, qtbot, monkeypatch):
+    window = window_without_service(tmp_path, qtbot, monkeypatch)
+    probe_inline(window, monkeypatch)
+    monkeypatch.setattr("voice_workbench.desktop.controllers.service.release",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("netstat 不可用")))
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr("voice_workbench.gui.subprocess.Popen", lambda *a, **k: process)
+    monkeypatch.setattr("voice_workbench.gui.QTimer.singleShot", lambda *args: None)
+
+    window._start_service("Connection refused")
+
+    assert window.process is process and window.owns_service
+    assert "netstat 不可用" in window.service_log.toPlainText()
+    window.owns_service, window.process = False, None
     window.close()

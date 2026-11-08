@@ -5,8 +5,9 @@ import subprocess
 from pathlib import Path
 from PyQt6.QtCore import QTimer
 from ...config import PROJECT_ROOT
-from ...runtime import service_command
-from ...service_status import startup_failure
+from ...runtime import service_command, service_executable
+from ...service_status import port_conflict, startup_failure
+from ...services.port_guard import release
 from ..api_client import checked
 
 
@@ -15,7 +16,7 @@ class ServiceController:
         self.connecting_service = False
         self.reconnect_button.setEnabled(True)
         if value.get("service") != "local-voice-workbench":
-            self.show_error(f"端口 {self.port} 被其他程序占用，请换一个端口启动。")
+            self.show_error(f"端口 {self.port} 上运行的是其他程序，声笺不会结束它。请关闭后点击「重新连接」。")
             return
         if Path(value["data_dir"]).resolve() != self.data_dir:
             self.show_error("该端口上的服务使用另一个数据目录。请用对应 --data-dir 启动界面。")
@@ -37,11 +38,52 @@ class ServiceController:
             self.owns_service = False
         self.connecting_service = True
         self.service_launch_error = None
+        self.service_blocked = False
         self.reconnect_button.setEnabled(False)
         self.set_service_state("正在连接本地服务…", "connecting")
         self.call(lambda c: checked(c.get("/health")), self._existing_service, self._start_service)
 
     def _start_service(self, message):
+        """Clear a verified leftover on the port, then launch."""
+        if self.process and self.process.poll() is None:
+            return
+        self.connecting_service = True
+        self.service_launch_error = None
+        self.service_blocked = False
+        self.reconnect_button.setEnabled(False)
+        self.set_service_state("正在检查端口…", "connecting")
+        port, data_dir = self.port, self.data_dir
+        # Notes are collected on the worker thread and appended on this one:
+        # the log widget may only be written from the GUI thread.
+        notes = []
+        self.call_task(
+            lambda: release(port, data_dir, service_executable(), log=notes.append),
+            lambda result: self._after_port_check(result, notes), self._port_check_failed)
+
+    def _port_check_failed(self, message):
+        """A probe that crashed must not block the launch it was guarding."""
+        self.connecting_service = False
+        self.reconnect_button.setEnabled(True)
+        self.service_log.append("端口检查失败，按空闲处理：" + str(message))
+        self._launch_service()
+
+    def _after_port_check(self, result, notes=()):
+        self.connecting_service = False
+        self.reconnect_button.setEnabled(True)
+        for note in notes:
+            self.service_log.append(note)
+        if result.occupant is not None:
+            title, detail = port_conflict(result.occupant, self.port)
+            self.ready = False
+            self.service_blocked = True
+            self.service_launch_error = f"{title}\n{detail}"
+            self.service_log.append(f"{title}：{result.occupant.exe or '无进程'}")
+            self.set_service_state(title, "failed")
+            self.banner.setToolTip(f"{title}\n{detail}\n{self.url}")
+            return
+        self._launch_service()
+
+    def _launch_service(self):
         try:
             if self.process and self.process.poll() is None:
                 return
@@ -92,6 +134,9 @@ class ServiceController:
         self.banner.setToolTip(f"{text}\n{detail}\n{self.url}\n工作流联动 → 服务日志")
 
     def poll(self):
+        if self.service_blocked:
+            # The port belongs to someone else; polling would only rewrite the banner.
+            return
         self._service_output()
         if self.service_launch_error and not self.connecting_service:
             self.ready = False

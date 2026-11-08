@@ -134,6 +134,10 @@ class ConfigStore:
         with self.lock:
             atomic_json(self.path, {**self.read(), "performance": settings})
 
+    def trim_silence(self):
+        """Cut the model's lead-in silence; only an explicit false disables it."""
+        return self.read().get("trim_silence") is not False
+
     def voices(self):
         value = self.read()
         voices = value["voices"]

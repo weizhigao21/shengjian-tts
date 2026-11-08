@@ -8,6 +8,7 @@ from time import perf_counter
 from ..config import atomic_json, file_digest, voice_fingerprint
 from ..errors import describe_error, VoiceError
 from ..runner import validate_wave
+from ..audio_trim import trim_leading_silence
 from .policy import LANGUAGES, PARAMETERS, model_signature, options, token_budget
 
 
@@ -71,6 +72,11 @@ class BatchExecution:
                 # batch cannot leave half a batch marked successful.
                 for path in paths:
                     validate_wave(path)
+                    # The worker writes the engine's raw answer; the lead-in
+                    # silence varies per take, so it is cut before the result
+                    # reaches the library or the cache.
+                    if self.config.trim_silence():
+                        trim_leading_silence(path)
                 if model_signature(settings, self.batch.versions) != signature:
                     raise VoiceError('BATCH_MODEL_CHANGED', '批量推理期间原始模型文件发生变化')
             metadata = {"backend": 'qwen3_batch', "batch_size": len(items), "batch_seconds": elapsed,

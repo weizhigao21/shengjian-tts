@@ -488,8 +488,16 @@ def prepare_drag_files(files, texts=None):
     return prepared
 
 
+# Where the pointer sits inside the drag preview. On the leading edge, so the
+# card hangs to the right of the cursor: that is where a target program paints
+# its own insertion preview (CapCut drops the clip from the pointer rightwards),
+# so the pointer marks the exact start and the timeline in front of it -- the
+# clips you are lining up against -- stays visible.
+DRAG_HOTSPOT_X = 6
+
+
 def audio_drag_pixmap(count, title, when=None):
-    """Carry the clip name under the cursor instead of a screenshot of the row."""
+    """Carry the clip name beside the cursor instead of a screenshot of the row."""
     width, height = 268, 46
     pixmap = QPixmap(width * 2, height * 2)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -537,7 +545,7 @@ def start_audio_drag(source, files, title="", texts=None):
     pixmap = audio_drag_pixmap(len(handed), title or handed[0].stem, when)
     drag.setPixmap(pixmap)
     size = pixmap.deviceIndependentSize()
-    drag.setHotSpot(QPoint(int(size.width()) - 22, int(size.height()) // 2))
+    drag.setHotSpot(QPoint(DRAG_HOTSPOT_X, int(size.height()) // 2))
     # The target program may activate mid-drag; a hidden source list cancels the drop.
     held, parent = [], source.parentWidget()
     while parent is not None:

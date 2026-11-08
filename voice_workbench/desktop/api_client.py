@@ -20,6 +20,22 @@ class ApiWorker(QThread):
             self.error.emit(str(exc))
 
 
+class TaskWorker(QThread):
+    """Run a blocking local check off the GUI thread, using the request signals."""
+    result = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, task):
+        super().__init__()
+        self.task = task
+
+    def run(self):
+        try:
+            self.result.emit(self.task())
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 def checked(response):
     if response.is_error:
         try:

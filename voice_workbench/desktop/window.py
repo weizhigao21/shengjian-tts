@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from .. import __version__
 from ..ui import application_icon
-from .api_client import ApiWorker, checked
+from .api_client import ApiWorker, TaskWorker, checked
 from .audio_output import SystemAudioOutput
 from .draft_saves import DraftSaveQueue
 from .voice_checks import VoiceCheckCache
@@ -44,6 +44,7 @@ class Window(CreationController, DocumentController, GenerationController, Playb
         self.service_output_text = ""
         self.connecting_service = False
         self.service_launch_error = None
+        self.service_blocked = False
         self.owns_service = False
         self.voices = []
         self.references = []
@@ -99,7 +100,13 @@ class Window(CreationController, DocumentController, GenerationController, Playb
             self.reconnect_service()
 
     def call(self, action, success=None, failure=None):
-        worker = ApiWorker(self.url, action)
+        self.run_worker(ApiWorker(self.url, action), success, failure)
+
+    def call_task(self, task, success=None, failure=None):
+        """Run a blocking local check (port probing) without freezing the window."""
+        self.run_worker(TaskWorker(task), success, failure)
+
+    def run_worker(self, worker, success=None, failure=None):
         self.workers.add(worker)
         def guarded(callback):
             def deliver(value):

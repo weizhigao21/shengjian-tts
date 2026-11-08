@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.73-E87936?style=flat-square" alt="源码版本 v0.7.73" />
+  <img src="https://img.shields.io/badge/源码-v0.7.74-E87936?style=flat-square" alt="源码版本 v0.7.74" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,7 +26,7 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.73。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.7.74。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
 **未发布实验：** CUDA Graph 默认关闭，已在本机 RTX 2080 Ti 完成编码 / 随机数 / 音频一致性、取消恢复及回退验证。20 条中文和中英混合短句相对当前专用批量循环的热模型耗时均减少约 50%，详见[验证报告](docs/CUDA_GRAPH_VALIDATION.md)。现有 v0.7.50 构建包不包含此实验功能。
 
@@ -216,6 +216,37 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 - **版本显示**：界面显示实际安装版本，无法识别的外部引擎显示「版本未知」。
 
 </details>
+
+## AI 助手接入（MCP）
+
+让 Claude Desktop、Cursor、Cline 之类的 AI 客户端直接调用本机声笺说话。走 MCP 的 stdio 协议，不开新端口、不暴露网络，也不和桌面端抢推理实例——它只是把请求转给已经在运行的那个服务。
+
+在客户端配置里加一项（路径换成你的项目目录）：
+
+```json
+{
+  "mcpServers": {
+    "shengjian": {
+      "command": "E:\\code\\集成文本生语音程序\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "voice_workbench", "mcp"]
+    }
+  }
+}
+```
+
+先打开声笺桌面端，或单独运行 `python -m voice_workbench serve`，再让客户端连接。
+
+| 工具 | 作用 |
+| :--- | :--- |
+| `list_voices` | 列出可用音色，拿到 `voice_id` |
+| `speak` | 一句话出声，返回 WAV 的**本地绝对路径** |
+| `speak_dialogue` | 多角色对白，每句用各自的音色 |
+| `get_job` | 查生成进度与已完成片段 |
+| `transcribe` | 音频转文字，带每行起止时间 |
+
+返回本地路径而不是 http 链接：AI 客户端常在沙箱里，抓不到 `127.0.0.1`，但能直接读文件。文字里的 markdown 会自动清掉，长文本按句切段，每段一条音频。
+
+服务地址默认 `http://127.0.0.1:8765`，可用 `SHENGJIAN_API` 覆盖；单次等待上限由 `SHENGJIAN_MCP_WAIT` 控制（默认 120 秒），超过就返回 `job_id`，让 AI 用 `get_job` 接着查。生成的任务会出现在侧栏，标题带 `AI：` 前缀，便于识别和清理。
 
 ## 常用说明
 

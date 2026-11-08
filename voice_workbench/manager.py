@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .config import ConfigStore, atomic_json, file_digest, voice_fingerprint
 from .errors import VoiceError, describe_error
 from .runner import check_voice, validate_wave
+from .audio_trim import trim_leading_silence
 from .audio_cpp import UnifiedRunner
 from .audio_files import present_audio
 from .store import Store, WORKFLOW_TITLES
@@ -391,6 +392,11 @@ class Manager(BatchExecution, InferenceTelemetry):
                                       "text": item["text"], "output": str(temporary),
                                       "job_id": job_id, "index": index}, cancelled)
                 details = validate_wave(temporary)
+                # Engines differ in how much silence they put in front of the
+                # voice (voxcpm2 0-0.4 s, index_tts2 ~0.3 s, kokoro ~0.42 s), so
+                # the cut happens here, once, for every backend.
+                if self.config.trim_silence() and trim_leading_silence(temporary):
+                    details = validate_wave(temporary)
                 generation_seconds = max(0.0, perf_counter() - inference_started)
                 with self.lock:
                     if self.stopping.is_set() or cancelled.is_set():

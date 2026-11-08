@@ -206,6 +206,28 @@ def test_drag_starts_with_the_row_file_and_a_preview(tmp_path, qtbot, monkeypatc
     assert drag.executed == [Qt.DropAction.CopyAction]
 
 
+def test_the_preview_hangs_to_the_right_of_the_cursor(tmp_path, qtbot, monkeypatch):
+    """剪映把插入的片段从指针往右画；拖拽卡跟它对齐，别挡住光标左边的音轨。"""
+    import voice_workbench.ui as ui
+    monkeypatch.setattr(ui, "QDrag", FakeDrag)
+    FakeDrag.created.clear()
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+    table = AudioTable(1, 1)
+    qtbot.addWidget(table)
+    table.setRowCount(1)
+    table.setCurrentCell(0, 0)
+    table.resolve_audio = lambda row: [audio]
+    table.startDrag(Qt.DropAction.CopyAction)
+    drag = FakeDrag.created[-1]
+    width = drag.pixmap.deviceIndependentSize().width()
+    height = drag.pixmap.deviceIndependentSize().height()
+    # 指针落在卡片左边缘：卡片整体挂在光标右侧。
+    assert drag.hotspot.x() == ui.DRAG_HOTSPOT_X
+    assert width - drag.hotspot.x() > width * 0.9
+    assert drag.hotspot.y() == int(height) // 2
+
+
 def test_rows_without_a_playable_file_keep_the_press_a_click(qtbot, monkeypatch):
     import voice_workbench.ui as ui
     monkeypatch.setattr(ui, "QDrag", FakeDrag)

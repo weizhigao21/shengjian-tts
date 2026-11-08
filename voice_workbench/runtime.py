@@ -22,6 +22,11 @@ def resource_root():
     return Path(__file__).resolve().parent.parent
 
 
+def service_executable():
+    """The image that hosts the service; a shared interpreter in source runs."""
+    return str(project_root() / "声笺服务.exe") if frozen() else str(Path(sys.executable))
+
+
 def service_command(port, data_dir):
     prefix = [str(project_root() / "声笺服务.exe")] if frozen() else [sys.executable, "-u", "-m", "voice_workbench"]
     return prefix + ["serve", "--port", str(port), "--data-dir", str(data_dir)]
