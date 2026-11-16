@@ -356,7 +356,7 @@ def test_setup_ui_retains_choice_shows_speed_and_refreshes_on_completion(manager
     setup = manager.batch.setup.options()
     control.bind({**manager.batch.status(), 'setup': setup})
     auto = control.automatic
-    assert auto.source.currentData() == setup['sources'][0]['path']
+    assert control.model_picker.currentData() == setup['sources'][0]['path']
     assert not control.manual.isVisible() and auto.install.isEnabled()
     setup['task'].update(busy=True, status='downloading', received=1048576, size=2097152,
                          speed_bps=2097152, message='model.safetensors')

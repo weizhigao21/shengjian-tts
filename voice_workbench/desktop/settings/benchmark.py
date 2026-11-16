@@ -1,9 +1,17 @@
 """Live cold/warm backend comparisons; report copying without creating works."""
 import json
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QApplication, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QProgressBar, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QApplication, QComboBox, QHBoxLayout, QHeaderView, QProgressBar, QSpinBox,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+)
 from ...ui import button, label
 from ..api_client import checked
+from .common import settings_group, settings_row
+
+NOTE = ('热模型用时、音频时长按每组统计，每条平均 = 热模型整组耗时 ÷ 每组条数，不代表单条延迟。'
+        'RTF 越小越快；两种模型的量化与采样实现不同，音频时长和质量可能不同。'
+        '固定种子 1234，每条最多 256 tokens；"冷启动"指新进程，不清空系统文件缓存。')
 
 
 class BenchmarkControls(QWidget):
@@ -13,30 +21,38 @@ class BenchmarkControls(QWidget):
         self.busy = self.loading = False
         self.result = None
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         layout.addWidget(label('速度对比测试', 'section'))
-        hint = label('用同一音色和每组 20 条短句对比原生单实例逐条生成与批量生成。首组包含进程启动和模型加载，后续测试热模型速度；默认共生成 80 段测试音频，不读取成品缓存，也不加入作品。测试结束后释放引擎。', 'muted')
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        form = QFormLayout()
         self.voice = QComboBox()
+        self.voice.setFixedWidth(260)
         self.voice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.workload = QComboBox()
+        self.workload.setFixedWidth(220)
         for title, key in (('中英双语 · 20 条', 'bilingual'), ('中文 · 20 条', 'zh'), ('英文 · 20 条', 'en')):
             self.workload.addItem(title, key)
         self.rounds = QSpinBox()
-        self.rounds.setRange(1, 3); self.rounds.setValue(1); self.rounds.setSuffix(' 组')
-        form.addRow('测试音色', self.voice)
-        form.addRow('测试文本', self.workload)
-        form.addRow('热模型重复', self.rounds)
-        layout.addLayout(form)
+        self.rounds.setFixedWidth(220)
+        self.rounds.setRange(1, 3)
+        self.rounds.setValue(1)
+        self.rounds.setSuffix(' 组')
+        self.rounds.setToolTip('热模型重复的轮数；多跑一轮会摊薄首组的冷启动开销。')
+        layout.addWidget(settings_group([
+            settings_row('测试音色', '同一音色、同一文本，只换后端。', (self.voice,)),
+            settings_row('测试文本', '每组 20 条短句，共生成 80 段测试音频。', (self.workload,)),
+            settings_row('热模型重复', '重复轮数越多，热模型均值越稳。', (self.rounds,)),
+        ]))
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         self.start_button = button('开始测速', self.start, 'play')
         self.cancel_button = button('取消测试', self.cancel, 'close', 'ghost')
         self.cancel_button.hide()
         self.copy_button = button('复制报告', self.copy, 'copy', 'ghost')
         self.copy_button.setEnabled(False)
-        row.addWidget(self.start_button); row.addWidget(self.cancel_button); row.addWidget(self.copy_button); row.addStretch()
+        row.addWidget(self.start_button)
+        row.addWidget(self.cancel_button)
+        row.addWidget(self.copy_button)
+        row.addStretch()
         layout.addLayout(row)
         self.progress = QProgressBar()
         self.progress.setObjectName('benchmarkProgress')
@@ -71,7 +87,8 @@ class BenchmarkControls(QWidget):
         self.summary = label('', 'hint')
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
-        note = label('热模型用时、音频时长按每组统计，每条平均 = 热模型整组耗时 ÷ 每组条数，不代表单条延迟。RTF 越小越快；两种模型的量化与采样实现不同，音频时长和质量可能不同。固定种子 1234，每条最多 256 tokens；“冷启动”指新进程，不清空系统文件缓存。', 'muted')
+        note = label('RTF = 生成耗时 ÷ 音频时长，越小越快；「首组」含进程启动和模型加载。', 'muted')
+        note.setToolTip(NOTE)
         note.setWordWrap(True)
         layout.addWidget(note)
         self.timer = QTimer(self)
@@ -145,8 +162,7 @@ class BenchmarkControls(QWidget):
         if speed:
             text += f" · 首组倍率 {speed['cold']:.2f}× · 热模型倍率 {speed['warm']:.2f}×（大于 1 表示批量更快）"
         ignored = (self.result or {}).get('ignored_options') or []
-        if ignored:
-            text += ' · 不参与对比的参数：' + '、'.join(ignored)
+        self.summary.setToolTip('不参与对比的参数：' + '、'.join(ignored) if ignored else '')
         self.summary.setText(text.lstrip(' ·'))
 
     def start(self):

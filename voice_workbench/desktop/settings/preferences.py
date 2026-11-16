@@ -1,6 +1,9 @@
 """PreferencesSettings responsibilities, composed by the owning Qt widget."""
-from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QSpinBox, QFormLayout
+from PyQt6.QtWidgets import QHBoxLayout, QSpinBox
 from ...ui import button, label
+
+PERFORMANCE_NOTE = ("并发遇到显存不足时，当前任务自动改为单实例并重试一次；"
+                    "调整前请完成或取消正在生成的任务。")
 
 
 class PreferencesSettings:
@@ -19,40 +22,35 @@ class PreferencesSettings:
     def _performance_page(self):
         page, layout = self.scroll_page("performanceSettings")
         layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(14)
-        layout.addWidget(label("双语工作流批量生成", "section"))
-        description = label("并发数决定统一引擎同时生成多少个字幕片段。每个实例会额外占用内存和显存；大模型建议从 1 开始，比较生成时间后再调整。", "muted")
-        description.setWordWrap(True)
-        layout.addWidget(description)
-        form = QFormLayout()
-        form.setVerticalSpacing(12)
+        layout.setSpacing(18)
+        from .batch_inference import BatchInferenceControls
+        self.batch_inference = BatchInferenceControls(self.owner)
+        layout.addWidget(self.batch_inference)
+        layout.addWidget(label("双语工作流并发", "section"))
         self.workflow_workers = QSpinBox()
         self.workflow_workers.setRange(1, 4)
         self.workflow_workers.setValue(1)
-        self.workflow_workers.setFixedWidth(140)
+        self.workflow_workers.setFixedWidth(176)
         self.workflow_workers.setSuffix(" 个实例")
         self.cpu_threads = QSpinBox()
         self.cpu_threads.setRange(0, 128)
         self.cpu_threads.setSpecialValueText("自动")
-        self.cpu_threads.setFixedWidth(140)
-        form.addRow("批量并发数", self.workflow_workers)
-        form.addRow("每个实例的 CPU 线程数", self.cpu_threads)
-        layout.addLayout(form)
-        hint = label("CPU 线程数为 0 时自动分配。线程越多不一定越快；并发遇到显存不足时，当前任务自动改为单实例并重试一次。调整设置前请完成或取消正在生成的任务。", "hint")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.cpu_threads.setFixedWidth(176)
+        layout.addWidget(self.settings_group([
+            self.settings_row("批量并发数", "统一引擎同时生成多少个字幕片段；每个实例会额外占用内存和显存。",
+                              (self.workflow_workers,)),
+            self.settings_row("每个实例的 CPU 线程数", "0 表示自动分配；线程越多不一定越快。", (self.cpu_threads,)),
+        ]))
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         self.performance_apply = button("应用设置", self.save_performance, "check")
         self.performance_apply.setEnabled(False)
         row.addWidget(self.performance_apply)
         row.addStretch()
         layout.addLayout(row)
-        self.performance_notice = label("", "hint")
+        self.performance_notice = label(PERFORMANCE_NOTE, "muted")
         self.performance_notice.setWordWrap(True)
         layout.addWidget(self.performance_notice)
-        from .batch_inference import BatchInferenceControls
-        self.batch_inference = BatchInferenceControls(self.owner)
-        layout.addWidget(self.batch_inference)
         layout.addStretch()
         def changed():
             self.performance_dirty = True
@@ -71,7 +69,7 @@ class PreferencesSettings:
             self.workflow_workers.setEnabled(True)
             self.cpu_threads.setEnabled(True)
             self.performance_dirty = False
-            self.performance_notice.setText("")
+            self.performance_notice.setText(PERFORMANCE_NOTE)
             self.owner.statusBar().showMessage("批量性能设置已应用", 5000)
         def failed(message):
             self.workflow_workers.setEnabled(True)

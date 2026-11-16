@@ -82,6 +82,7 @@ class BatchExecution:
             metadata = {"backend": 'qwen3_batch', "batch_size": len(items), "batch_seconds": elapsed,
                         "model_signature": signature, **{k: answer[k] for k in
                         ('warm_model', 'prompt_cache_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds',
+                         'precision', 'precision_reason',
                          'predictor_mode', 'predictor_revision', 'predictor_calls', 'predictor_fallback_calls', 'predictor_reason',
                          'predictor_graph_captures', 'predictor_graph_replays', 'predictor_graph_fallbacks', 'predictor_graph_reliefs', 'predictor_graph_lights', 'predictor_graph_downgraded', 'predictor_graph_reason',
                          'talker_mode', 'talker_revision', 'talker_calls', 'talker_fallback_calls', 'talker_reason',

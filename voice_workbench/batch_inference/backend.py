@@ -81,12 +81,31 @@ class BatchBackend:
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             return '独立环境检查失败：' + str(exc), {}
 
+    def detect_model(self, settings):
+        """Fill the Base directory that belongs to the chosen GGUF.
+
+        Switching models is a one-field act for the user: the paired original
+        weights live under a folder named after the GGUF's architecture size, so
+        asking for it again by hand would be busywork.
+        """
+        from .discovery import discover
+        try:
+            candidate, _, selected = discover(self, settings.source_model, settings.device)
+        except (OSError, ValueError):
+            return settings
+        if selected is None:
+            return settings
+        return settings.model_copy(update={'model_dir': candidate.model_dir,
+                                          'python': settings.python or candidate.python})
+
     def configure(self, settings, from_setup=False):
         # Validate dependencies outside the scheduler lock; never load weights here.
         with self.manager.lock:
             if self.setup.busy and not from_setup:
                 raise VoiceError('DOWNLOAD_BUSY', '请先完成或暂停批量安装，再修改高级配置', stage='批量设置')
             self.manager.require_idle_engine("批量推理设置")
+        if settings.source_model and not settings.model_dir:
+            settings = self.detect_model(settings)
         reason, versions = self.diagnose(settings)
         with self.manager.lock:
             if from_setup:

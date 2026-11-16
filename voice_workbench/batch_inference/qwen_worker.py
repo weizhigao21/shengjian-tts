@@ -15,6 +15,19 @@ class QwenEngine:
         self.prompts = OrderedDict()
         self.predictor_path = None
         self.talker_path = None
+        self.precision = ''
+        self.precision_reason = ''
+
+    # A NaN in fp16 arrives as an asynchronous CUDA error three kernels later, so
+    # the message alone never tells a user what to change.
+    NUMERIC_SIGNS = ('device-side assert', 'CUBLAS_STATUS', 'CUDA error', 'NaN')
+
+    def explain(self, exc):
+        message = str(exc)
+        if self.precision == 'float16' and any(sign in message for sign in self.NUMERIC_SIGNS):
+            return (message + '\n这个模型在 FP16 下数值溢出（0.6B Base 已知如此），'
+                    '请在「批量性能」把计算精度改成 BF16 再试；BF16 数值更稳，但在这张显卡上会更慢。')
+        return message
 
     def run(self, message, progress=None):
         import torch
@@ -32,11 +45,15 @@ class QwenEngine:
             if precision == "auto":
                 precision = "float16" if device == "cuda" else "float32"
             if device == "cuda" and precision == "bfloat16" and not torch.cuda.is_bf16_supported():
-                raise RuntimeError("当前显卡不支持 bfloat16，请选择自动或 float16")
+                # Turing has no bf16 tensor cores and PyTorch runs these kernels
+                # through slower paths, but the results are correct; refusing the
+                # choice would block the only precision that renders some models.
+                self.precision_reason = '这张显卡没有原生 BF16 支持，生成会比 FP16 慢，但数值更稳定。'
             torch.set_num_threads(message.get("cpu_threads") or 8)
             self.model = Qwen3TTSModel.from_pretrained(settings["model_dir"],
                 device_map="cuda:0" if device == "cuda" else "cpu", dtype=getattr(torch, precision),
                 attn_implementation="sdpa", local_files_only=True)
+            self.precision = precision
             try:
                 from .qwen_fastpath import install
             except ImportError:  # Direct script entry in the external Python environment.
@@ -76,6 +93,8 @@ class QwenEngine:
                 wavs, rate = self.model.generate_voice_clone(text=[i["text"] for i in message["items"]],
                     language=[i["language"] for i in message["items"]], voice_clone_prompt=prompt,
                     **message["options"])
+            except Exception as exc:
+                raise RuntimeError(self.explain(exc)) from exc
             finally:
                 self.predictor_path.progress = None
             if len(wavs) != len(message["items"]):
@@ -83,6 +102,7 @@ class QwenEngine:
             for item, audio in zip(message["items"], wavs):
                 sf.write(item["output"], audio, rate, subtype="PCM_16", format="WAV")
         return {"ok": True, "count": len(wavs), "warm_model": warm, "prompt_cache_hit": hit,
+                "precision": self.precision, "precision_reason": self.precision_reason,
                 **self.predictor_path.status(counts),
                 **self.talker_path.status(talker_counts),
                 "load_seconds": loaded-started, "prompt_seconds": prompt_ready-loaded,

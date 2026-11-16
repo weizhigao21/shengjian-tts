@@ -225,7 +225,9 @@ class ModelSettings(ModelTransfers):
         more.setMenu(menu)
         if model.get('family') == 'qwen3_tts':
             def batch_setup():
-                self.batch_inference.automatic.selected = model['path']
+                # The batch page binds its model list from the service on the
+                # next refresh, so hand the choice over instead of guessing.
+                self.batch_inference.pending_model = model['path']
                 self.set_section(2)
             menu.addAction('配置批量环境与关联模型', batch_setup)
         more.setToolTip("模型详情与版本回退")

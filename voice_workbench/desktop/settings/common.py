@@ -22,6 +22,43 @@ def size_text(size):
     return f"{size / (1024 ** 3):.2f} GB" if size >= 1024 ** 3 else f"{size / (1024 ** 2):.1f} MB"
 
 
+def settings_group(rows):
+    """Rounded card that stacks setting rows with hairline dividers."""
+    group = QFrame()
+    group.setObjectName("settingsGroup")
+    layout = QVBoxLayout(group)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    for index, row in enumerate(rows):
+        if index:
+            divider = QFrame()
+            divider.setObjectName("settingsDivider")
+            divider.setFixedHeight(1)
+            layout.addWidget(divider)
+        layout.addWidget(row)
+    return group
+
+
+def settings_row(title, hint=None, controls=()):
+    """One title + muted hint on the left, controls on the right."""
+    row = QWidget()
+    row.setObjectName("settingsRow")
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(18, 14, 18, 14)
+    layout.setSpacing(16)
+    words = QVBoxLayout()
+    words.setSpacing(4)
+    words.addWidget(label(title, "settingLabel"))
+    if hint is not None:
+        note = hint if isinstance(hint, QWidget) else ElidedLabel(hint)
+        note.setProperty("role", "muted")
+        words.addWidget(note)
+    layout.addLayout(words, 1)
+    for control in controls:
+        layout.addWidget(control)
+    return row
+
+
 def publication_text(item):
     metadata = publication_metadata(item)
     if not metadata["published_at"]:
@@ -98,37 +135,11 @@ class SettingsComponents:
         return table
 
     def settings_group(self, rows):
-        group = QFrame()
-        group.setObjectName("settingsGroup")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        for index, row in enumerate(rows):
-            if index:
-                divider = QFrame()
-                divider.setObjectName("settingsDivider")
-                divider.setFixedHeight(1)
-                layout.addWidget(divider)
-            layout.addWidget(row)
-        return group
+        return settings_group(rows)
 
     def settings_row(self, title, hint=None, controls=()):
-        row = QWidget()
-        row.setObjectName("settingsRow")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(16)
-        words = QVBoxLayout()
-        words.setSpacing(4)
-        words.addWidget(label(title, "settingLabel"))
-        if hint is not None:
-            note = hint if isinstance(hint, QWidget) else ElidedLabel(hint)
-            note.setProperty("role", "muted")
-            words.addWidget(note)
-        layout.addLayout(words, 1)
-        for control in controls:
-            layout.addWidget(control)
-        return row
+        return settings_row(title, hint, controls)
+
 
     def scroll_page(self, name):
         scroll = QScrollArea()
