@@ -66,6 +66,11 @@ class BatchInferenceControls(QWidget):
         self.predictor_cuda_graph.setToolTip('已在 RTX 2080 Ti / FP16 验证；其他设备仍需实测。需要先启用编码预测加速，首次准备有额外耗时并增加显存占用。')
         self.predictor_fastpath.toggled.connect(self.predictor_cuda_graph.setEnabled)
         form.addRow('', self.predictor_cuda_graph)
+        self.talker_graph = QCheckBox('Talker 整步图加速（实验，默认关闭）')
+        self.talker_graph.setToolTip('把主模型每帧的整步前向录进一张 CUDA 图，实测批 8 约快 1.8 倍、批 2 约 2.1 倍；'
+                                     '只在 RTX 2080 Ti / FP16 / qwen-tts 0.1.1 验证，其它设备仍需实测。'
+                                     '首帧要多花零点几秒录制，显存预算不足或形状不支持时自动回到原循环。')
+        form.addRow('', self.talker_graph)
         layout.addWidget(self.manual)
         row = QHBoxLayout()
         self.apply = button('检查并应用', self.save, 'check')
@@ -88,6 +93,7 @@ class BatchInferenceControls(QWidget):
         self.minimum_size.valueChanged.connect(self.changed)
         self.predictor_fastpath.toggled.connect(self.changed)
         self.predictor_cuda_graph.toggled.connect(self.changed)
+        self.talker_graph.toggled.connect(self.changed)
 
     def changed(self, *_):
         self.dirty = True
@@ -113,6 +119,7 @@ class BatchInferenceControls(QWidget):
                         (self.minimum_size, bind_minimum)]
             controls.append((self.predictor_fastpath, lambda: self.predictor_fastpath.setChecked(self.settings.get('predictor_fastpath', True))))
             controls.append((self.predictor_cuda_graph, lambda: self.predictor_cuda_graph.setChecked(self.settings.get('predictor_cuda_graph', False))))
+            controls.append((self.talker_graph, lambda: self.talker_graph.setChecked(self.settings.get('talker_graph', False))))
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setText(self.settings[k]))
                          for key in ('python', 'model_dir', 'source_model')]
             controls += [(getattr(self, key), lambda k=key: getattr(self, k).setCurrentIndex(
@@ -134,6 +141,11 @@ class BatchInferenceControls(QWidget):
                 text += '\n' + recent['predictor_reason']
             if recent.get('predictor_graph_reason'):
                 text += '\n' + recent['predictor_graph_reason']
+            if recent.get('talker_mode'):
+                text += ' · 主模型：' + {'graph': '整步图加速', 'standard': '原循环'}.get(
+                    recent['talker_mode'], recent['talker_mode'])
+            if recent.get('talker_reason'):
+                text += '\n' + recent['talker_reason']
         if result.get('fallbacks'):
             text += '\n最近回退：' + result['fallbacks'][-1]['reason']
         self.status.setText(text)
@@ -164,7 +176,8 @@ class BatchInferenceControls(QWidget):
                  'source_model': self.source_model.text().strip(), 'device': self.device.currentData(),
                  'dtype': self.dtype.currentData(), 'max_batch_size': self.size.value(),
                  'min_batch_size': self.minimum_size.value(), 'predictor_fastpath': self.predictor_fastpath.isChecked(),
-                 'predictor_cuda_graph': self.predictor_cuda_graph.isChecked()}
+                 'predictor_cuda_graph': self.predictor_cuda_graph.isChecked(),
+                 'talker_graph': self.talker_graph.isChecked()}
         self.setEnabled(False)
         self.loading = True
         self.sequence += 1

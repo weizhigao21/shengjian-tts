@@ -18,6 +18,7 @@ class BatchSettings(BaseModel):
     idle_seconds: int = Field(default=120, ge=30, le=3600)
     predictor_fastpath: bool = True
     predictor_cuda_graph: bool = False
+    talker_graph: bool = False
 
     @model_validator(mode='after')
     def batch_bounds(self):

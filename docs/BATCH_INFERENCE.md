@@ -100,6 +100,16 @@ v0.7.68 起分三层处理：
 
 注意：设置里的「批量 16」会被 `max_batch_size`（默认 8）截到 8，一批 16 条拆成两个微批，界面要等两个微批都完成才一次性出 16 条。
 
+### Talker 整步图 · 2026-11-16
+
+源码增加 `talker_graph: false`，开关在批量性能页与「编码预测」并列，默认关闭。`batch_inference/qwen_talker_graph.py` 把主模型每帧的整步前向（含 KV 写入）录进一张 CUDA 图，配合预分配的 `StaticCache` 重写解码循环；采样仍走 eager，与 `transformers` 的采样链同序。这是上面 83.2 ms / 帧里 37 ms 非图开销的直接回收。
+
+本机实测（RTX 2080 Ti、1.7B Base FP16、8 条中文短句、种子 1234、编码预测专用循环+图已开，真 worker 测得，3 次取最好）：批 2 由 2.030 → 0.973 秒 / 条（2.09×）、批 4 由 0.989 → 0.500（1.98×）、批 8 由 0.502 → 0.285（1.76×），批 8 的 RTF 由 0.161 降到 0.092。
+
+与编码预测图的关键差别：那条路径要求编码与 RNG 逐位一致，这条做不到——静态缓存让每步注意力都落在定长掩码上，SDK 的 `DynamicCache` 会走 `is_causal` 或无掩码内核，FP16 下产生约 1e-3 的概率差，采样从某帧起分叉。8 条短句的帧长差在 ±3 帧、音频总长差 0.3%，听感是另一种同样合法的采样结果，但同一 seed 不再与关闭开关时逐字节相同。若需严格复现旧产物，关闭该开关。
+
+状态字段为 `talker_mode`（`graph` / `standard`）、`talker_reason`、`talker_graph_captures`、`talker_graph_replays`、`talker_graph_fallbacks`、`talker_graph_downgraded`。回退边界与完整数据见 [`TALKER_GRAPH.md`](TALKER_GRAPH.md)。
+
 ## 速度对比测试
 
 

@@ -103,6 +103,7 @@ def model_signature(settings, versions=None):
                     *root.glob("speech_tokenizer/*.json"), *root.glob("speech_tokenizer/*.safetensors")})
     files = [(str(p.relative_to(root)), p.stat().st_size, p.stat().st_mtime_ns) for p in paths]
     from .qwen_fastpath import REVISION
+    from .qwen_talker_graph import REVISION as TALKER_REVISION
     value = {"protocol": 1, "settings": settings.model_dump(), "files": files, 'runtime_versions': versions or {},
-             'predictor_revision': REVISION}
+             'predictor_revision': REVISION, 'talker_revision': TALKER_REVISION}
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()

@@ -14,6 +14,7 @@ class QwenEngine:
         self.model = None
         self.prompts = OrderedDict()
         self.predictor_path = None
+        self.talker_path = None
 
     def run(self, message, progress=None):
         import torch
@@ -42,6 +43,11 @@ class QwenEngine:
                 from qwen_fastpath import install
             self.predictor_path = install(self.model, settings.get('predictor_fastpath', True), device=device,
                                           cuda_graph=settings.get('predictor_cuda_graph', False))
+            try:
+                from .qwen_talker_graph import install as install_talker
+            except ImportError:
+                from qwen_talker_graph import install as install_talker
+            self.talker_path = install_talker(self.model, settings.get('talker_graph', False), device=device)
         loaded = time.perf_counter()
         voice = message["voice"]
         key = (hashlib.sha256(Path(voice["reference_audio"]).read_bytes()).hexdigest(), voice["reference_text"])
@@ -59,6 +65,7 @@ class QwenEngine:
             if message.get("seed", -1) >= 0:
                 torch.manual_seed(message["seed"])
             counts = self.predictor_path.snapshot()
+            talker_counts = self.talker_path.snapshot()
             # Between batches, not between frames: a batch that starts near the
             # driver's VRAM limit pays 1.2 s per frame in WDDM paging instead of
             # 0.09 s, and only handing the pooled blocks back fixes it. Runs after
@@ -77,6 +84,7 @@ class QwenEngine:
                 sf.write(item["output"], audio, rate, subtype="PCM_16", format="WAV")
         return {"ok": True, "count": len(wavs), "warm_model": warm, "prompt_cache_hit": hit,
                 **self.predictor_path.status(counts),
+                **self.talker_path.status(talker_counts),
                 "load_seconds": loaded-started, "prompt_seconds": prompt_ready-loaded,
                 "inference_seconds": time.perf_counter()-prompt_ready}
 

@@ -213,6 +213,7 @@ class InferenceBenchmark:
                   'dtype': settings.dtype, 'max_batch_size': settings.max_batch_size,
                   'predictor_fastpath': settings.predictor_fastpath,
                   'predictor_cuda_graph': settings.predictor_cuda_graph,
+                  'talker_graph': settings.talker_graph,
                   'seed': 1234, 'generation_options': voice['request_options'], 'workload': rows,
                   'ignored_options': list(ignored), 'warm_rounds': warm_rounds, 'sample_count': len(rows),
                   'cache_used': False, 'cache_scope': 'generated_audio', 'results': [], 'versions': versions}

@@ -30,6 +30,17 @@ def execution_details(item):
         lines.append('图加速说明：' + item['predictor_graph_reason'])
     if item.get('predictor_graph_replays'):
         lines.append(f"本批图重放：{item['predictor_graph_replays']} 次；新录制：{item.get('predictor_graph_captures', 0)} 个")
+    talker = item.get('talker_mode')
+    if talker:
+        lines.append('主模型：' + {'graph': '整步图加速', 'standard': '原循环'}.get(talker, talker))
+    if item.get('talker_reason'):
+        lines.append('整步图说明：' + item['talker_reason'])
+    if item.get('talker_graph_reason'):
+        lines.append('整步图录制说明：' + item['talker_graph_reason'])
+    if item.get('talker_graph_replays'):
+        lines.append(f"本批整步图重放：{item['talker_graph_replays']} 次；"
+                     f"新录制：{item.get('talker_graph_captures', 0)} 个；"
+                     f"回退：{item.get('talker_graph_fallbacks', 0)} 次")
     return '\n'.join(lines)
 
 

@@ -99,6 +99,7 @@ def main():
                  "_internal/voice_workbench/index_emotion.py", "_internal/voice_workbench/batch_inference/qwen_worker.py",
                  "_internal/voice_workbench/batch_inference/qwen_fastpath.py",
                  "_internal/voice_workbench/batch_inference/qwen_cuda_graph.py",
+                 "_internal/voice_workbench/batch_inference/qwen_talker_graph.py",
                  "_internal/PyQt6/Qt6/translations/qtbase_zh_CN.qm"):
         if not (candidate / name).is_file():
             raise RuntimeError(f"产物不完整：{candidate / name}")
