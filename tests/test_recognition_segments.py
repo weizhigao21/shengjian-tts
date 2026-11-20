@@ -184,17 +184,30 @@ def test_pieces_aligned_separately_never_make_the_next_line_start_before_the_las
 # ------------------------------------------------------------------ piece alignment
 
 class PieceRunner:
-    """Answers one unit per character and records the text each request carried."""
+    """Answers one unit per character, spread over the piece it was given.
 
-    def __init__(self, fail=()):
+    The spread matters: a real alignment places words across the audio it matched,
+    while a runner that answers every unit at 80 ms tells the caller the aligner gave
+    up (see ``_looks_aligned``), which would exercise the estimate path instead.
+    """
+
+    def __init__(self, fail=(), collapsed=()):
         self.fail = set(fail)
+        self.collapsed = set(collapsed)
         self.calls = []
 
     def align(self, voices, audio, text, language, cancelled):
         self.calls.append((Path(audio), text))
         if len(self.calls) in self.fail:
             raise VoiceError('ALIGN_FAILED', 'fixture: piece unavailable')
-        words = [{'word': character, 'start_sample': index * 1600, 'end_sample': (index + 1) * 1600}
+        with wave.open(str(audio)) as stream:
+            span = stream.getnframes() / max(1, stream.getframerate())
+        if len(self.calls) in self.collapsed:
+            step = 0.08
+        else:
+            step = max(0.08, span * 0.95 / max(1, len(text)))
+        words = [{'word': character, 'start_sample': round(index * step * 16000),
+                  'end_sample': round((index + 1) * step * 16000)}
                  for index, character in enumerate(text)]
         return {'words': words}
 

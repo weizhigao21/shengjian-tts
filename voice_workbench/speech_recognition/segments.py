@@ -132,12 +132,13 @@ def _deal(atoms, bounds, total):
     return texts
 
 
-def plan(path, text, duration=None, max_seconds=SEGMENT_SECONDS):
-    """Return ``[{"start", "end", "text"}, ...]``, or ``[]`` to align in one go.
+def windows(path, duration=None, max_seconds=SEGMENT_SECONDS):
+    """Return ``[{"start", "end"}, ...]`` for a clip that needs cutting, else ``[]``.
 
-    An empty list means the clip is short enough for a single request, or the
-    audio is a format this module will not cut — callers then keep the existing
-    single-request behaviour.
+    An empty list means the clip is short enough for a single request, or the audio
+    is a format this module will not cut. Long clips are recognised *and* aligned on
+    these same windows: a single request over a 27-minute file silently drops speech,
+    and a transcript missing content cannot be mapped onto the timeline at all.
     """
     info = _scan(path)
     if not info or not info["peaks"]:
@@ -145,13 +146,30 @@ def plan(path, text, duration=None, max_seconds=SEGMENT_SECONDS):
     total = float(duration or info["total"])
     if total <= max_seconds:
         return []
-    atoms = text_atoms(text)
-    if not atoms:
-        return []
     bounds = _boundaries(info["peaks"], info["block"], total, max_seconds)
     if len(bounds) < 3:
         return []
-    if len(atoms) < len(bounds) - 1:
+    return [{"start": round(bounds[index], 3), "end": round(bounds[index + 1], 3)}
+            for index in range(len(bounds) - 1)]
+
+
+def plan(path, text, duration=None, max_seconds=SEGMENT_SECONDS):
+    """Return ``[{"start", "end", "text"}, ...]``, or ``[]`` to align in one go.
+
+    Used when the transcript already exists as a whole and only the timings are
+    missing. Text is dealt out to the windows by its share of the duration, which is
+    only right when speech density is fairly even — for a file that varies, recognise
+    per window instead so the text is known to match its audio.
+    """
+    windows_ = windows(path, duration, max_seconds)
+    if not windows_:
+        return []
+    atoms = text_atoms(text)
+    if not atoms:
+        return []
+    bounds = [windows_[0]["start"]] + [window["end"] for window in windows_]
+    total = bounds[-1]
+    if len(atoms) < len(windows_):
         # Too little text for the planned pieces: even slices, one atom each.
         step = total / len(atoms)
         bounds = [index * step for index in range(len(atoms) + 1)]

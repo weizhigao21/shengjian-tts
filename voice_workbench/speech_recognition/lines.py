@@ -157,6 +157,23 @@ def reattach_punctuation(units, text):
     return merged
 
 
+def _word_window(piece, limit):
+    """How much of ``piece`` may be taken without cutting a word in half.
+
+    Character counts are the wrong unit for space-separated scripts: a limit of 24
+    lands inside "jeans" and hands the aligner "jea" for one piece and "ns." for the
+    next, which is exactly how a word ends up split across two subtitle lines.
+    A break is moved back to the last space when there is a plausible one; text with
+    no spaces at all (Chinese, Japanese) keeps the plain character cut.
+    """
+    if len(piece) < limit:
+        return len(piece)
+    space = piece.rfind(" ", 0, limit + 1)
+    if space >= max(1, limit // 2):
+        return space + 1
+    return limit
+
+
 def text_atoms(text, max_chars=MAX_LINE_CHARS):
     """Break a transcript into the smallest pieces a line may start on.
 
@@ -171,9 +188,11 @@ def text_atoms(text, max_chars=MAX_LINE_CHARS):
         last = index + 1
         piece = text[first:last]
         if len(piece) >= max_chars:
-            atoms.append(piece)
-            first = last
-        elif character in SENTENCE_END:
+            take = _word_window(piece, max_chars)
+            atoms.append(piece[:take])
+            first += take
+            continue
+        if character in SENTENCE_END:
             atoms.append(piece)
             first = last
         elif character == PERIOD:
@@ -206,6 +225,41 @@ def estimate_units(text, start, end):
     return units
 
 
+def _split_text(text, count):
+    """Slice ``text`` into ``count`` parts of even length without cutting words.
+
+    ``"".join(_split_text(t, n)) == t`` always holds. Space-separated text is cut
+    between words; a script without spaces falls back to an even character cut,
+    which is correct when a character is a word.
+    """
+    if count <= 1 or len(text) <= 1:
+        return [text]
+    words = text.split(" ")
+    if " " in text:
+        # Never cut inside a word, even if that means fewer parts than asked for.
+        count = min(count, len(words))
+        ends, running = [], 0
+        for word in words:
+            running += len(word) + 1
+            ends.append(min(running, len(text)))
+        total = len(text)
+        cuts, previous = [], 0
+        for index in range(1, count):
+            target = total * index / count
+            lowest = previous + 1
+            highest = len(words) - (count - index)
+            best = min(range(lowest, highest + 1), key=lambda k: abs(ends[k - 1] - target))
+            cuts.append(best)
+            previous = best
+        boundaries = [0] + [ends[cut - 1] for cut in cuts] + [len(text)]
+        return [text[boundaries[position]:boundaries[position + 1]] for position in range(count)]
+    if any(character.isascii() and character.isalpha() for character in text):
+        # One word with no space anywhere: there is nothing legal to cut.
+        return [text]
+    step = len(text) / count
+    return [text[round(index * step):round((index + 1) * step)] for index in range(count)]
+
+
 def _split_units(units, width, max_seconds):
     """Break every unit that is too long to be a single line.
 
@@ -225,17 +279,22 @@ def _split_units(units, width, max_seconds):
                          math.ceil(max(0.0, end - start) / max_seconds))
             pieces = min(pieces, len(text))
         if pieces <= 1:
-            result.append((text, start, end))
+            # A single word cannot be split, but it must not hold the screen for
+            # fifteen seconds either: when the estimate gave it the whole window, cap
+            # the span and let the remaining time stay silent.
+            result.append((text, start, min(end, start + max_seconds)))
             continue
-        for index in range(pieces):
-            first = round(index * len(text) / pieces)
-            last = round((index + 1) * len(text) / pieces)
-            piece = text[first:last]
+        offset = 0
+        for piece in _split_text(text, pieces):
             if not piece:
                 continue
-            result.append((piece,
-                           start + (end - start) * first / len(text),
-                           start + (end - start) * last / len(text)))
+            first, last = offset, offset + len(piece)
+            offset = last
+            start_at = start + (end - start) * first / len(text)
+            end_at = start + (end - start) * last / len(text)
+            # ``_split_text`` returns fewer parts than asked when the text is a single
+            # word, so the one part would still carry the whole span.
+            result.append((piece, start_at, min(end_at, start_at + max_seconds)))
     return result
 
 
@@ -348,7 +407,10 @@ def _split_block(block, width, max_seconds):
                 break
             take += 1
             length = trial
-            if length >= MIN_LINE_MARK_CHARS:
+            # A candidate may not already be over the duration limit: the width score
+            # would otherwise prefer a 13-second line over a 7-second one for being
+            # closer to the target character count.
+            if length >= MIN_LINE_MARK_CHARS and end - start <= max_seconds:
                 score = _cut_score(block, take, width, length, left - length)
                 if score is not None and (best_score is None or score > best_score):
                     best, best_score = take, score

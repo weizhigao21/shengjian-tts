@@ -1,6 +1,7 @@
 """Import audio, run transcription plus alignment, and keep the result per session."""
 from __future__ import annotations
 
+import re
 import tempfile
 import threading
 import time
@@ -11,13 +12,31 @@ from ..config import atomic_json
 from ..errors import VoiceError
 from . import segments
 from .audio_import import import_wave
-from .lines import build_lines, estimate_units, extract_units, fallback_lines
+from .lines import (build_lines, estimate_units, extract_units, fallback_lines,
+                    reattach_punctuation)
 from .runner import RecognitionRunner
 from .languages import ALIGN_LANGUAGES, alignment_language
 from .store import RecognitionStore
 
 # Formats the native reader and the Qt player both accept.
 ALLOWED_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
+
+# A clip that needs this many windows is recognised window by window rather than in
+# one request. A single request over a very long file silently drops speech — measured
+# on a 27-minute track, one request produced 6.7 characters per second where the same
+# audio transcribed window by window produced 10.8 — and a transcript that is missing
+# content can never be matched to the audio again, which is what left whole windows
+# showing text that was spoken a minute earlier.
+PIECEWISE_RECOGNITION_WINDOWS = 3
+
+# The aligner emits one 80 ms frame for a word it could not place. Used to tell a
+# real short word from a placeholder.
+ONE_FRAME_SECONDS = 0.085
+
+# How far a placeholder end may be stretched to reach the next word. Without a cap a
+# single word absorbed the 30 seconds of silence that followed it and the subtitle
+# sat on screen for half a minute.
+MAX_WORD_SECONDS = 2.5
 
 
 class SpeechRecognizer:
@@ -203,32 +222,42 @@ class SpeechRecognizer:
             if align_voice:
                 voices.append(align_voice)
 
-            transcript = self.runner.transcribe(voices, audio, state.get("language", "auto"), cancelled)
+            requested = state.get("language", "auto")
+            windows = segments.windows(audio, state.get("duration"))
+            transcript, units, warning, text, language = {}, [], "", "", ""
+            if align_voice and len(windows) >= PIECEWISE_RECOGNITION_WINDOWS:
+                # Long clip: recognise and align on the same windows, so no text has
+                # to be dealt out by assumed speech rate.
+                text, units, warning, language, wall_ms = recognize_windows(
+                    self.runner, voices, audio, windows, requested, cancelled)
+                transcript = {"timing": {"wall_ms": round(wall_ms, 1)}}
+                if not text:
+                    warning = "未识别到文字，可能是静音或没有清晰语音；请检查音频后重试。"
+            else:
+                transcript = self.runner.transcribe(voices, audio, requested, cancelled)
+                text = str(transcript.get("text") or "").strip()
+                language = alignment_language(requested, transcript.get("language"))
+                if not text:
+                    warning = "未识别到文字，可能是静音或没有清晰语音；请检查音频后重试。"
+                elif align_voice:
+                    if not language:
+                        warning = "已识别文字，但引擎未返回语言，已按标点估算时间；请选择音频语言后重新识别以获得精确时间。"
+                    elif language not in ALIGN_LANGUAGES:
+                        warning = f"已识别文字，但对齐器不支持语言 {language}，已按标点估算每行时间。"
+                    else:
+                        try:
+                            units, warning = align_units(self.runner, voices, audio, text, language,
+                                                        state.get("duration"), cancelled)
+                            if not units:
+                                warning = "对齐器没有返回时间点，已按标点估算每行时间；建议改用更短的音频重试。"
+                        except Exception as exc:
+                            if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
+                                raise
+                            warning = "文字识别已完成，时间对齐失败，已按标点估算每行时间：" + str(exc)[:500]
+                else:
+                    warning = "未安装强制对齐器，每行时间按标点估算；安装 Qwen3 对齐器后可精确到词。"
             if cancelled.is_set():
                 raise VoiceError("CANCELLED", "识别已取消")
-            text = str(transcript.get("text") or "").strip()
-            language = alignment_language(state.get("language"), transcript.get("language"))
-            warning = ""
-            units = []
-            if not text:
-                warning = "未识别到文字，可能是静音或没有清晰语音；请检查音频后重试。"
-            elif align_voice:
-                if not language:
-                    warning = "已识别文字，但引擎未返回语言，已按标点估算时间；请选择音频语言后重新识别以获得精确时间。"
-                elif language not in ALIGN_LANGUAGES:
-                    warning = f"已识别文字，但对齐器不支持语言 {language}，已按标点估算每行时间。"
-                else:
-                    try:
-                        units, warning = align_units(self.runner, voices, audio, text, language,
-                                                    state.get("duration"), cancelled)
-                        if not units:
-                            warning = "对齐器没有返回时间点，已按标点估算每行时间；建议改用更短的音频重试。"
-                    except Exception as exc:
-                        if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
-                            raise
-                        warning = "文字识别已完成，时间对齐失败，已按标点估算每行时间：" + str(exc)[:500]
-            else:
-                warning = "未安装强制对齐器，每行时间按标点估算；安装 Qwen3 对齐器后可精确到词。"
             lines = (build_lines(units, state.get("duration"), text=text) if units
                      else fallback_lines(text, state.get("duration")))
             if cancelled.is_set():
@@ -310,16 +339,153 @@ def align_units(runner, voices, audio, text, language, duration, cancelled):
                 note = note or str(exc)[:300]
             finally:
                 staged.unlink(missing_ok=True)
-            if local:
+            if local and _looks_aligned(local, piece["end"] - piece["start"]):
                 units.extend((word, start + piece["start"], end + piece["start"])
-                             for word, start, end in local)
+                             for word, start, end in _fill_short_ends(local, piece["end"] - piece["start"]))
             else:
                 failed.append(index)
+                note = note or "对齐器返回的时间点不可信（每个词只有一帧）"
                 units.extend(estimate_units(piece["text"], piece["start"], piece["end"]))
     if not failed:
         return units, ""
     return units, (f"{len(failed)}/{len(pieces)} 个片段未能精确对齐，这些片段按其时间范围估算："
                    + (note or "对齐器没有返回时间点"))
+
+
+def _looks_aligned(units, span):
+    """Is a returned timing plausible, or did the aligner give up?
+
+    A request that cannot match its text answers one 80 ms frame per word and leaves
+    the rest of the window to the last word; the starts then bunch into a fraction of
+    the window. That is how a single line came to span 17 seconds around the word
+    "jea". A real alignment spreads its starts across the audio it matched, however
+    much of the window that happens to be, so a cluster at the front — not a low
+    coverage on its own — is the signal to estimate this window instead.
+    """
+    if len(units) < 4:
+        return True
+    first, last = units[0][1], units[-1][2]
+    covered = last - first
+    if covered < span * 0.1:
+        return False
+    spans = sorted(end - start for _, start, end in units)
+    median = spans[len(spans) // 2]
+    quarter = first + covered * 0.25
+    early = sum(1 for _, start, _ in units if start <= quarter)
+    # Bunched at the front *and* every word exactly one frame: the aligner gave up on
+    # the start of the window and only found the later words.
+    return not (early >= len(units) * 0.55 and median <= ONE_FRAME_SECONDS)
+
+
+def _fill_short_ends(units, span):
+    """A word reported as one frame ends where the next word starts.
+
+    The aligner emits ``end = start + 1 frame`` for words it located but did not
+    measure, so a line built from those ends lasted 80 ms and the following line
+    started seconds later. Filling them makes the end of a line agree with the start
+    of the next one; durations that were actually measured are left alone.
+    """
+    filled = []
+    for index, (word, start, end) in enumerate(units):
+        following = units[index + 1][1] if index + 1 < len(units) else None
+        if end - start <= ONE_FRAME_SECONDS and following is not None and following > end:
+            end = min(following, start + MAX_WORD_SECONDS)
+        filled.append((word, start, end))
+    if len(filled) >= 2 and filled[-1][2] - filled[-1][1] <= ONE_FRAME_SECONDS:
+        typical = (filled[-1][1] - filled[0][1]) / max(1, len(filled) - 1)
+        word, start, _ = filled[-1]
+        filled[-1] = (word, start, min(span, start + min(MAX_WORD_SECONDS, max(0.1, typical))))
+    return filled
+
+
+def recognize_windows(runner, voices, audio, windows, requested_language, cancelled):
+    """Transcribe and align each window with its own text.
+
+    Returns ``(text, units, warning, language, wall_ms)``. Recognising the file as a
+    whole loses speech on long recordings, and the leftover transcript can only be
+    dealt out by assumed speech rate — the windows then hold text that belongs
+    elsewhere, which the aligner answers with a frame per word. Recognising where the
+    words actually are removes the guess: every window is aligned against exactly what
+    was said in it, so a window can fail on its own without dragging the rest along.
+
+    The transcript is the concatenation of the window texts, joined with a space where
+    the script separates words. A word repeated across a window boundary is dropped
+    once, since cutting at a quiet point does not guarantee a clean word edge.
+    """
+    if not str(tempfile.gettempdir()).isascii():
+        raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符",
+                         "设置 TMP 为可写的英文路径后重启程序。", "语音识别")
+    units, failed, language = [], [], ""
+    started = time.perf_counter()
+    # "auto" makes every window guess for itself, and a window that guesses wrong is
+    # transcribed worse. The first window decides, the rest inherit it.
+    voice = requested_language
+    with tempfile.TemporaryDirectory(prefix="shengjian-recognition-") as folder:
+        for index, window in enumerate(windows, start=1):
+            if cancelled.is_set():
+                raise VoiceError("CANCELLED", "识别已取消")
+            staged = Path(folder) / f"piece-{index:04d}.wav"
+            body, detected, local = "", "", []
+            try:
+                segments.cut(audio, window["start"], window["end"], staged)
+                payload = runner.transcribe(voices, staged, voice, cancelled)
+                body = str(payload.get("text") or "").strip()
+                detected = alignment_language(requested_language, payload.get("language")) or ""
+                # The alignment reads the staged file, so it has to happen before the
+                # cleanup below deletes it.
+                if body and detected:
+                    local = extract_units(runner.align(voices, staged, body, detected, cancelled))
+            except Exception as exc:
+                if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
+                    raise
+                failed.append(index)
+                continue
+            finally:
+                staged.unlink(missing_ok=True)
+            if not body:
+                continue
+            language = language or detected
+            if detected and str(voice).lower() in ("auto", "none", ""):
+                voice = detected
+            span = window["end"] - window["start"]
+            if local and _looks_aligned(local, span):
+                local = _fill_short_ends(reattach_punctuation(local, body), span)
+                local = [(word, start + window["start"], end + window["start"])
+                         for word, start, end in local]
+            else:
+                local = estimate_units(body, window["start"], window["end"])
+                failed.append(index)
+            if units and _first_word(local[0][0]) and _first_word(local[0][0]) == _last_word(units[-1][0]):
+                # Same word on both sides of the cut: it was spoken once.
+                local = local[1:]
+                if not local:
+                    continue
+            units.extend(local)
+            if units and not units[-1][0].endswith((" ", "\n")):
+                word, start, end = units[-1]
+                units[-1] = (word + (" " if " " in body else ""), start, end)
+    text = "".join(word for word, _, _ in units).strip()
+    wall_ms = (time.perf_counter() - started) * 1000
+    if failed:
+        note = f"{len(failed)}/{len(windows)} 个片段未能精确对齐，这些片段按其时间范围估算"
+        return text, units, note, language, wall_ms
+    return text, units, "", language, wall_ms
+
+
+def _first_word(text):
+    return _edge_word(text)
+
+
+def _last_word(text):
+    return _edge_word(text, last=True)
+
+
+def _edge_word(text, last=False):
+    """First or last word of a unit, normalised, for spotting a duplicated seam word."""
+    tokens = [token for token in re.split(r"[^0-9A-Za-z']+", text or "") if token]
+    if not tokens:
+        return ""
+    return (tokens[-1] if last else tokens[0]).lower()
 
 
 def _family_of(path, fallback):
