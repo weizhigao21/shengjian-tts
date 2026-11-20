@@ -6,6 +6,8 @@ exactly the span it covers.
 """
 from __future__ import annotations
 
+import math
+
 SENTENCE_END = "。！？!?…"
 CLAUSE_END = "，,、；;：:"
 TRAILING = "”』」）)】》\"'"
@@ -120,6 +122,88 @@ def reattach_punctuation(units, text):
     return merged
 
 
+def text_atoms(text, max_chars=MAX_LINE_CHARS):
+    """Break a transcript into the smallest pieces a line may start on.
+
+    Sentence marks end an atom, a clause mark ends one once the atom is already
+    long enough to read, and an atom with no marks at all is cut at
+    ``max_chars`` so a run-on transcript still has somewhere to break.
+    ``"".join(text_atoms(t)) == t`` always holds.
+    """
+    text = text or ""
+    atoms, first = [], 0
+    for index, character in enumerate(text):
+        last = index + 1
+        piece = text[first:last]
+        if len(piece) >= max_chars:
+            atoms.append(piece)
+            first = last
+        elif character in SENTENCE_END:
+            atoms.append(piece)
+            first = last
+        elif character == PERIOD:
+            following = text[last:last + 1]
+            if not _is_decimal(piece, following) and not (following and not following.isspace()):
+                atoms.append(piece)
+                first = last
+        elif character in CLAUSE_END and len(piece) >= MIN_CLAUSE_BREAK_CHARS:
+            atoms.append(piece)
+            first = last
+    if first < len(text):
+        atoms.append(text[first:])
+    return atoms
+
+
+def estimate_units(text, start, end):
+    """Spread a span over its atoms by character share.
+
+    Used where no alignment exists for a range — without an aligner, after a
+    failed request, or for one piece of a long clip whose own alignment failed.
+    The span is already known, so the estimate never drifts beyond it.
+    """
+    atoms = text_atoms(text)
+    total = sum(len(atom) for atom in atoms) or 1
+    units, cursor = [], float(start)
+    for atom in atoms:
+        span = (end - start) * len(atom) / total
+        units.append((atom, cursor, cursor + span))
+        cursor += span
+    return units
+
+
+def _split_units(units, width, max_seconds):
+    """Break every unit that is too long to be a single line.
+
+    A clean alignment answers one unit per character, but a degraded one — a
+    long clip, or text the aligner could not match — answers one unit per
+    segment. Grouping cannot break inside a unit, so a whole paragraph would
+    become one 20-second line. The unit's own span is spread over its
+    characters, which keeps its start and end exact.
+    """
+    if max_seconds is None or max_seconds <= 0:
+        max_seconds = MAX_LINE_SECONDS
+    result = []
+    for text, start, end in units:
+        pieces = 1
+        if text:
+            pieces = max(math.ceil(len(text) / max(1, width)),
+                         math.ceil(max(0.0, end - start) / max_seconds))
+            pieces = min(pieces, len(text))
+        if pieces <= 1:
+            result.append((text, start, end))
+            continue
+        for index in range(pieces):
+            first = round(index * len(text) / pieces)
+            last = round((index + 1) * len(text) / pieces)
+            piece = text[first:last]
+            if not piece:
+                continue
+            result.append((piece,
+                           start + (end - start) * first / len(text),
+                           start + (end - start) * last / len(text)))
+    return result
+
+
 def _is_cjk(character):
     return "\u3400" <= character <= "\u9fff" or "\uf900" <= character <= "\ufaff"
 
@@ -157,8 +241,8 @@ def _ends_line(part, gap_after, length=0, following=None):
 
 def build_lines(units, total_duration=None, text="", max_chars=MAX_LINE_CHARS, max_seconds=MAX_LINE_SECONDS):
     """Group time-stamped units into readable, playable lines."""
-    units = reattach_punctuation(units, text)
     width = _line_width(text, max_chars)
+    units = _split_units(reattach_punctuation(units, text), width, max_seconds)
     lines, current = [], []
     for position, (part, start, end) in enumerate(units):
         current.append((part, start, end))
@@ -190,17 +274,11 @@ def _shape(groups, total_duration):
 
 
 def fallback_lines(text, duration):
-    """Split a plain transcript on punctuation, spreading time by character share."""
-    import re
-    chunks = [chunk for chunk in re.split(r"(?<=[。！？!?…；;\n])|(?<=\.)(?=\s)", text or "") if chunk.strip()]
-    if not chunks:
-        return []
-    total = sum(len(chunk.strip()) for chunk in chunks) or 1
-    lines, cursor = [], 0.0
-    for chunk in chunks:
-        share = len(chunk.strip()) / total
-        span = (duration or 0.0) * share
-        lines.append({"index": len(lines) + 1, "start": round(cursor, 3),
-                      "end": round(cursor + span, 3), "text": chunk.strip()})
-        cursor += span
-    return lines
+    """Split a plain transcript on punctuation, spreading time by character share.
+
+    The same grouping as an aligned transcript, so a missing or failed aligner
+    can no longer produce one paragraph-long line: the atoms carry the marks the
+    grouping breaks on and the width and duration limits still apply.
+    """
+    duration = duration or 0.0
+    return build_lines(estimate_units(text, 0.0, duration), duration, text=text)

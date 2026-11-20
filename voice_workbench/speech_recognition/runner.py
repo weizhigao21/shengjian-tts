@@ -27,6 +27,11 @@ from .languages import native_language
 
 # Try the OpenAI-style alignment route first; fall back to the generic task route.
 ALIGN_ENDPOINTS = ("/v1/audio/alignments", "/v1/tasks/run")
+# The engine refuses bodies above this and closes the connection mid-upload
+# (measured as WinError 10054 on a 195 MB clip), so the multipart route is
+# skipped once a request would exceed it. Kept in sync with the config written
+# in ``start``: the value is what the native side actually enforces.
+MAX_REQUEST_BODY_BYTES = 104857600
 
 
 def _model_entry(voice, name, path):
@@ -60,7 +65,7 @@ class RecognitionRunner(AudioCppRunner):
                 config = {"host": "127.0.0.1", "port": port, "backend": voices[0]["device"], "device": 0,
                           "threads": self.cpu_threads or min(8, max(1, (os.cpu_count() or 4) // 2)),
                           "lazy_load": True, "max_loaded_models": 2, "idle_unload_ms": 120000,
-                          "log_request_body": False, "max_request_body_bytes": 104857600,
+                          "log_request_body": False, "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
                           "models": entries}
                 native_config_path = self.native_paths.config(config)
                 atomic_json(self.root / "engine-server.json", config)
@@ -133,22 +138,35 @@ class RecognitionRunner(AudioCppRunner):
             raise VoiceError("ALIGN_INPUT_MISSING", "精确对齐需要非空原文和明确的识别语言", stage="字幕对齐")
         _, endpoint = self.start(voices, cancelled)
         fields = {"model": "align", "text": text, "language": language}
-        last = ""
+        size = Path(audio).stat().st_size
+        notices = []
         try:
-            for position, route in enumerate(ALIGN_ENDPOINTS):
-                with httpx.Client(trust_env=False, timeout=timeout) as client:
-                    if route == "/v1/audio/alignments":
-                        with open(audio, "rb") as handle:
-                            files = {"file": (Path(audio).name, handle, "audio/wav")}
-                            response = client.post(endpoint + route, files=files, data=fields)
-                    else:
-                        response = self._task(client, endpoint, "align", audio, text=text, language=language)
+            for route in ALIGN_ENDPOINTS:
+                try:
+                    with httpx.Client(trust_env=False, timeout=timeout) as client:
+                        if route == "/v1/audio/alignments":
+                            # The engine enforces its body cap by closing the socket, so
+                            # an oversized multipart upload only shows up as a broken
+                            # connection. Skip straight to the path-based route instead.
+                            if size > MAX_REQUEST_BODY_BYTES:
+                                notices.append(f"{route}: 音频 {size / 1048576:.0f} MB 超过请求体上限")
+                                continue
+                            with open(audio, "rb") as handle:
+                                files = {"file": (Path(audio).name, handle, "audio/wav")}
+                                response = client.post(endpoint + route, files=files, data=fields)
+                        else:
+                            response = self._task(client, endpoint, "align", audio, text=text, language=language)
+                except httpx.TimeoutException:
+                    raise
+                except httpx.HTTPError as exc:
+                    # A dead route must not hide the next one; this is what made a long
+                    # clip lose its alignment to a single WinError 10054.
+                    notices.append(f"{route}: {exc}")
+                    continue
                 if response.status_code == 200:
                     return response.json()
-                last = response.text[:2000]
-                if position == len(ALIGN_ENDPOINTS) - 1:
-                    break
-            raise VoiceError("ALIGN_FAILED", f"对齐未返回结果：{last}",
+                notices.append(f"{route}: HTTP {response.status_code} {response.text[:600]}")
+            raise VoiceError("ALIGN_FAILED", "对齐未返回结果：" + "；".join(notices)[:2000],
                              "确认已下载 Qwen3 强制对齐器模型；对齐器缺失时无法给出精确时间。", "字幕对齐")
         except httpx.TimeoutException as exc:
             self.interrupt()

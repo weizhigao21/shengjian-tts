@@ -1,6 +1,7 @@
 """Import audio, run transcription plus alignment, and keep the result per session."""
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 import uuid
@@ -8,8 +9,9 @@ from pathlib import Path
 
 from ..config import atomic_json
 from ..errors import VoiceError
+from . import segments
 from .audio_import import import_wave
-from .lines import build_lines, extract_units, fallback_lines
+from .lines import build_lines, estimate_units, extract_units, fallback_lines
 from .runner import RecognitionRunner
 from .languages import ALIGN_LANGUAGES, alignment_language
 from .store import RecognitionStore
@@ -217,8 +219,8 @@ class SpeechRecognizer:
                     warning = f"已识别文字，但对齐器不支持语言 {language}，已按标点估算每行时间。"
                 else:
                     try:
-                        payload = self.runner.align(voices, audio, text, language, cancelled)
-                        units = extract_units(payload)
+                        units, warning = align_units(self.runner, voices, audio, text, language,
+                                                    state.get("duration"), cancelled)
                         if not units:
                             warning = "对齐器没有返回时间点，已按标点估算每行时间；建议改用更短的音频重试。"
                     except Exception as exc:
@@ -274,6 +276,50 @@ class SpeechRecognizer:
             if self.thread.is_alive():
                 raise RuntimeError("语音识别仍在退出，不能关闭识别数据库")
         self.store.close()
+
+
+def align_units(runner, voices, audio, text, language, duration, cancelled):
+    """Align a transcript, in pieces when the clip is too long for one request.
+
+    Returns ``(units, warning)``. A long clip is cut at quiet points and each
+    piece is aligned with its own share of the text, because one request for the
+    whole file either exceeds the engine's body cap or comes back as segment-level
+    units. A piece whose alignment fails still gets times, distributed inside its
+    own span, so a single bad request can no longer cost the transcript its
+    timing the way it used to.
+    """
+    pieces = segments.plan(audio, text, duration)
+    if not pieces:
+        return extract_units(runner.align(voices, audio, text, language, cancelled)), ""
+    if not str(tempfile.gettempdir()).isascii():
+        raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符",
+                         "设置 TMP 为可写的英文路径后重启程序。", "字幕对齐")
+    units, failed, note = [], [], ""
+    with tempfile.TemporaryDirectory(prefix="shengjian-alignment-") as folder:
+        for index, piece in enumerate(pieces, start=1):
+            if cancelled.is_set():
+                raise VoiceError("CANCELLED", "识别已取消")
+            staged = Path(folder) / f"piece-{index:04d}.wav"
+            local = []
+            try:
+                segments.cut(audio, piece["start"], piece["end"], staged)
+                local = extract_units(runner.align(voices, staged, piece["text"], language, cancelled))
+            except Exception as exc:
+                if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
+                    raise
+                note = note or str(exc)[:300]
+            finally:
+                staged.unlink(missing_ok=True)
+            if local:
+                units.extend((word, start + piece["start"], end + piece["start"])
+                             for word, start, end in local)
+            else:
+                failed.append(index)
+                units.extend(estimate_units(piece["text"], piece["start"], piece["end"]))
+    if not failed:
+        return units, ""
+    return units, (f"{len(failed)}/{len(pieces)} 个片段未能精确对齐，这些片段按其时间范围估算："
+                   + (note or "对齐器没有返回时间点"))
 
 
 def _family_of(path, fallback):
