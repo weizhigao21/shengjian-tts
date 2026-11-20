@@ -187,8 +187,8 @@ def test_lines_break_at_sentences_and_only_split_long_clauses():
     assert [line['index'] for line in shaped('第一句。第二句！')] == [1, 2]
     # A clause mark only ends a line once that line is long enough to read on its own.
     assert [line['text'] for line in shaped('短，还是同一行。')] == ['短，还是同一行。']
-    assert [line['text'] for line in shaped('一二三四五六七八九十十一十二十三十四，后面。')] == [
-        '一二三四五六七八九十十一十二十三十四，', '后面。']
+    assert [line['text'] for line in shaped('一二三四五六七八九十十一十二十三十四，后面的话还有很多内容需要继续说下去才可以。')] == [
+        '一二三四五六七八九十十一十二十三十四，', '后面的话还有很多内容需要继续说下去才可以。']
     # Every line stays inside the clip even if the aligner overshoots the end.
     assert shaped('第一句。第二句！')[-1]['end'] == 1.2
     assert [line['end'] for line in build_lines([(c, i * 0.2, i * 0.2 + 1.0)
@@ -225,9 +225,9 @@ def test_space_separated_transcripts_get_a_wider_line_than_chinese():
     # One line for English; the 24-character Chinese default would have wrapped it.
     assert [line['text'] for line in build_lines(english_units(english), 60.0, text=english)] == [english]
     # Chinese keeps the narrower width, so the same character budget still wraps.
-    chinese = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥一二三四五六七八'
+    chinese = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥一二三四五六七八九十甲乙丙丁'
     units = [(character, index * 0.2, index * 0.2 + 0.2) for index, character in enumerate(chinese)]
-    assert len(build_lines(units, 60.0, text=chinese)) == 2
+    assert [len(line['text']) for line in build_lines(units, 60.0, text=chinese)] == [24, 12]
 
 
 def test_estimated_lines_spread_time_by_character_share():

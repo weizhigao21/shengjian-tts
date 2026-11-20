@@ -18,8 +18,8 @@ import pytest
 
 from voice_workbench.errors import VoiceError
 from voice_workbench.speech_recognition import segments
-from voice_workbench.speech_recognition.lines import (MAX_LINE_SECONDS, build_lines, fallback_lines,
-                                                      text_atoms)
+from voice_workbench.speech_recognition.lines import (LINE_SLACK_CHARS, MAX_LINE_CHARS, MAX_LINE_SECONDS,
+                                                      build_lines, fallback_lines, text_atoms)
 from voice_workbench.speech_recognition.runner import MAX_REQUEST_BODY_BYTES, RecognitionRunner
 from voice_workbench.speech_recognition.service import align_units
 
@@ -94,7 +94,9 @@ def test_no_line_may_hold_a_paragraph_even_without_a_period():
               '感觉越来越愚蠢，脑袋里头都是粉色棉花糖。')
     lines = fallback_lines(source, 23.77)
     assert len(lines) > 4
-    assert all(len(line['text']) <= 24 for line in lines)
+    # The width is a target: a line may run past it to reach a mark, never to swallow
+    # a paragraph. 24 + LINE_SLACK_CHARS is the ceiling.
+    assert all(len(line['text']) <= MAX_LINE_CHARS + LINE_SLACK_CHARS for line in lines)
     assert all(line['end'] - line['start'] <= MAX_LINE_SECONDS for line in lines)
     assert ''.join(line['text'] for line in lines) == source
     assert lines[0]['start'] == 0 and lines[-1]['end'] == pytest.approx(23.77)
@@ -103,7 +105,9 @@ def test_no_line_may_hold_a_paragraph_even_without_a_period():
 def test_text_without_any_punctuation_still_has_somewhere_to_break():
     source = '甲' * 60
     assert text_atoms(source) == ['甲' * 24, '甲' * 24, '甲' * 12]
-    assert all(len(line['text']) <= 24 for line in fallback_lines(source, 30.0))
+    lines = fallback_lines(source, 30.0)
+    assert all(len(line['text']) <= MAX_LINE_CHARS + LINE_SLACK_CHARS for line in lines)
+    assert ''.join(line['text'] for line in lines) == source
 
 
 def test_one_oversized_aligner_unit_is_split_instead_of_becoming_one_line():
@@ -118,6 +122,63 @@ def test_one_oversized_aligner_unit_is_split_instead_of_becoming_one_line():
 def test_a_short_transcript_is_still_one_line():
     assert [line['text'] for line in fallback_lines('下载进度刷新，保留滚动位置。', 4.0)] == [
         '下载进度刷新，保留滚动位置。']
+
+
+def _char_units(text, step=0.2, pause=None):
+    """One unit per character, the shape a clean alignment returns."""
+    units, clock = [], 0.0
+    for index, character in enumerate(character for character in text if character not in '。！？，,、；;：: '):
+        if pause and index in pause:
+            clock += pause[index]
+        units.append((character, clock, clock + step))
+        clock += step
+    return units
+
+
+def test_the_width_is_a_target_so_a_word_is_never_cut_in_half():
+    # "棉花糖" used to become "…粉红色棉花" + "糖，…" because 24 characters was a wall.
+    source = '因为他的脑袋完全被填满了，充满着蓬松的粉红色棉花糖，不能被用来思考。'
+    lines = build_lines(_char_units(source), 20.0, text=source)
+    assert any('棉花糖' in line['text'] for line in lines)
+    assert [line['text'] for line in lines] == [
+        '因为他的脑袋完全被填满了，充满着蓬松的粉红色棉花糖，', '不能被用来思考。']
+
+
+def test_an_invented_pause_between_two_characters_does_not_make_a_one_character_line():
+    # The aligner drifts over a long clip and reports a 2.6 s pause after "而"; honouring
+    # it left "而" alone at the end of a line with "且" starting the next one.
+    source = '而且在发光的粉红色按钮上的是一个由大写字母组成的单词。'
+    lines = build_lines(_char_units(source, step=0.08, pause={1: 2.6}), 20.0, text=source)
+    assert [line['text'] for line in lines] == [source]
+    assert all(len(line['text']) >= 6 for line in lines)
+
+
+def test_a_unit_the_aligner_joined_across_a_mark_is_not_emitted_twice():
+    # The aligner answered "sleepBambi" where the transcript read "sleep。Bambi", so the
+    # old matcher failed, left its cursor behind, and re-emitted words already placed.
+    source = 'Bambi sleep。Bambi现在可以想象。'
+    units = [('Bambi', 0.0, 0.2), ('sleepBambi', 0.3, 0.6), ('现', 0.7, 0.9), ('在', 0.9, 1.1),
+             ('可', 1.1, 1.3), ('以', 1.3, 1.5), ('想', 1.5, 1.7), ('象', 1.7, 1.9)]
+    lines = build_lines(units, 2.0, text=source)
+    assert ''.join(line['text'] for line in lines) == source
+
+
+def test_a_trailing_fragment_is_folded_into_the_line_that_owns_it():
+    # "Bingo" then "Doll。" used to be two lines, the second one 80 ms long.
+    source = '一个甜美性感的笨蛋，一个绝望无脑的 Bingo Doll。'
+    units = [('一个甜美性感的笨蛋，', 0.0, 1.2), ('一个绝望无脑的', 1.2, 2.4),
+             ('Bingo', 2.4, 2.6), ('Doll。', 2.6, 2.68)]
+    assert [line['text'] for line in build_lines(units, 3.0, text=source)] == [source]
+
+
+def test_pieces_aligned_separately_never_make_the_next_line_start_before_the_last_end():
+    # Two pieces of one clip can overlap by a second where they meet; playback must not
+    # repeat audio that was already heard.
+    units = [('第', 0.0, 0.5), ('一', 0.5, 1.0), ('句', 1.0, 1.5),
+             ('第', 1.2, 1.6), ('二', 1.6, 2.0), ('句', 2.0, 2.4)]
+    lines = build_lines(units, 2.4, text='第一句。第二句。')
+    assert [line['text'] for line in lines] == ['第一句。', '第二句。']
+    assert lines[1]['start'] == pytest.approx(lines[0]['end'])
 
 
 # ------------------------------------------------------------------ piece alignment

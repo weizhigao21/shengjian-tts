@@ -27,10 +27,24 @@ SAMPLE_KEYS = (("start_sample", "end_sample"), ("start_samples", "end_samples"))
 # Fallbacks when the transcript arrives without usable word units.
 MAX_LINE_CHARS = 24
 MAX_LINE_SECONDS = 8.0
-MAX_GAP_SECONDS = 1.2
 # A clause mark only ends a line once that line is already long enough to read, so
 # short comma-separated phrases stay together and sentences remain the main unit.
+# This is the granularity a *piece* of a long clip is dealt out at, not a line width.
 MIN_CLAUSE_BREAK_CHARS = 14
+# The width is a target, not a wall. Reaching it only arms a break; the line keeps
+# eating characters until a mark or a pause shows up, so "棉花糖" is not torn into
+# "棉花" + "糖". This is how far past the target it may go before cutting blind.
+LINE_SLACK_CHARS = 8
+# A line shorter than this is a fragment. It is what a pause between two characters
+# of one word looks like ("睡" / "着"), so fragments are folded into a neighbour
+# instead of being played on their own.
+MIN_LINE_CHARS = 6
+# A mark may end a line once the line reads on its own. This is lower than the atom
+# threshold: "感到愚蠢，" is a fine line even at five characters, and refusing it is
+# what pushed a break into the middle of "狂妄".
+MIN_LINE_MARK_CHARS = 5
+# How far a line may run past MAX_LINE_SECONDS before it is cut regardless.
+LINE_SLACK_SECONDS = 1.5
 # Space-separated scripts need a wider line: 24 characters is barely four English
 # words, while it is a comfortable Chinese half-sentence. Mixed text keeps the
 # narrower width.
@@ -90,6 +104,22 @@ def extract_units(payload):
     return []
 
 
+def _normalised(text):
+    """Strip marks and spaces, keeping a map back to the original offsets.
+
+    Matching a unit against the raw transcript fails as soon as the aligner joins two
+    words the transcript separates (it returned ``"sleepBambi"`` where the transcript
+    read ``"sleep。Bambi"``). A failed match used to leave the cursor behind, which
+    re-emitted text already placed — the duplicated words users saw.
+    """
+    offsets, letters = [], []
+    for position, character in enumerate(text):
+        if character.isalnum():
+            offsets.append(position)
+            letters.append(character.lower())
+    return "".join(letters), offsets
+
+
 def reattach_punctuation(units, text):
     """Give each unit the marks the aligner drops so line breaks can follow sentences.
 
@@ -100,25 +130,30 @@ def reattach_punctuation(units, text):
     """
     if not text or not units:
         return list(units)
-    merged, cursor = [], 0
+    flat, offsets = _normalised(text)
+    merged, cursor, flat_cursor = [], 0, 0
     for word, start, end in units:
-        position = text.find(word, cursor)
-        if position < 0:
-            position = text.lower().find(word.lower(), cursor)
-        if position < 0:
+        needle = "".join(character for character in word if character.isalnum()).lower()
+        if not needle:
+            if merged:
+                previous, first, last = merged[-1]
+                merged[-1] = (previous + word, first, last)
+            continue
+        found = flat.find(needle, flat_cursor)
+        if found < 0:
             merged.append((word, start, end))
             continue
-        matched = text[position:position + len(word)]
-        skipped = text[cursor:position]
-        if skipped and merged:
+        begin = offsets[found]
+        stop = offsets[found + len(needle) - 1] + 1
+        if merged and begin > cursor:
             previous, first, last = merged[-1]
-            merged[-1] = (previous + skipped, first, last)
-        merged.append((skipped + word if skipped and not merged else word, start, end))
-        cursor = position + len(matched)
-    tail = text[cursor:]
-    if tail and merged:
+            merged[-1] = (previous + text[cursor:begin], first, last)
+        piece = text[begin:stop] if merged else text[:stop]
+        merged.append((piece, start, end))
+        cursor, flat_cursor = stop, found + len(needle)
+    if merged and cursor < len(text):
         previous, first, last = merged[-1]
-        merged[-1] = (previous + tail, first, last)
+        merged[-1] = (previous + text[cursor:], first, last)
     return merged
 
 
@@ -225,51 +260,174 @@ def _is_decimal(core, following):
     return bool(head) and head[-1].isdigit() and bool(following) and following[:1].isdigit()
 
 
-def _ends_line(part, gap_after, length=0, following=None):
-    stripped = part.rstrip()
+def _is_sentence_end(part, following=None):
+    """True when a line may not continue past ``part``."""
+    stripped = (part or "").rstrip()
     if not stripped:
         return False
     core = stripped.rstrip(TRAILING)
     if core.endswith(tuple(SENTENCE_END)):
         return True
-    if len(core) > 1 and core.endswith(PERIOD) and not _is_decimal(core, following):
-        return True
-    if core.endswith(tuple(CLAUSE_END)) and length >= MIN_CLAUSE_BREAK_CHARS:
-        return True
-    return gap_after is not None and gap_after >= MAX_GAP_SECONDS
+    return len(core) > 1 and core.endswith(PERIOD) and not _is_decimal(core, following)
+
+
+def _is_clause_end(part):
+    stripped = (part or "").rstrip()
+    return bool(stripped) and stripped.rstrip(TRAILING).endswith(tuple(CLAUSE_END))
+
+
+def _length_of(group):
+    # Trailing spaces belong to the aligner's token boundary, not to the line: a
+    # 5-character line ending in a space is still a fragment worth folding away.
+    return len("".join(part for part, _, _ in group).strip())
+
+
+def _blocks(units):
+    """Split the stream where a line must never run on: a sentence end.
+
+    Pauses are deliberately *not* a hard boundary. A forced aligner drifts over a
+    long clip and invents a pause in the middle of a word — honouring it is what left
+    "而" alone at the end of a line and "且" starting the next one. A real pause is
+    still preferred, but only as a scoring bonus when a line needs cutting anyway.
+    Duration is handled the same way, inside ``_split_block``, so a line that hits the
+    time limit backs up to a mark instead of being guillotined where it stands.
+    """
+    blocks, current = [], []
+    for index, (part, start, end) in enumerate(units):
+        current.append((part, start, end))
+        following = units[index + 1] if index + 1 < len(units) else None
+        if _is_sentence_end(part, following[0] if following else None):
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _cut_score(block, index, width, length, remaining):
+    """How good it is to end a line just before ``block[index]``.
+
+    A mark beats a pause, a pause beats nothing, and everything is nudged towards
+    the target width so lines stay even. This is what keeps a break off the middle
+    of a word when no mark is available: characters inside a word are closer
+    together than characters across a word gap.
+    """
+    if index <= 0 or index >= len(block):
+        return None
+    part, _, end = block[index - 1]
+    following = block[index]
+    score = 0.0
+    if _is_sentence_end(part, following[0]):
+        score += 10.0
+    elif _is_clause_end(part):
+        score += 6.0
+    gap = following[1] - end
+    if gap > 0:
+        score += min(gap, 1.0) * 4.0
+    score -= abs(length - width) / max(width, 1) * 2.0
+    # Leaving a few characters stranded on a line of their own reads worse than a
+    # line that is a couple of characters over the target, so a cut that would orphan
+    # a fragment is penalised heavily enough to lose against an earlier mark.
+    if 0 < remaining < MIN_LINE_CHARS:
+        score -= 5.0
+    return score
+
+
+def _split_block(block, width, max_seconds):
+    """Cut one block into lines, letting a line run past the width to reach a mark."""
+    lines = []
+    left = _length_of(block)
+    while block:
+        start = block[0][1]
+        take, length, best, best_score, reason = 0, 0, None, None, "end"
+        while take < len(block):
+            part, _, end = block[take]
+            trial = length + len(part)
+            if trial > width + LINE_SLACK_CHARS and take > 0:
+                reason = "wide"
+                break
+            take += 1
+            length = trial
+            if length >= MIN_LINE_MARK_CHARS:
+                score = _cut_score(block, take, width, length, left - length)
+                if score is not None and (best_score is None or score > best_score):
+                    best, best_score = take, score
+            if end - start >= max_seconds and take > 0:
+                reason = "time"
+                break
+            following = block[take][0] if take < len(block) else None
+            if _is_sentence_end(part, following) and length >= MIN_LINE_CHARS:
+                reason = "sentence"
+                break
+        # A blind cut (width or duration) backs up to the best break point seen, so it
+        # lands on a mark or the widest gap instead of the middle of a word.
+        cut = best if reason in ("wide", "time") and best else take
+        lines.append(block[:cut])
+        block = block[cut:]
+        left = max(0, left - _length_of(lines[-1]))
+    return lines
+
+
+def _can_merge(left, right, width, max_seconds):
+    if not left or not right:
+        return False
+    if _length_of(left) + _length_of(right) > width + LINE_SLACK_CHARS:
+        return False
+    span = right[-1][2] - left[0][1]
+    if span > max_seconds + LINE_SLACK_SECONDS:
+        return False
+    if _is_sentence_end(left[-1][0], right[0][0]):
+        # A whole sentence keeps its own line. Only a sliver that lasts a fraction of
+        # a second is folded back — that is how the aligner's "迸发。" + "出来。" is
+        # repaired without also welding "第一句。" and "第二句！" together.
+        return _length_of(right) <= 3 and (right[-1][2] - right[0][1]) < 0.5
+    return True
+
+
+def _absorb_fragments(groups, width, max_seconds):
+    """Fold fragments such as "Doll。" or a runaway "嚼" into the line they belong to.
+
+    A short line is usually the aligner splitting one phrase over a pause it invented;
+    playing it alone flashes a single character on screen for 80 ms.
+    """
+    result = []
+    for group in groups:
+        if result and _length_of(group) < MIN_LINE_CHARS and _can_merge(result[-1], group, width, max_seconds):
+            result[-1] = result[-1] + group
+            continue
+        if result and _length_of(result[-1]) < MIN_LINE_CHARS and _can_merge(result[-1], group, width, max_seconds):
+            result[-1] = result[-1] + group
+            continue
+        result.append(group)
+    return result
 
 
 def build_lines(units, total_duration=None, text="", max_chars=MAX_LINE_CHARS, max_seconds=MAX_LINE_SECONDS):
     """Group time-stamped units into readable, playable lines."""
     width = _line_width(text, max_chars)
     units = _split_units(reattach_punctuation(units, text), width, max_seconds)
-    lines, current = [], []
-    for position, (part, start, end) in enumerate(units):
-        current.append((part, start, end))
-        following = units[position + 1] if position + 1 < len(units) else None
-        gap = (following[1] - end) if following else None
-        length = len("".join(item for item, _, _ in current))
-        span = end - current[0][1]
-        if (_ends_line(part, gap, length, following[0] if following else None)
-                or length >= width or span >= max_seconds or following is None):
-            lines.append(current)
-            current = []
-    if current:
-        lines.append(current)
-    return _shape(lines, total_duration)
+    groups = []
+    for block in _blocks(units):
+        groups.extend(_split_block(block, width, max_seconds))
+    return _shape(_absorb_fragments(groups, width, max_seconds), total_duration)
 
 
 def _shape(groups, total_duration):
-    result = []
+    result, previous_end = [], 0.0
     for index, group in enumerate(groups, start=1):
         text = "".join(part for part, _, _ in group).strip()
         if not text:
             continue
-        start = max(0.0, group[0][1])
+        # Pieces of a long clip are aligned independently, so the tail of one can
+        # overshoot the head of the next by a second. Starting the next line where the
+        # previous one ended keeps playback from repeating audio it already played.
+        start = max(previous_end, max(0.0, group[0][1]))
         end = max(start, group[-1][2])
         if total_duration:
             end = min(end, total_duration)
+            start = min(start, end)
         result.append({"index": len(result) + 1, "start": round(start, 3), "end": round(end, 3), "text": text})
+        previous_end = result[-1]["end"]
     return result
 
 
