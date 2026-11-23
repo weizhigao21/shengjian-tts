@@ -42,7 +42,7 @@ class ModelCategories(QTabBar):
         self.setAccessibleName("模型用途分类")
         self.setExpanding(False)
         self.setDrawBase(False)
-        self.setUsesScrollButtons(True)
+        self.setUsesScrollButtons(False)
         self.setElideMode(Qt.TextElideMode.ElideNone)
         self.setStyleSheet(
             "QTabBar#modelCategories::tab { padding: 4px 12px; margin-right: 6px;"

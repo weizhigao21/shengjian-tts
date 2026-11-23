@@ -66,6 +66,12 @@ def test_category_tabs_filter_the_catalog_from_below_its_heading(panel, qtbot):
     assert panel.catalog_table.rowCount() == 0
 
 
+def test_category_tabs_fit_without_scroll_arrows(panel):
+    bar = panel.model_filter
+    assert not bar.usesScrollButtons()
+    assert bar.tabRect(bar.count() - 1).right() <= bar.contentsRect().right()
+
+
 def test_download_area_survives_filters_and_updates_in_place_then_disappears(panel):
     task = panel.model_data['catalog'][0]
     task.update(status='downloading', received=1024**2, speed_bps=2.5*1024**2)
