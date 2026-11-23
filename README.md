@@ -30,9 +30,9 @@
 
 **实验开关（默认关闭）：** 两层 CUDA Graph 都在设置页可开。编码预测器图已在 RTX 2080 Ti 完成编码 / 随机数 / 音频一致性验证，20 条中文和中英混合短句相对专用循环的热模型耗时减少约 50%（[验证报告](docs/CUDA_GRAPH_VALIDATION.md)）；本版新增的 Talker 整步图实测批 8 由 0.502 → 0.285 秒 / 条（1.76 倍）、批 2 由 2.030 → 0.973（2.09 倍），RTF 0.161 → 0.092，但它与 SDK 原循环只能做到「同参数近似」而非逐位相同（[整步图说明](docs/TALKER_GRAPH.md)）。
 
-**已发布 Windows 包：v0.7.72 · Windows x64 · 解压即用，无需安装 Python。** 独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。本版 v0.7.75 的包见 [最新发行页](https://github.com/weizhigao21/shengjian-tts/releases/latest)。
+**当前本地构建：v0.7.87 · Windows x64 · 解压即用，无需安装 Python。** 独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。最新公开包见 [最新发行页](https://github.com/weizhigao21/shengjian-tts/releases/latest)。
 
-从 [v0.7.72 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.72) 下载 `shengjian-v0.7.72-windows-x64.zip`，同页提供 `SHA256SUMS.txt`，源码见该标签。装有更新器的版本（v0.7.33 起）可在「设置 → 常规」直接检查并安装这次更新，v0.7.28 需要先手动装一次完整包。v0.7.75 的 `shengjian-v0.7.75-windows-x64.zip` 与 `SHA256SUMS.txt` 同规矩发布到发行页。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
+从 [v0.7.72 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.72) 下载 `shengjian-v0.7.72-windows-x64.zip`，同页提供 `SHA256SUMS.txt`，源码见该标签。装有更新器的版本（v0.7.33 起）可在「设置 → 常规」直接检查并安装这次更新，v0.7.28 需要先手动装一次完整包。当前源码 v0.7.87 的 `shengjian-v0.7.87-windows-x64.zip` 与 `SHA256SUMS.txt` 已生成在 `dist/`，发行页仍以上传版本为准。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
 ## 可以做什么
 
