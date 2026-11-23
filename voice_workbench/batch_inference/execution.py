@@ -81,12 +81,24 @@ class BatchExecution:
                     raise VoiceError('BATCH_MODEL_CHANGED', '批量推理期间原始模型文件发生变化')
             metadata = {"backend": 'qwen3_batch', "batch_size": len(items), "batch_seconds": elapsed,
                         "model_signature": signature, **{k: answer[k] for k in
-                        ('warm_model', 'prompt_cache_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds',
+                        ('warm_model', 'prompt_cache_hit', 'prompt_disk_hit', 'load_seconds', 'prompt_seconds', 'inference_seconds',
+                         # Where the seconds outside the model go: interpreter start,
+                         # weight load, prompt build, the WAV writes, and the IPC
+                         # left over when those four do not add up to the round trip.
+                         'import_seconds', 'generate_seconds', 'write_seconds',
+                         'spawn_seconds', 'roundtrip_seconds', 'ipc_seconds',
+                         # `batch_seconds - call_seconds` is the caller's own
+                         # queueing around the call; `call_seconds - roundtrip`
+                         # is the worker lock; `start_seconds` splits the latter
+                         # down to the wait before the request is even written.
+                         'call_seconds', 'start_seconds',
                          'precision', 'precision_reason',
                          'predictor_mode', 'predictor_revision', 'predictor_calls', 'predictor_fallback_calls', 'predictor_reason',
                          'predictor_graph_captures', 'predictor_graph_replays', 'predictor_graph_fallbacks', 'predictor_graph_reliefs', 'predictor_graph_lights', 'predictor_graph_downgraded', 'predictor_graph_reason',
+                         'predictor_downgrades', 'predictor_graph_rearms',
                          'talker_mode', 'talker_revision', 'talker_calls', 'talker_fallback_calls', 'talker_reason',
-                         'talker_graph_captures', 'talker_graph_replays', 'talker_graph_fallbacks', 'talker_graph_downgraded', 'talker_graph_reason') if k in answer}}
+                         'talker_graph_captures', 'talker_graph_replays', 'talker_graph_fallbacks', 'talker_graph_downgraded', 'talker_graph_reason',
+                         'talker_downgrades', 'talker_graph_rearms') if k in answer}}
             with self.lock:
                 if cancelled.is_set() or self.stopping.is_set():
                     return

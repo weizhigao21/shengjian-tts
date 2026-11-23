@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from PyQt6.QtWidgets import QFileDialog
-from ...subtitles import parse_text
+from ...subtitles import build_pool, parse_text, read_text
 from ...model_info import selected_mode
 from ...model_controls import populate
 from ..api_client import checked
@@ -12,20 +12,50 @@ from ..model_labels import model_key, model_label
 
 class GenerationController:
     def import_text(self):
-        filename, _ = QFileDialog.getOpenFileName(self, "导入字幕或文本", "", "字幕与文本 (*.txt *.lrc *.srt *.vtt);;所有文件 (*)")
-        if not filename:
+        """可多选：所有文件累积成一个生成池，合成同一个任务再合批。"""
+        filenames, _ = QFileDialog.getOpenFileNames(
+            self, "导入字幕或文本（可多选，累积成一个生成池）", "",
+            "字幕与文本 (*.txt *.lrc *.srt *.vtt);;所有文件 (*)")
+        if not filenames:
             return
         try:
-            raw = Path(filename).read_bytes()
-            try:
-                content = raw.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                content = raw.decode("gb18030")
-            parse_text(content)
-            self.text_edit.setPlainText(content)
-            self.title_edit.setText(Path(filename).stem)
+            blocks = [(Path(name).stem, read_text(name)) for name in filenames]
+            merged, segments = build_pool([content for _, content in blocks], self.text_edit.toPlainText())
+            self.text_edit.setPlainText(merged)
+            first = blocks[0][0]
+            self.title_edit.setText(first if len(blocks) == 1 else f"{first} 等 {len(blocks)} 个字幕")
+            added = sum(len(parse_text(content)) for _, content in blocks)
+            self.statusBar().showMessage(
+                f"已导入 {len(blocks)} 个文件、{added} 段；生成池共 {segments} 段，一次提交即可合批。", 8000)
+            self.pool_preflight([item["text"] for item in parse_text(merged)])
         except Exception as exc:
             self.show_error(str(exc))
+
+    def pool_preflight(self, texts):
+        """池导入后先问一次「这批能不能合批」。
+
+        合批门槛、参数兼容性和长度限制都只在服务端判定，界面上从来拿不到答案，
+        于是「以为自己在批量、其实整池走了原生引擎」要等生成完才发现。这里只
+        预演路由，不建任务、不加载模型。
+        """
+        try:
+            voice = self.current_voice() if len(texts) > 1 else None
+            use_preset = self.selected_preset() is not None
+        except (AttributeError, TypeError):
+            return                       # 预检只是提示，界面未就绪时不该影响导入
+        if voice is None or not hasattr(self, "call"):
+            return
+        body = {"voice_id": voice["model_name"] if use_preset else voice["id"], "texts": texts[:10000]}
+        self.call(lambda client: checked(client.post("/inference/plan", json=body)),
+                  self.pool_planned, lambda error: None)
+
+    def pool_planned(self, plan):
+        sizes = plan.get("batch_sizes") or []
+        if plan.get("backend") == "qwen3_batch" and sizes:
+            self.statusBar().showMessage(
+                f"生成池可合批：{sum(sizes)} 段 → {len(sizes)} 批，最多 {max(sizes)} 段/批。", 15000)
+        else:
+            self.statusBar().showMessage(f"这批会走原生引擎：{plan.get('reason') or '服务端未给出原因'}", 20000)
 
     def submit(self, segments, title):
         if self.submitting:
@@ -264,7 +294,12 @@ class GenerationController:
         voice = self.generation_voice()
         if voice:
             info = self.model_controls.info
-            self.voice_family.setText(("audio.cpp 统一引擎" if voice["backend"] == "audio_cpp" else "官方 Python 引擎" if voice["backend"] == "index_tts" else "系统语音引擎") +
+            # 只带批量资产的机器上模型是 HF 目录、没有原生引擎，这里如实说清楚。
+            if voice["backend"] == "audio_cpp" and Path(voice.get("model_dir") or "").is_dir():
+                engine = "批量生成（无原生引擎）"
+            else:
+                engine = ("audio.cpp 统一引擎" if voice["backend"] == "audio_cpp" else "官方 Python 引擎" if voice["backend"] == "index_tts" else "系统语音引擎")
+            self.voice_family.setText(engine +
                                       ("  ·  CUDA" if voice.get("device") == "cuda" and voice["backend"] != "windows_sapi" else ""))
             self.model_combo.setToolTip(voice.get("model_dir") or "Windows 系统声音")
             mode = self.model_controls.mode.currentData()

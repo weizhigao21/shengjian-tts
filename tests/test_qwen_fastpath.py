@@ -145,8 +145,8 @@ def test_sustained_slow_frames_keep_the_plain_loop_for_this_worker(predictor, mo
               output_hidden_states=True, return_dict_in_generate=True)
     for _ in range(4):
         path.generate(**kw)
-    assert not path.downgraded and path.baseline is not None
-    path.baseline = 1e-9   # every real frame now looks three times slower
+    assert not path.downgraded and path.baseline
+    path.baseline = {2: 1e-9}      # every real frame now looks three times slower
     path.slow = 0
     for _ in range(fast.SLOW_FRAMES):
         path.generate(**kw)
@@ -181,3 +181,68 @@ def test_actual_predictor_metadata_is_saved_in_history_and_status(batch_manager,
     with manager.lock:
         assert manager.last_execution['predictor_calls']==60
     assert '专用加速' in execution_details(result['segments'][0]['inference'])
+
+
+def test_a_short_batch_is_not_judged_against_a_long_one(monkeypatch):
+    """A batch of one pays the same frame time as a batch of eight, roughly.
+
+    Production paid for this the hard way: a 14-step single-line batch was
+    measured against the fastest batch-of-eight pace, judged three times slower,
+    and the worker lost its graph for the following 158 batches.
+    """
+    clock = [0.0]
+    monkeypatch.setattr(fast, 'perf_counter', lambda: clock[0])
+    path = fast.PredictorPath()
+    path.graphs = object()          # watch() only needs it to be present
+    path.last = 0.0
+    clock[0] = 0.09                 # batch of eight: 90 ms a frame
+    path.watch(8)
+    for _ in range(fast.SLOW_FRAMES):
+        path.last = clock[0]
+        clock[0] += 0.30            # a single line: 3.3x of the batch-of-eight
+        path.watch(1)
+    assert not path.downgraded
+    assert path.baseline[1] == pytest.approx(0.30)
+
+
+def test_a_downgrade_is_retried_when_the_card_has_room(monkeypatch):
+    clock, free = [0.0], [1024**3]
+
+    class Graphs:
+        captures = replays = fallbacks = reliefs = lights = 0
+        reason = ''
+
+        def _free(self, device):
+            return free[0]
+
+        def relief(self, device):
+            return False
+
+    monkeypatch.setattr(fast, 'perf_counter', lambda: clock[0])
+    path = fast.PredictorPath()
+    path.graphs, path.device = Graphs(), 'cuda'
+    path._downgrade()
+    assert path.downgraded and path.status()['predictor_graph_downgraded'] is True
+
+    assert path.rearm() is False                      # not yet due
+    clock[0] += fast.REARM_SECONDS + 1
+    free[0] = 1024**3                                 # due, card still full
+    assert path.rearm() is False and path.downgraded
+    clock[0] += fast.REARM_SECONDS + 1
+    free[0] = 4 * 1024**3                             # due, room came back
+    assert path.rearm() is True and not path.downgraded
+    assert path.status()['predictor_graph_rearms'] == 1
+    assert path.status()['predictor_downgrades'] == 1
+
+
+def test_a_finished_batch_clears_the_retry_backoff(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(fast, 'perf_counter', lambda: clock[0])
+    path = fast.PredictorPath()
+    path._downgrade()
+    assert path.streak == 1
+    path.settle()                                     # still downgraded: no reset
+    assert path.streak == 1
+    path.downgraded = False
+    path.settle()
+    assert path.streak == 0

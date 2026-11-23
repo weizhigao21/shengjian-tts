@@ -332,6 +332,7 @@ class PlaybackController:
             return f"{seconds // 60:02d}:{seconds % 60:02d}.{ms % 1000 // 100}"
         self.clip_time.setText(f"{clock(position)} / {clock(duration)}")
         self.seek_slider.setRange(0, duration)
+        self.seek_slider.setVisible(bool(duration))
         if not self.seek_slider.isSliderDown():
             self.seek_slider.setValue(position)
         self.waveform.set_progress(position / duration if duration else 0)

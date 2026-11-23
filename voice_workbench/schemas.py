@@ -189,3 +189,8 @@ class LegacyInput(BaseModel):
     speed_facter: float | None = Field(default=None, ge=0.5, le=2)
     emotion: str | None = Field(default=None, max_length=500)
     text_lang: str | None = None
+
+
+class HandoffStart(BaseModel):
+    """主仆模式要交接的范围；默认只带批量生成必需的部分。"""
+    scope: Literal["batch", "recognition", "full"] = "batch"

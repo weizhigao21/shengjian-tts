@@ -27,6 +27,17 @@ FRAMES_PER_RELIEF = 12
 # strictly worse than the plain loop. So watch the pace and give the graph up.
 SLOW_RATIO = 3.0
 SLOW_FRAMES = 6
+# A downgrade used to last for the rest of the worker's life. One stretch of
+# paging therefore cost every later batch three to five times its frames, for an
+# hour, on a card whose free memory moves by gigabytes whenever another program
+# opens a window. Paging is a property of the moment, not of the worker, so the
+# graph is given another try -- not immediately, and not while the card is still
+# full. Each failed retry doubles the wait, up to ten minutes.
+REARM_SECONDS = 60
+REARM_CEILING = 600
+# Same headroom relief() uses: below this the batch itself pages, and a graph
+# makes that worse instead of better.
+REARM_HEADROOM = 1536 * 1024**2
 
 
 class PredictorPath:
@@ -36,10 +47,15 @@ class PredictorPath:
         self.predictor = self.original = None
         self.graphs = None
         self.device = None
-        self.baseline = None
+        # One fastest frame per batch size. A batch of one and a batch of eight
+        # do not cost the same per frame, so a single record made the small
+        # batches look slow and gave the graph up for nothing.
+        self.baseline = {}
         self.slow = 0
         self.last = None
         self.downgraded = False
+        self.downgrades = self.streak = self.rearms = 0
+        self.retry_at = 0.0
         # One call renders one frame. The worker reports each one so the parent can
         # tell a slow batch from a wedged one instead of timing the whole batch.
         self.progress = None
@@ -63,13 +79,48 @@ class PredictorPath:
                 'predictor_graph_reliefs': self.graphs.reliefs-before[5] if self.graphs else 0,
                 'predictor_graph_lights': self.graphs.lights-before[6] if self.graphs else 0,
                 'predictor_graph_downgraded': self.downgraded,
+                'predictor_downgrades': self.downgrades,
+                'predictor_graph_rearms': self.rearms,
                 'predictor_graph_reason': self.graphs.reason if self.graphs else ''}
 
     def tidy(self):
         """Hand pooled VRAM back before a batch starts. Never called per frame."""
-        if not self.graphs or self.downgraded or self.device is None:
+        if not self.graphs or self.device is None:
             return False
+        if self.downgraded:
+            return self.rearm()
         return self.graphs.relief(self.device)
+
+    def rearm(self, device=None):
+        """Try the graph again once the wait has passed and the card has room."""
+        if not self.downgraded or perf_counter() < self.retry_at:
+            return False
+        if self.graphs is None:
+            return False
+        free = self.graphs._free(device or self.device)
+        if free is None or free < REARM_HEADROOM:
+            # Still full: do not spend a batch finding out again.
+            self.retry_at = perf_counter() + REARM_SECONDS
+            return False
+        self.downgraded = False
+        self.slow = 0
+        self.rearms += 1
+        self.reason = ''
+        return True
+
+    def settle(self):
+        """A batch that finished on the graph clears the doubling backoff."""
+        if not self.downgraded and self.streak:
+            self.streak = 0
+
+    def _downgrade(self):
+        self.downgraded = True
+        self.downgrades += 1
+        self.streak += 1
+        wait = min(REARM_SECONDS * 2 ** (self.streak - 1), REARM_CEILING)
+        self.retry_at = perf_counter() + wait
+        self.reason = (f'逐帧耗时超过同批量最快帧 3 倍，改用专用循环；'
+                       f'{int(wait)} 秒后若显存有余量再试图加速。')
 
     def generate(self, *args, **kwargs):
         p = self.predictor
@@ -103,7 +154,7 @@ class PredictorPath:
             self.warper_key, self.processors = key, processors
         self.reason = ''
         self.calls += 1
-        self.watch()
+        self.watch(embeds.shape[0])
         forward = lambda value: self.loop(value, sample)
         use_graph = self.graphs is not None and not self.downgraded
         output = self.graphs.run(embeds, key, forward) if use_graph else forward(embeds)
@@ -116,30 +167,35 @@ class PredictorPath:
             self.progress()
         return SimpleNamespace(sequences=output)
 
-    def watch(self):
-        """Drop the graph for the rest of this worker when frames crawl.
+    def watch(self, batch=1):
+        """Give the graph up when frames crawl, and take it back when they stop.
 
         The graph wins 0.09 s over 0.15 s per frame while the card has room and
         loses badly once it does not: the same replay costs 1.3 s/frame while the
         plain loop stays near 0.43 s under the same pressure. Trading 1.7x for
         never losing 14x is the right way round, so a sustained slowdown keeps the
-        plain loop for this worker instead of re-judging every frame.
+        plain loop -- but only until the card has room again, which is a
+        different moment and used to be mistaken for the end of the worker.
         """
-        if self.last is None or self.graphs is None or self.downgraded:
+        if self.last is None or self.graphs is None:
+            return
+        if self.downgraded:
             return
         gap = perf_counter() - self.last
         if not gap:
             return
-        if self.baseline is None or gap < self.baseline:
-            self.baseline, self.slow = gap, 0
+        size = max(1, min(int(batch or 1), 8))
+        base = self.baseline.get(size)
+        if base is None or gap < base:
+            self.baseline[size] = gap
+            self.slow = 0
             return
-        if gap <= self.baseline * SLOW_RATIO:
+        if gap <= base * SLOW_RATIO:
             self.slow = 0
             return
         self.slow += 1
         if self.slow >= SLOW_FRAMES:
-            self.downgraded = True
-            self.reason = '逐帧耗时超过最快帧 3 倍，本次运行改用专用循环以避开显存分页。'
+            self._downgrade()
 
     def loop(self, embeds, sample):
         import torch

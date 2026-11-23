@@ -116,10 +116,10 @@ class InferenceStatus(ElidedLabel):
 
     def bind(self, health):
         text, detail, state = status_presentation(health)
-        color = {'idle': '#77777c', 'running': '#3c7a51', 'fallback': '#ad5427'}[state]
-        self.setText(text)
+        self.setText("●  " + text)
         self.setToolTip(detail)
         self.setAccessibleDescription(detail)
         if self.property('state') != state:
             self.setProperty('state', state)
-            self.setStyleSheet(f'color: {color}; padding: 3px 0;')
+            self.style().unpolish(self)
+            self.style().polish(self)

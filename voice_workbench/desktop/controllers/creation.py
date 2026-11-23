@@ -15,8 +15,10 @@ class CreationController:
         self.clip_list.hide()
         self.set_page(0)
         self.creation_pages.setCurrentIndex(0)
-        self.resume_creation.setVisible(bool(self.selected_job or self.text_edit.toPlainText().strip()
-                                             or any(r.text.toPlainText().strip() for r in self.dialogue_editor.rows)))
+        has_something = bool(self.selected_job or self.text_edit.toPlainText().strip()
+                             or any(r.text.toPlainText().strip() for r in self.dialogue_editor.rows))
+        self.resume_creation.setVisible(True)
+        self.resume_creation.setEnabled(has_something)
 
     def resume_creation_editor(self):
         self.choose_creation_mode(self.editor_mode, dirty=False)

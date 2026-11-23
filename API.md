@@ -50,7 +50,7 @@
 | `POST /audio-editor/projects/{id}/process`、`POST /audio-editor/projects/{id}/cancel` | 后台音频处理（202）、取消处理 |
 | `GET /audio-editor/audio/{filename}` | 读取管理目录内的编辑版本 WAV |
 | `GET /recognition/options`、`POST /recognition/selection` | 识别可用的 ASR / 对齐器模型、引擎与语言；保存默认选择 |
-| `GET /recognition/sessions`、`POST /recognition/sessions` | 识别记录列表、导入音频并开始识别（返回 201） |
+| `GET /recognition/sessions`、`POST /recognition/sessions` | 识别记录列表、导入音频或视频并开始识别（返回 201） |
 | `GET /recognition/sessions/{id}`、`PATCH /recognition/sessions/{id}` | 识别状态、文本与分行；保存名称 |
 | `POST /recognition/sessions/{id}/retry`、`POST /recognition/sessions/{id}/cancel` | 重新识别、取消当前识别 |
 | `DELETE /recognition/sessions/{id}` | 删除识别记录及其音频副本 |
@@ -104,19 +104,19 @@ v0.7.51 起，`POST /models/runtime/download` 和 `/models/runtime/upgrade` 可�
 
 ```json
 {
-  "path": "本机音频路径",
+  "path": "本机音频或视频路径",
   "name": "显示名称",
   "language": "zh"
 }
 ```
 
-`POST /recognition/sessions` 复制音频到数据目录并返回 201 与会话 ID；未选择或缺少 ASR 模型时返回 400，格式或路径无效时返回 400。会话状态为 `queued` / `running` / `done` / `failed` / `cancelled`，`done` 时包含 `text`、`lines`、`duration`、`warning`、`recognized_language`、`timing` 和 `audio_url`。
+`POST /recognition/sessions` 复制音频到数据目录并返回 201 与会话 ID；未选择或缺少 ASR 模型时返回 400，格式或路径无效时返回 400。会话状态为 `queued` / `running` / `done` / `failed` / `cancelled`，`done` 时包含 `text`、`lines`、`duration`、`warning`、`recognized_language`、`timing` 和 `audio_url`；`source_kind` 记录导入的是 `audio` 还是 `video`。
 
 `lines` 每项含 `index`（从 1 开始）、`start`、`end`（秒，相对音频开头）与 `text`，可直接用于点击播放；时间戳来自引擎的 16 kHz 采样帧号换算，分行按句末、从句、长度、时长与停顿综合判断。未安装强制对齐器时按标点估算每行时间，并通过 `warning` 说明。`language` 可取 `auto` 或 `recognition/options` 中给出的代码。
 
 识别与音频编辑共用管理器的推理互斥，`GET /health` 的 `recognition` 字段显示当前会话 ID；识别期间 `POST /engine/release` 和 `PUT /models/runtime` 返回 400。删除会话会同时删除该音频副本，重新识别沿用同一会话并覆盖上一次结果。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)。
 
-语音识别导入时，PCM WAV 保存独立副本，其他支持格式转换为私有 PCM WAV。推理引擎被配音、识别或 AI 编辑占用时拒绝新识别，返回 400，不留下等待记录或音频副本；重试被拒绝时保留原状态。成功提交固定本次模型与语言，取消旧版残留的等待记录会将其标记为已取消。
+语音识别导入时，PCM WAV 保存独立副本，其他支持格式转换为私有 PCM WAV。视频容器（MP4 / MKV / MOV / AVI / WEBM 等）只提取第一条音轨写成同样的私有 PCM WAV，原文件不改动；没有音轨的视频返回 400。推理引擎被配音、识别或 AI 编辑占用时拒绝新识别，返回 400，不留下等待记录或音频副本；重试被拒绝时保留原状态。成功提交固定本次模型与语言，取消旧版残留的等待记录会将其标记为已取消。
 
 v0.7.41 中，自动判断模式优先保留 ASR 返回的具体语言，手选语言优先；`recognized_language` 表示实际用于对齐的语言名称。没有文字时跳过对齐，语言未知 / 不受支持或对齐失败时仍返回 `done` 与已识别的文字，`warning` 明确说明时间估算；取消返回 `cancelled`。升级前失败的记录可用原 `/retry` 接口重新识别。
 

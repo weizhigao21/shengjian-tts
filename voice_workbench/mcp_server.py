@@ -311,7 +311,7 @@ def tool_get_job(arguments):
 def tool_transcribe(arguments):
     path = Path(str(arguments.get("path") or "")).expanduser()
     if not path.is_file():
-        raise ToolError("找不到音频文件：" + str(path))
+        raise ToolError("找不到音频或视频文件：" + str(path))
     session = _call("POST", "/recognition/sessions", json={
         "path": str(path), "name": path.stem, "language": arguments.get("language") or "auto"})
     identity = session.get("id") or (session.get("state") or {}).get("id")
@@ -398,11 +398,11 @@ TOOLS = [
     },
     {
         "name": "transcribe",
-        "description": "把本机音频文件转成文字，并给出每行的起止时间（秒）。需要声笺里已下载识别模型。",
+        "description": "把本机音频或视频文件转成文字，并给出每行的起止时间（秒）；视频只读取音轨，原文件不改动。需要声笺里已下载识别模型。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "音频文件的绝对路径。"},
+                "path": {"type": "string", "description": "音频或视频文件的绝对路径。"},
                 "language": {"type": "string", "description": "语言代码如 zh / en，默认 auto 自动判断。"},
             },
             "required": ["path"],

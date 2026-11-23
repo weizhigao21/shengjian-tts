@@ -199,6 +199,7 @@ class AudioEditController:
         self.stop()
         self.current = version
         info = version["details"]
+        self.panel.wave_stack.setCurrentIndex(0)
         self.panel.waveform.duration = info["duration"]
         self.panel.waveform.load(Path(version["path"]))
         self.panel.start.setMaximum(info["duration"])

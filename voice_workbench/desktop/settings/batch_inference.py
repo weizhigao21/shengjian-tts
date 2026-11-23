@@ -41,7 +41,7 @@ class BatchInferenceControls(QWidget):
         self.enabled = QCheckBox()
         self.enabled.setChecked(True)
         self.enabled.setToolTip('总开关。关闭后所有文本都走原生引擎。')
-        layout.addWidget(label('批量模型', 'section'))
+        layout.addWidget(label('批量模型', 'groupTitle'))
         self.model_picker = sized(QComboBox())
         self.model_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.model_picker.setMinimumContentsLength(16)
@@ -74,7 +74,7 @@ class BatchInferenceControls(QWidget):
         layout.addWidget(self.migration)
 
         # ── 批处理参数 ──────────────────────────────────────────────────────
-        layout.addWidget(label('批处理参数', 'section'))
+        layout.addWidget(label('批处理参数', 'groupTitle'))
         self.size = sized(QSpinBox())
         self.size.setRange(2, 8)
         self.size.setValue(2)
@@ -109,7 +109,7 @@ class BatchInferenceControls(QWidget):
         ]))
 
         # ── 加速 ────────────────────────────────────────────────────────────
-        layout.addWidget(label('加速', 'section'))
+        layout.addWidget(label('加速', 'groupTitle'))
         self.predictor_fastpath = QCheckBox()
         self.predictor_fastpath.setChecked(True)
         self.predictor_fastpath.setToolTip('减少固定 15 步编码预测的通用生成开销，不修改模型或采样参数；'
@@ -138,7 +138,7 @@ class BatchInferenceControls(QWidget):
         layout.addLayout(row)
 
         # ── 运行环境 ────────────────────────────────────────────────────────
-        layout.addWidget(label('运行环境', 'section'))
+        layout.addWidget(label('运行环境', 'groupTitle'))
         from .batch_setup import BatchSetupControls
         self.automatic = BatchSetupControls(self)
         layout.addWidget(self.automatic)
@@ -224,6 +224,9 @@ class BatchInferenceControls(QWidget):
         ready = result['ready']
         self.status_badge.setText('已关闭' if not self.settings.get('enabled', True) else
                                   ('已就绪 · 模型已驻留' if ready and result.get('loaded') else
+                                   # Weights handed back, interpreter still here: the
+                                   # next batch costs seconds instead of a minute.
+                                   '已就绪 · 环境驻留' if ready and result.get('resident') else
                                    '已就绪' if ready else '待配置'))
         text = ('批量后端已就绪。' if ready else result['reason']) if self.settings.get('enabled', True) \
             else '自动批量推理已关闭，所有文本使用原生引擎。'
@@ -239,6 +242,24 @@ class BatchInferenceControls(QWidget):
             if recent.get('talker_mode'):
                 text += ' · 主模型：' + {'graph': '整步图加速', 'standard': '原循环'}.get(
                     recent['talker_mode'], recent['talker_mode'])
+            # Everything the batch spent outside the model. A cold worker's
+            # imports never showed up anywhere before, and a second hiding
+            # between the model and the wall clock could not be seen at all.
+            if 'import_seconds' in recent:
+                outside = []
+                startup = (recent.get('spawn_seconds') or 0) + (recent.get('import_seconds') or 0)
+                if startup >= 0.3:
+                    outside.append(f'冷启动 {startup:.1f} 秒')
+                if (recent.get('load_seconds') or 0) >= 0.3:
+                    outside.append(f'加载权重 {recent["load_seconds"]:.1f} 秒')
+                if (recent.get('prompt_seconds') or 0) >= 0.3:
+                    outside.append(f'音色编码 {recent["prompt_seconds"]:.1f} 秒')
+                if (recent.get('write_seconds') or 0) >= 0.3:
+                    outside.append(f'写盘 {recent["write_seconds"]:.1f} 秒')
+                if (recent.get('ipc_seconds') or 0) >= 0.3:
+                    outside.append(f'其它 {recent["ipc_seconds"]:.1f} 秒')
+                if outside:
+                    text += '\n模型外 ' + ' · '.join(outside)
             for key in ('precision_reason', 'predictor_reason', 'predictor_graph_reason', 'talker_reason'):
                 if recent.get(key):
                     text += '\n' + recent[key]

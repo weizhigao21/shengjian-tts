@@ -5,7 +5,7 @@ from PyQt6.QtCore import QModelIndex, Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel, QTextCharFormat, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QCompleter, QListView, QStyledItemDelegate, QStyle
 
-from ...ui import ScriptEditor
+from ...ui import INK, MUTED, ScriptEditor
 from ...services.script_voices import parse_script, utf16_length
 from ..model_labels import model_label
 
@@ -37,10 +37,10 @@ class PresetDelegate(QStyledItemDelegate):
         painter.save()
         rect = option.rect.adjusted(9, 5, -9, -5)
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, QColor("#f2f2f1"))
+            painter.fillRect(option.rect, QColor("#fbeee4"))
         voice = index.data(VOICE_ROLE) or {}
         painter.setFont(option.font)
-        painter.setPen(QColor("#202020"))
+        painter.setPen(QColor(INK))
         painter.drawText(rect.adjusted(0, 0, 0, -20), Qt.AlignmentFlag.AlignVCenter,
                          option.fontMetrics.elidedText(voice.get("name", index.data()), Qt.TextElideMode.ElideRight, rect.width()))
         small = QFont(option.font)
@@ -49,7 +49,7 @@ class PresetDelegate(QStyledItemDelegate):
         else:
             small.setPointSizeF(max(8, small.pointSizeF() - 1))
         painter.setFont(small)
-        painter.setPen(QColor("#888888"))
+        painter.setPen(QColor(MUTED))
         detail = index.data(DETAIL_ROLE) if voice else "可先在声音库保存声音预设"
         if voice.get("error"):
             detail += " · 配置需修复"
@@ -179,7 +179,7 @@ class PresetScriptEditor(ScriptEditor):
         format_ = QTextCharFormat()
         format_.setProperty(IDENTITY, voice["id"])
         format_.setProperty(CAPTION, voice["name"])
-        format_.setForeground(QColor("#555555"))
+        format_.setForeground(QColor(MUTED))
         cursor.insertText("@" + voice["name"], format_)
         cursor.insertText(" ", QTextCharFormat())
         cursor.setCharFormat(QTextCharFormat())
@@ -251,7 +251,7 @@ class PresetScriptEditor(ScriptEditor):
             fmt = QTextCharFormat()
             fmt.setProperty(IDENTITY, mention["preset_id"])
             fmt.setProperty(CAPTION, mention["label"])
-            fmt.setForeground(QColor("#555555"))
+            fmt.setForeground(QColor(MUTED))
             cursor.mergeCharFormat(fmt)
         self.suppress_completion = False
 

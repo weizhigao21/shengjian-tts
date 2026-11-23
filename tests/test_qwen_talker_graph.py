@@ -215,6 +215,30 @@ def test_graph_entries_own_the_cache_and_are_reused_for_the_same_shape(torch_stu
     assert len(graphs.entries) == 1
 
 
+def test_batches_of_different_line_length_share_one_capture(torch_stub):
+    """A job's batches differ in prompt length; that alone must not recapture.
+
+    Recapturing per batch cost about 1.5 s on an 8-line batch that only decoded
+    for 2-3 s. The graph depends on (batch, cache length, dtype); the prompt goes
+    into the same buffers and the mask is rewritten for every batch.
+    """
+    path = tg.install(model_with(talker(lambda **kw: 'sdk')), True, device='cuda')
+    short = path.key_of(good_kwargs(batch=8, length=10, new=40))
+    longer = path.key_of(good_kwargs(batch=8, length=18, new=40))
+    assert short == longer and short[1] == 64
+    # Crossing a bucket is a genuinely different cache shape.
+    beyond = path.key_of(good_kwargs(batch=8, length=30, new=40))
+    assert beyond != short and beyond[1] == 96
+    # Batch size still separates shapes: a batch of 3 cannot replay a batch of 8.
+    assert path.key_of(good_kwargs(batch=3, length=10, new=40)) != short
+
+
+def test_the_cache_bucket_never_shrinks_a_batch(torch_stub):
+    for length in (1, 31, 32, 33, 63, 64, 65, 200, 257):
+        assert tg.cache_bucket(length) >= length
+        assert tg.cache_bucket(length) - length < tg.CACHE_BUCKET
+
+
 def test_failed_shapes_are_bounded_and_never_recaptured(torch_stub, monkeypatch):
     graphs = tg.StepGraphs()
     monkeypatch.setattr(graphs, 'capture', lambda step, pos: (_ for _ in ()).throw(RuntimeError('no capture')))
@@ -238,3 +262,45 @@ def test_eager_step_takes_the_same_buffers_without_a_graph(torch_stub):
     replay = graphs.acquire((1, 1, 1, 'f16'), lambda: step, 1)
     assert replay(embed=None, position=7) == ('hidden', 'logits')
     assert calls == [7, 1] and graphs.captures == 0
+
+
+def test_the_batch_pace_ignores_the_prefill(torch_stub, monkeypatch):
+    """Only the frame loop may decide whether the graph stays.
+
+    The prefill is a fixed cost: a fourteen-frame batch spreads it over far fewer
+    frames than a forty-frame one, so counting it made short lines look slow.
+    """
+    instance = talker(lambda **kw: 'sdk')
+    path = tg.install(model_with(instance), True, device='cuda')
+    clock = [0.0]
+
+    def decode(kw):
+        clock[0] += 0.80                      # long prompt
+        path.step_seconds, path.step_frames = 0.20, 10
+        return SimpleNamespace()
+
+    monkeypatch.setattr(path, 'decode', decode)
+    monkeypatch.setattr(tg, 'perf_counter', lambda: clock[0])
+    path.generate(**good_kwargs(batch=1))
+    assert path.best[1] == pytest.approx(0.02)      # 0.20/10, not 1.00/10
+
+
+def test_a_downgrade_is_retried_when_the_card_has_room(torch_stub, monkeypatch):
+    free = [1024**3]
+    monkeypatch.setattr(torch_stub, 'mem_get_info', lambda device: (free[0], 11 * 1024**3),
+                        raising=False)
+    instance = talker(lambda **kw: 'sdk')
+    path = tg.install(model_with(instance), True, device='cuda')
+    clock = [0.0]
+    monkeypatch.setattr(tg, 'perf_counter', lambda: clock[0])
+
+    path.downgrade()
+    assert path.downgraded and 'SDK 原循环' in path.reason
+    assert path.rearm() is False                      # not yet due
+    clock[0] += tg.REARM_SECONDS + 1
+    assert path.rearm() is False and path.downgraded  # due, card still full
+    clock[0] += tg.REARM_SECONDS + 1
+    free[0] = 4 * 1024**3
+    assert path.rearm() is True and not path.downgraded
+    assert path.status()['talker_graph_rearms'] == 1
+    assert path.status()['talker_downgrades'] == 1

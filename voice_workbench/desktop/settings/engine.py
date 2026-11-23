@@ -26,7 +26,7 @@ class EngineSettings:
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
-        self.engine_version = label("audio.cpp", "hint")
+        self.engine_version = label("audio.cpp", "groupTitle")
         layout.addWidget(self.engine_version)
         self.engine_backend = QComboBox()
         self.engine_backend.addItem("NVIDIA GPU · CUDA 12.4", "cuda")
@@ -40,8 +40,7 @@ class EngineSettings:
         self.engine_source.setToolTip('自动模式依次尝试 ghfast、GH-Proxy 和官方直连。第三方仅用于下载，文件仍按官方 SHA-256 校验。暂停后可更换来源继续下载。')
         self.engine_source_dirty = False
         self.engine_source.currentIndexChanged.connect(self._engine_source_changed)
-        self.engine_status = ElidedLabel("等待服务连接")
-        self.engine_status.setProperty("role", "muted")
+        self.engine_status = label("等待服务连接", "muted")
         self.engine_verify = button("验证", self.verify_engine, "check", "ghost")
         self.engine_verify.setEnabled(False)
         self.engine_download = button("下载并安装", self.toggle_engine_install, "import")
@@ -66,7 +65,8 @@ class EngineSettings:
             self.settings_row("推理内核", self.engine_description, (self.engine_verify, self.engine_download, self.engine_more)),
             self.settings_row("版本维护", "新版本单独安装，旧版本保留供回退。", (self.engine_check, self.engine_rollback))]))
         state = QHBoxLayout()
-        state.addWidget(self.engine_status, 1)
+        state.setSpacing(14)
+        state.addWidget(self.engine_status, 0)
         state.addWidget(self.runtime_label, 1)
         layout.addLayout(state)
         self.engine_details_toggle = button("安装详情", lambda: None, "chevron", "disclosure")

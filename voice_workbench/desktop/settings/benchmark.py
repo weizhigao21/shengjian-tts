@@ -23,7 +23,7 @@ class BenchmarkControls(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        layout.addWidget(label('速度对比测试', 'section'))
+        layout.addWidget(label('速度对比测试', 'groupTitle'))
         self.voice = QComboBox()
         self.voice.setFixedWidth(260)
         self.voice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)

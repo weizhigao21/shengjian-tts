@@ -123,7 +123,7 @@ def test_process_launch_failure_releases_aliases_and_log_handle(tmp_path, monkey
     assert Path(voice["model_dir"]).is_file()
 
 
-def test_shared_mapping_defers_only_owned_aliases_and_retries_after_all_runners_stop(tmp_path):
+def test_shared_mapping_defers_only_owned_aliases_and_retries_after_all_runners_stop(tmp_path, monkeypatch):
     folder = tmp_path / "中文模型"
     folder.mkdir()
     model = folder / "权重.gguf"
@@ -136,6 +136,16 @@ def test_shared_mapping_defers_only_owned_aliases_and_retries_after_all_runners_
     other = Path(second.native_paths.model(model))
     stream = other.open("rb")
     mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+    # Windows only refuses to unlink the LAST hard link of a mapped inode. Here the
+    # weights keep three links (original plus both aliases), so the kernel happily
+    # drops an alias. Refuse it explicitly while the other lane still maps the file
+    # so the retry path is what the test actually exercises, not NTFS luck.
+    real_unlink = Path.unlink
+    def unlink(self, *args, **kwargs):
+        if self == alias and not process.stopped:
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return real_unlink(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", unlink)
     class MappedProcess:
         stopped = False
         def poll(self): return 0 if self.stopped else None

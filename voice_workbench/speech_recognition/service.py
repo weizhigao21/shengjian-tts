@@ -19,7 +19,11 @@ from .languages import ALIGN_LANGUAGES, alignment_language
 from .store import RecognitionStore
 
 # Formats the native reader and the Qt player both accept.
-ALLOWED_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
+AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
+# Video containers the bundled Qt/FFmpeg decoder opens; only the audio track is kept.
+VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".m2ts",
+                  ".mts", ".mpg", ".mpeg", ".3gp", ".ogv"}
+ALLOWED_SUFFIXES = AUDIO_SUFFIXES | VIDEO_SUFFIXES
 
 # A clip that needs this many windows is recognised window by window rather than in
 # one request. A single request over a very long file silently drops speech — measured
@@ -118,10 +122,13 @@ class SpeechRecognizer:
     def import_audio(self, path, name="", language="auto"):
         source = Path(path).resolve()
         if not source.is_file():
-            raise VoiceError("FILE_MISSING", f"音频不存在：{source}", "重新选择音频文件。", "导入音频")
-        if source.suffix.lower() not in ALLOWED_SUFFIXES:
-            raise VoiceError("RECOGNITION_FORMAT_UNSUPPORTED", f"不支持的音频格式：{source.suffix}",
-                             "支持 WAV / FLAC / MP3 / M4A / OGG 等常见格式。", "导入音频")
+            raise VoiceError("FILE_MISSING", f"文件不存在：{source}", "重新选择音频或视频文件。", "导入音频")
+        suffix = source.suffix.lower()
+        if suffix not in ALLOWED_SUFFIXES:
+            raise VoiceError("RECOGNITION_FORMAT_UNSUPPORTED", f"不支持的音频/视频格式：{source.suffix}",
+                             "支持 WAV / FLAC / MP3 / M4A / OGG 等音频，以及 MP4 / MKV / MOV / AVI / WEBM 等视频"
+                             "（只取音轨识别，原文件不变）。", "导入音频")
+        video = suffix in VIDEO_SUFFIXES
         with self.manager.lock:
             self._require_idle()
         selection = self.choose(language=language)
@@ -133,12 +140,13 @@ class SpeechRecognizer:
         target = self.audio_path(filename)
         try:
             # Decoding must not hold the queue lock. Recheck admission before committing.
-            details = import_wave(source, target, cancelled=self.manager.stopping)
+            details = import_wave(source, target, cancelled=self.manager.stopping, video=video)
             with self.manager.lock:
                 self._require_idle()
                 identity = self.store.create({
                     "name": (name or "").strip() or source.stem[:200] or "未命名音频",
-                    "audio": filename, "source_path": str(source), "language": language,
+                    "audio": filename, "source_path": str(source), "source_kind": "video" if video else "audio",
+                    "language": language,
                     "duration": details["duration"], "status": "queued", "error": None,
                     "text": "", "lines": [], "processing_seconds": None,
                     "asr_model": selection.get("asr_model"), "align_model": selection.get("align_model")})

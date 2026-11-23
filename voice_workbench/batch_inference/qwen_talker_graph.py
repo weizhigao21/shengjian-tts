@@ -33,6 +33,28 @@ CACHE_BUDGET = 640 * 1024**2
 # downgrade has to replace the whole loop, so it is judged per batch and applied
 # to the next one.
 SLOW_RATIO = 3.0
+# The same two-way reasoning as the predictor path: paging is a property of the
+# moment, so the loop is retried after a wait that doubles on every failure, and
+# only when the card actually has room for a static cache again.
+REARM_SECONDS = 60
+REARM_CEILING = 600
+REARM_HEADROOM = 1536 * 1024**2
+# Without bucketing every batch was its own shape: the cache length is the
+# prompt plus the token budget, and both follow the line being read, so the step
+# was recaptured for every batch of a job. A capture costs about 1.5 s while an
+# 8-line batch only decodes for 2-3 s, so that was half of it. The graph itself
+# depends only on (batch, cache length, dtype) -- the mask is rewritten per
+# batch and the position is a buffer -- so rounding the cache up to a multiple
+# of this lets a whole job share one capture, at the price of a few dozen unused
+# cache slots (about 0.2 MiB each at this model size).
+CACHE_BUCKET = 32
+
+
+def cache_bucket(length):
+    """Round a static cache length up so neighbouring batches share one graph."""
+    return -(-int(length) // CACHE_BUCKET) * CACHE_BUCKET
+
+
 KEYS = {'inputs_embeds', 'attention_mask', 'trailing_text_hidden', 'tts_pad_embed',
         'max_new_tokens', 'min_new_tokens', 'do_sample', 'top_k', 'top_p', 'temperature',
         'subtalker_dosample', 'subtalker_top_k', 'subtalker_top_p', 'subtalker_temperature',
@@ -194,8 +216,16 @@ class TalkerPath:
         self.reason = ''
         self.calls = self.fallbacks = 0
         self.frames = 0
-        self.best = None
+        # One fastest pace per batch size. Comparing a fourteen-frame batch with
+        # a forty-frame one judged the short line slow, gave up the graph for the
+        # rest of the worker, and every later batch then ran at four times the
+        # cost -- the exact opposite of what the measurement was meant to protect.
+        self.best = {}
+        self.step_seconds = 0.0
+        self.step_frames = 0
         self.downgraded = False
+        self.downgrades = self.streak = self.rearms = 0
+        self.retry_at = 0.0
         self.talker = self.original = None
         self.device = None
         self.graphs = None
@@ -217,7 +247,31 @@ class TalkerPath:
                 'talker_graph_replays': replays,
                 'talker_graph_fallbacks': g.fallbacks - before[4] if g else 0,
                 'talker_graph_reason': g.reason if g else '',
-                'talker_graph_downgraded': self.downgraded}
+                'talker_graph_downgraded': self.downgraded,
+                'talker_downgrades': self.downgrades,
+                'talker_graph_rearms': self.rearms}
+
+    def rearm(self, device=None):
+        """Try the whole-step graph again once the wait has passed and the card has room."""
+        if not self.downgraded or perf_counter() < self.retry_at or self.graphs is None:
+            return False
+        try:
+            import torch
+            free = torch.cuda.mem_get_info(device or self.device)[0]
+        except (AttributeError, RuntimeError, TypeError):
+            free = None
+        if free is None or free < REARM_HEADROOM:
+            self.retry_at = perf_counter() + REARM_SECONDS
+            return False
+        self.downgraded = False
+        self.rearms += 1
+        self.reason = ''
+        return True
+
+    def settle(self):
+        """A batch that finished on the graph clears the doubling backoff."""
+        if not self.downgraded and self.streak:
+            self.streak = 0
 
     def check(self, kwargs):
         """Everything the loop assumes, checked before a single token is spent."""
@@ -245,8 +299,11 @@ class TalkerPath:
                 or kwargs['max_new_tokens'] <= 0 or not isinstance(kwargs.get('eos_token_id'), int)):
             return '采样参数超出整步图范围，使用 SDK 原循环。'
         cache_len = embeds.shape[1] + kwargs['max_new_tokens']
+        # Judge the hold by what is actually allocated, not by what this batch
+        # needs: the cache is rounded up to the bucket the graph is keyed on.
+        hold_len = cache_bucket(cache_len)
         per_token = 2 * p.config.num_hidden_layers * p.config.num_key_value_heads * p.config.head_dim * 2
-        hold = cache_len * embeds.shape[0] * per_token
+        hold = hold_len * embeds.shape[0] * per_token
         if cache_len > p.config.max_position_embeddings or hold > CACHE_BUDGET:
             return ('静态缓存超出显存预算或位置上限（%d 帧 × %d 条 ≈ %d MiB，预算 %d MiB，'
                     '位置上限 %d），使用 SDK 原循环。'
@@ -285,7 +342,9 @@ class TalkerPath:
         self.calls += 1
         if not self.downgraded:
             self.reason = ''
-        self.tally(perf_counter() - started, len(codes_of(result)))
+        frames = self.step_frames or len(codes_of(result))
+        seconds = self.step_seconds or (perf_counter() - started)
+        self.tally(seconds, frames, kwargs['inputs_embeds'].shape[0])
         return result
 
     def restore(self, state):
@@ -298,21 +357,40 @@ class TalkerPath:
 
     def key_of(self, kwargs):
         embeds = kwargs['inputs_embeds']
-        return (int(embeds.shape[0]), int(embeds.shape[1]),
-                int(embeds.shape[1]) + int(kwargs['max_new_tokens']), str(embeds.dtype))
+        # The prompt length is deliberately absent: a shorter line prefills into
+        # the same buffers and only the mask differs, and that is rewritten for
+        # every batch in `prepare`.
+        cache_len = int(embeds.shape[1]) + int(kwargs['max_new_tokens'])
+        return (int(embeds.shape[0]), cache_bucket(cache_len), str(embeds.dtype))
 
-    def tally(self, seconds, frames):
-        """Judge the batch, not a frame: a downgrade has to replace the loop."""
+    def tally(self, seconds, frames, batch=1):
+        """Judge the batch by its decode pace, against batches of its own size.
+
+        ``seconds`` is the frame loop only: the prefill is a fixed cost that a
+        short line amortises over very few frames, so including it made a
+        fourteen-frame batch look three times slower than a forty-frame one and
+        cost the worker its graph.
+        """
         if not frames:
             return
         self.frames += frames
         pace = seconds / frames
-        if self.best is None or pace < self.best:
-            self.best = pace
+        size = max(1, min(int(batch or 1), MAX_BATCH))
+        best = self.best.get(size)
+        if best is None or pace < best:
+            self.best[size] = pace
             return
-        if pace > self.best * SLOW_RATIO:
-            self.downgraded = True
-            self.reason = '整批每帧耗时超过最快批 3 倍，后续批次改用 SDK 原循环。'
+        if pace > best * SLOW_RATIO:
+            self.downgrade()
+
+    def downgrade(self):
+        self.downgraded = True
+        self.downgrades += 1
+        self.streak += 1
+        wait = min(REARM_SECONDS * 2 ** (self.streak - 1), REARM_CEILING)
+        self.retry_at = perf_counter() + wait
+        self.reason = (f'整批每帧耗时超过同批量最快批 3 倍，改用 SDK 原循环；'
+                       f'{int(wait)} 秒后若显存有余量再试图加速。')
 
     # -- the loop -----------------------------------------------------------
 
@@ -324,7 +402,9 @@ class TalkerPath:
         trailing, pad = kwargs['trailing_text_hidden'], kwargs['tts_pad_embed']
         max_new, eos = kwargs['max_new_tokens'], kwargs['eos_token_id']
         batch, length = embeds.shape[0], embeds.shape[1]
-        cache_len = length + max_new
+        # Allocated at the bucket, so a batch of any length below it replays the
+        # same capture; the real length still drives the prefill and its mask.
+        cache_len = cache_bucket(length + max_new)
         chain = self.processors(kwargs, embeds.device)
         # The SDK recomputes this on every prefill and keeps it for the decodes;
         # left padding is why a frame's position is not just its index. It has to
@@ -355,6 +435,10 @@ class TalkerPath:
         hiddens, codes = [hidden], []
         generated = torch.zeros((batch, 0), dtype=torch.long, device=embeds.device)
         finished = torch.zeros((batch,), dtype=torch.bool, device=embeds.device)
+        # The pace that decides whether this loop keeps its graph is the frame
+        # loop's own, never the prefill's: prompt length varies per line and has
+        # nothing to do with how the decode performs.
+        loop_started = perf_counter()
         for index in range(max_new):
             token = self.sample(logits, generated, chain)
             finished |= token.squeeze(1) == eos
@@ -377,6 +461,8 @@ class TalkerPath:
             logits = logits[:, -1, :]
             self.graphs.replays += 1
             hiddens.append(hidden)
+        self.step_seconds = perf_counter() - loop_started
+        self.step_frames = len(hiddens) - 1
         return SimpleNamespace(hidden_states=tuple(
             [((hiddens[0],), None)] + [((frame,), code) for frame, code in zip(hiddens[1:], codes)]),
             sequences=generated)

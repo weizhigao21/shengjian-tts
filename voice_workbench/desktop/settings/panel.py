@@ -3,7 +3,7 @@ import json
 from PyQt6.QtCore import QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 from ...ui import ElidedLabel, button, label
 from ...runtime import resource_root
 from ..audio_output import SystemAudioOutput
@@ -33,22 +33,35 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         self.player.setAudioOutput(self.output)
         self.player.playbackStateChanged.connect(self.update_play_buttons)
         self.player.errorOccurred.connect(lambda _, text: self.owner.show_error("音频播放失败：" + text))
+        self.setObjectName("settingsPage")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 16, 24, 18)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 18, 24, 18)
+        layout.setSpacing(0)
         heading = QHBoxLayout()
-        title = label("设置", "settingsTitle")
-        heading.addWidget(title)
-        heading.addStretch()
+        heading.setSpacing(8)
+        caption = QVBoxLayout()
+        caption.setSpacing(3)
+        caption.addWidget(label("设置", "settingsTitle"))
+        self.header_location = ElidedLabel("数据目录 · " + str(self.owner.data_dir))
+        self.header_location.setProperty("role", "muted")
+        self.header_location.setToolTip(f"数据库、声音预设、音频和下载文件保存在这里\n{self.owner.data_dir}")
+        caption.addWidget(self.header_location)
+        heading.addLayout(caption, 1)
         self.data_location = ElidedLabel("数据目录 · " + str(self.owner.data_dir))
         self.data_location.setProperty("role", "muted")
         self.data_location.setToolTip(f"数据库、声音预设、音频和下载文件保存在这里\n{self.owner.data_dir}")
         self.open_files_button = button("打开本地文件", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(self.owner.data_dir))), "folder", "ghost")
         self.open_files_button.setToolTip(f"打开配置、任务、模型和音频所在的数据目录\n{self.owner.data_dir}")
+        header_open = button("打开数据目录", lambda: QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(self.owner.data_dir))), "folder", "ghost")
+        header_open.setToolTip(f"打开配置、任务、模型和音频所在的数据目录\n{self.owner.data_dir}")
+        heading.addWidget(header_open)
         heading.addWidget(button("刷新", self.reload, "retry", "ghost"))
         layout.addLayout(heading)
+        layout.addSpacing(10)
         tabs = QHBoxLayout()
+        tabs.setSpacing(2)
         self.tab_buttons = []
         for index, title in ((3, "常规"), (0, "模型"), (4, "推理引擎"), (1, "生成音频"), (2, "批量性能")):
             control = button(title, lambda _, i=index: self.set_section(i), kind="settingsTab")
@@ -58,7 +71,13 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
             self.tab_buttons.append(control)
         tabs.addStretch()
         layout.addLayout(tabs)
+        hairline = QFrame()
+        hairline.setObjectName("settingsDivider")
+        hairline.setFixedHeight(1)
+        layout.addWidget(hairline)
+        layout.addSpacing(16)
         self.pages = QStackedWidget()
+        self.pages.setObjectName("settingsPages")
         layout.addWidget(self.pages, 1)
         self._models_page()
         self._audio_page()
@@ -90,6 +109,9 @@ class SettingsPanel(ModelSettings, EngineSettings, AudioSettings, PreferencesSet
         from ..api_client import checked
         section = self.pages.currentIndex()
         if section == 3:
+            # 常规页没有需要轮询的远端数据，只有局域网分发可能正在传文件。
+            if hasattr(self, "handoff"):
+                self.handoff.refresh()
             return
         self.loading = True
         if section == 2:

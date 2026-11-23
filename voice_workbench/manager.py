@@ -9,6 +9,7 @@ from pathlib import Path
 from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor
 from .config import ConfigStore, atomic_json, file_digest, voice_fingerprint
+from . import __version__
 from .errors import VoiceError, describe_error
 from .runner import check_voice, validate_wave
 from .audio_trim import trim_leading_silence
@@ -56,6 +57,10 @@ class Manager(BatchExecution, InferenceTelemetry):
         self.batch = BatchBackend(self)
         from .batch_inference.benchmark import InferenceBenchmark
         self.benchmark = InferenceBenchmark(self)
+        # 主仆模式：把程序与资产交给另一台电脑，默认不启动，按需监听。
+        from .handoff.server import HandoffState
+        from .runtime import frozen, project_root
+        self.handoff = HandoffState(self.root, project_root() if frozen() else None, __version__)
         self.store.recover()
         self.thread = threading.Thread(target=self._work, name="voice-queue", daemon=True)
         self.thread.start()
@@ -446,6 +451,7 @@ class Manager(BatchExecution, InferenceTelemetry):
         self.batch.setup.close()
         self.benchmark.close()
         self.models.close()
+        self.handoff.stop()
         self.audio_editor.close()
         self.recognition.close()
         self.thread.join(timeout=20)

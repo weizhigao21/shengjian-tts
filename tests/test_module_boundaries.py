@@ -55,6 +55,11 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     assert set(actual['paths'].pop('/parameter-presets/{identity}')) == {'put', 'patch', 'delete'}
     for name in ('ParameterPresetInput', 'ParameterPresetRename'):
         actual['components']['schemas'].pop(name)
+    # 主仆模式是独立入口：只新增路由与模型，不改动已发布的契约。
+    for path in list(actual['paths']):
+        if path.startswith('/handoff'):
+            actual['paths'].pop(path)
+    actual['components']['schemas'].pop('HandoffStart')
     # New editors add optional metadata and per-segment presets. Keep the
     # v0.7.20 fixture frozen to protect every previously published field/route.
     schemas = actual['components']['schemas']

@@ -12,7 +12,7 @@ import wave
 
 from .config import PROJECT_ROOT
 from .errors import VoiceError
-from .model_info import model_ui, validate_capabilities
+from .model_info import model_ui, selected_mode, validate_capabilities
 from .runtime import engine_command, external_environment, frozen
 from .index_emotion import emotion_mode, validate_emotion
 
@@ -46,14 +46,22 @@ def check_voice(voice):
     if (not frozen() or voice["backend"] == "index_tts") and not Path(voice["python"]).is_file():
         raise VoiceError("PYTHON_MISSING", f"Python 不存在：{voice['python']}", "选择模型环境里的 python.exe。", "配置检查")
     if voice["backend"] == "audio_cpp":
-        for path in (Path(voice.get("engine_executable") or ""), Path(voice.get("model_dir") or "")):
-            if not path.is_file():
-                raise VoiceError("FILE_MISSING", f"统一引擎或模型不存在：{path}", "选择 audiocpp_server.exe 和兼容 GGUF 文件。", "配置检查")
-        with Path(voice["model_dir"]).open("rb") as model:
-            if model.read(4) != b"GGUF":
-                raise VoiceError("INVALID_MODEL", "统一引擎适配器需要兼容的 GGUF 模型", "选择 audio.cpp 对应模型家族的 GGUF。", "配置检查")
-        info = model_ui(voice)
-        mode = validate_capabilities(voice, info)
+        model_path = Path(voice.get("model_dir") or "")
+        # 只带批量资产的机器没有 GGUF，也没有原生引擎：模型以 HF 目录存在，
+        # 批量后端直接吃这个目录。此时只校验参考音频，不再要求引擎文件。
+        if not model_path.is_dir():
+            for path in (Path(voice.get("engine_executable") or ""), model_path):
+                if not path.is_file():
+                    raise VoiceError("FILE_MISSING", f"统一引擎或模型不存在：{path}", "选择 audiocpp_server.exe 和兼容 GGUF 文件。", "配置检查")
+            with model_path.open("rb") as model:
+                if model.read(4) != b"GGUF":
+                    raise VoiceError("INVALID_MODEL", "统一引擎适配器需要兼容的 GGUF 模型", "选择 audio.cpp 对应模型家族的 GGUF。", "配置检查")
+            info = model_ui(voice)
+            mode = validate_capabilities(voice, info)
+        else:
+            # 纯批量机没有 GGUF，原生引擎声明的参数能力无从读取。这些参数只作用于
+            # 原生引擎；批量能不能跑由 unsupported() 另行判定，这里不重复拦。
+            mode = selected_mode(voice, model_ui(voice))
         if mode in ("clone", "continuation"):
             path = Path(voice.get("reference_audio") or "")
             if not path.is_file():

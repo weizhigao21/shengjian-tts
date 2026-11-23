@@ -122,8 +122,14 @@ def model_ui(voice):
     package, warning, variant = {}, "", None
     path = Path(voice.get("model_dir") or "")
     try:
-        stat = path.stat()
-        package = _read_package(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+        if path.is_dir():
+            # 只带批量资产的机器上，模型以 HF 目录存在：GGUF 与原生引擎都没跟过来，
+            # 但目录里的 config.json 与 GGUF 内嵌的那份同源，能力信息完全够用。
+            package = {"spec": {}, "family": family,
+                       "files": {"config.json": json.loads((path / "config.json").read_text(encoding="utf-8"))}}
+        else:
+            stat = path.stat()
+            package = _read_package(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
     except (OSError, ValueError, TypeError, KeyError, struct.error) as exc:
         warning = f"模型配置暂时无法读取：{exc}"
     spec = package.get("spec", {})

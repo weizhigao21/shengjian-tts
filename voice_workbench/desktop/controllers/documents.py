@@ -365,7 +365,7 @@ class DocumentController:
         for i, control in enumerate(self.nav_buttons):
             control.setChecked(index == i)
         self.workspace_header.setVisible(True)
-        self.page_title.setVisible(index != 0)
+        self.page_title.setVisible(True)
         if index == 3:
             self.clip_list.hide()
             self.settings.refresh()

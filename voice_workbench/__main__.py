@@ -12,6 +12,10 @@ def main():
         from .speech_recognition.decode_worker import main as decode_main
         decode_main(sys.argv[2:])
         return
+    if sys.argv[1:2] == ["handoff-receive"]:
+        # 只做文件接收与路径改写：不启动服务、不开界面、也不碰 ServiceLock。
+        from .handoff.client import receive_main
+        sys.exit(receive_main(sys.argv[2:]))
     parser = argparse.ArgumentParser(description="本地配音工作台")
     parser.add_argument("--version", action="version", version=f"声笺 {__version__}")
     parser.add_argument("mode", choices=["gui", "serve", "mcp"], nargs="?", default="gui")

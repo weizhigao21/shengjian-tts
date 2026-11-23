@@ -4,7 +4,8 @@ import json
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QHeaderView, QLineEdit, QMenu, QMessageBox, QVBoxLayout, QWidget,
+    QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QStackedWidget,
+    QVBoxLayout, QWidget,
 )
 from ...ui import audio_sort_combo, button, icon, label, generation_elapsed, sorted_audio
 from .common import preset_text
@@ -20,7 +21,7 @@ class AudioSettings:
         self.audio_categories = {}
         self.audio_category = "all"
         for value, text in (("all", "全部音频"), ("article", "文章音频"), ("dialogue", "对话音频")):
-            control = button(text, lambda checked=False, kind=value: self.set_audio_category(kind), kind="segment")
+            control = button(text, lambda checked=False, kind=value: self.set_audio_category(kind), kind="filterChip")
             control.setCheckable(True)
             control.setChecked(value == "all")
             categories.addWidget(control)
@@ -59,9 +60,37 @@ class AudioSettings:
         self.audio_table.cellDoubleClicked.connect(lambda row, _: self.audio_details(self.visible_audio[row]))
         self.audio_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.audio_table.customContextMenuRequested.connect(self.audio_context_menu)
-        layout.addWidget(self.audio_table, 1)
+        self.audio_stack = QStackedWidget()
+        self.audio_stack.addWidget(self.audio_table)
+        empty = QWidget()
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.setContentsMargins(0, 40, 0, 40)
+        empty_layout.setSpacing(0)
+        mark = QLabel()
+        mark.setPixmap(icon("audio", "#d9601f", 34).pixmap(34, 34))
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(mark)
+        empty_layout.addSpacing(12)
+        headline = label("还没有生成的音频", "section")
+        self.audio_empty_headline = headline
+        headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(headline)
+        empty_layout.addSpacing(5)
+        note = label("保存过的生成音频会自动归档在这里，可以试听、导出或加入声音库。", "muted")
+        self.audio_empty_note = note
+        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        note.setWordWrap(True)
+        empty_layout.addWidget(note)
+        empty_layout.addSpacing(16)
+        start = button("去创作", lambda: self.owner.start_creation("article"), "sparkle", "primary")
+        start.setFixedHeight(34)
+        empty_layout.addWidget(start, alignment=Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addStretch()
+        self.audio_stack.addWidget(empty)
+        self.audio_stack.setCurrentIndex(0 if self.audio_data else 1)
+        layout.addWidget(self.audio_stack, 1)
         footer = QHBoxLayout()
-        self.audio_count = label("还没有生成的音频", "muted")
+        self.audio_count = label("", "muted")
         footer.addWidget(self.audio_count)
         footer.addStretch()
         self.playback_label = label("", "muted")
@@ -77,6 +106,14 @@ class AudioSettings:
             and (not text or text in " ".join((a["work_title"], a["text"], a["model"], a["mode"], preset_text(a),
                 a.get("source_label") or "", a.get("source_name") or "", a.get("source_id") or "")).casefold())]
         self.visible_audio = sorted_audio(self.visible_audio, self.audio_sort.currentData())
+        self.audio_stack.setCurrentIndex(0 if self.visible_audio else 1)
+        if not self.visible_audio:
+            if self.audio_data:
+                self.audio_empty_headline.setText("没有匹配的音频")
+                self.audio_empty_note.setText("换个分类、搜索词或排序方式再试试。")
+            else:
+                self.audio_empty_headline.setText("还没有生成的音频")
+                self.audio_empty_note.setText("保存过的生成音频会自动归档在这里，可以试听、导出或加入声音库。")
         table = self.audio_table
         scroll = table.verticalScrollBar().value()
         table.blockSignals(True)

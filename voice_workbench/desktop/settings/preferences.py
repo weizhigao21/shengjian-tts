@@ -9,13 +9,16 @@ PERFORMANCE_NOTE = ("并发遇到显存不足时，当前任务自动改为单�
 class PreferencesSettings:
     def _general_page(self):
         scroll, layout = self.scroll_page("generalSettings")
-        layout.addWidget(label("数据与本地服务", "hint"))
+        layout.addWidget(label("数据与本地服务", "groupTitle"))
         layout.addWidget(self.settings_group([
             self.settings_row("数据保存位置", self.data_location, (self.open_files_button,)),
             self.settings_row("本地服务", "双语工作流通过这个地址接入。", (label(f"127.0.0.1:{self.owner.port}", "hint"),))]))
         from .app_updates import AppUpdateControls
         self.app_updates = AppUpdateControls(self)
         layout.addWidget(self.app_updates)
+        from .handoff import HandoffControls
+        self.handoff = HandoffControls(self)
+        layout.addWidget(self.handoff)
         layout.addStretch()
         self.pages.addWidget(scroll)
 
@@ -26,7 +29,7 @@ class PreferencesSettings:
         from .batch_inference import BatchInferenceControls
         self.batch_inference = BatchInferenceControls(self.owner)
         layout.addWidget(self.batch_inference)
-        layout.addWidget(label("双语工作流并发", "section"))
+        layout.addWidget(label("双语工作流并发", "groupTitle"))
         self.workflow_workers = QSpinBox()
         self.workflow_workers.setRange(1, 4)
         self.workflow_workers.setValue(1)

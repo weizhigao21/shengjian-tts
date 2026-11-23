@@ -45,19 +45,25 @@ class BatchBackend:
                 return "批量模型目录需要 Qwen3-TTS Base 原始权重，不支持 GGUF 或其他变体。", {}
             if not any(model.glob("*.safetensors")) or not any((model / "speech_tokenizer").glob("*.safetensors")):
                 return "原始模型或 speech_tokenizer 权重不完整，请完成模型安装。", {}
-            if not Path(settings.source_model).is_file():
-                return "关联的 GGUF 文件不存在。", {}
             source = Path(settings.source_model)
-            stat = source.stat()
-            package = _read_package(str(source.resolve()), stat.st_size, stat.st_mtime_ns)
-            native = package.get('files', {}).get('config.json', {})
-            if package.get('family') != 'qwen3_tts' or native.get('tts_model_type') != 'base':
-                return '关联的 GGUF 需要是 Qwen3-TTS Base 模型。', {}
+            if source.is_dir():
+                # 纯批量机没有 GGUF：模型身份就是 HF 目录本身，架构信息直接读它的 config.json。
+                native = json.loads((source / "config.json").read_text(encoding="utf-8"))
+                family = info.get("model_type")
+            elif source.is_file():
+                stat = source.stat()
+                package = _read_package(str(source.resolve()), stat.st_size, stat.st_mtime_ns)
+                native = package.get('files', {}).get('config.json', {})
+                family = package.get('family')
+            else:
+                return "关联的 GGUF 文件不存在。", {}
+            if family != 'qwen3_tts' or native.get('tts_model_type') != 'base':
+                return '关联的模型需要是 Qwen3-TTS Base。', {}
             for key in ('hidden_size', 'num_hidden_layers', 'num_attention_heads'):
                 expected = info.get('talker_config', {}).get(key)
                 actual = native.get('talker_config', {}).get(key)
                 if expected is not None and actual is not None and expected != actual:
-                    return '原始模型与 GGUF 的架构规格不同，请关联相同规格的 Base 模型。', {}
+                    return '原始模型与关联模型的架构规格不同，请关联相同规格的 Base 模型。', {}
             return self.diagnose_python(str(python))
         except (OSError, ValueError, struct.error, subprocess.TimeoutExpired) as exc:
             return "批量环境尚未就绪：" + str(exc), {}
@@ -123,9 +129,15 @@ class BatchBackend:
 
     def status(self, compact=False):
         process = self.process.process
+        alive = bool(process and process.poll() is None)
         reason = '批量环境正在检测或安装，暂时使用原生引擎。' if self.setup.busy else self.reason
         result = {"backend": "qwen3_batch", "ready": not bool(reason),
-                "reason": reason, "loaded": bool(process and process.poll() is None and self.process.loaded),
+                "reason": reason, "loaded": alive and self.process.loaded,
+                # An idle worker keeps its interpreter and its imports after it
+                # gives the weights back; the next batch then costs seconds, not
+                # a minute. Reported apart from "loaded" so the two are not
+                # confused in the status line.
+                "resident": alive,
                 "last_result": self.last_result, "adaptive": self.adaptive.status()}
         if not compact:
             result.update(settings=self.settings.model_dump(), versions=self.versions,
@@ -177,8 +189,16 @@ class BatchBackend:
             return []
 
     def expire(self):
-        if time.monotonic() - self.process.last_used >= self.settings.idle_seconds:
-            self.process.interrupt()
+        """Hand the card back first, the interpreter second.
+
+        Killing the worker at the first idle minute threw away the 8-50 s of
+        interpreter and library import that the next job would have to pay again;
+        the weights are only 5-8 s of that. ``release`` drops them and keeps the
+        process for the grace period.
+        """
+        idle = time.monotonic() - self.process.last_used
+        if idle >= self.settings.idle_seconds:
+            self.process.release(idle, self.settings.idle_seconds)
 
     def plan(self, voice, texts):
         reason = self.status()['reason'] or next((r for text in texts if (r := unsupported(voice, text, self.settings))), "")

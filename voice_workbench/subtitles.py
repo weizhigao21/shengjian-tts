@@ -1,6 +1,37 @@
 from __future__ import annotations
 
+from pathlib import Path
 import re
+
+
+# 与 schemas.JobInput.segments 的上限一致；守卫测试会比对两处，改一处漏一处就报错。
+POOL_LIMIT = 10000
+
+
+def read_text(path) -> str:
+    """按 UTF-8 读取字幕或文本，失败再按 GB18030 兜底。"""
+    raw = Path(path).read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("gb18030")
+
+
+def build_pool(blocks, existing: str = "") -> tuple[str, int]:
+    """把多份字幕拼成一个生成池，返回合并后的正文与总段数。
+
+    池的意义不是排版：批量后端按「同一个任务」合批，而冷启动门槛是 6 条。
+    一个字幕一个任务时每个任务只有三四行，永远凑不满，只能退回原生引擎。
+    """
+    parts = [block.strip() for block in blocks if block and block.strip()]
+    if not parts:
+        raise ValueError("没有可导入的文本")
+    body = "\n\n".join(parts)
+    merged = (existing.strip() + "\n\n" + body) if existing.strip() else body
+    segments = len(parse_text(merged))
+    if segments > POOL_LIMIT:
+        raise ValueError(f"生成池已有 {segments} 段，超过单次可提交的 {POOL_LIMIT} 段；请分成两个池。")
+    return merged, segments
 
 
 def normalize_timestamp(timestamp: str, fallback_ms: int = 0) -> str:
@@ -28,6 +59,13 @@ def parse_text(content: str) -> list[dict]:
             lines = block.strip().splitlines()
             timing = next((i for i, line in enumerate(lines) if "-->" in line), None)
             if timing is None:
+                # 生成池里常把 SRT 和 TXT 拼在一起：没有时间轴的行照样要生成，
+                # 否则混着导入时这些句子会被整块静默丢掉。每行仍算一段。
+                # 但 WEBVTT 文件头与单独的序号块不是台词，必须跳过。
+                head = lines[0].strip().upper() if lines else ""
+                if head.startswith("WEBVTT") or all(line.strip().isdigit() for line in lines if line.strip()):
+                    continue
+                result.extend({"text": line.strip(), "timestamp": ""} for line in lines if line.strip())
                 continue
             text = " ".join(lines[timing + 1:]).strip()
             if text:

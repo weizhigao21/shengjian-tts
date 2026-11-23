@@ -1,5 +1,5 @@
 """Explicit HTTP router registration; no application starts at import time."""
-from . import system, models, voices, jobs, audio, workflow, legacy, audio_editing, parameter_presets, recognition, inference
+from . import system, models, voices, jobs, audio, workflow, legacy, audio_editing, parameter_presets, recognition, inference, handoff
 
 ROUTERS = (system.router, models.router, voices.router, jobs.router, audio.router, workflow.router, legacy.router,
-           audio_editing.router, parameter_presets.router, recognition.router, inference.router)
+           audio_editing.router, parameter_presets.router, recognition.router, inference.router, handoff.router)

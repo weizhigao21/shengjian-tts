@@ -174,6 +174,33 @@ def test_broken_audio_fails_promptly_and_cleans_the_private_copy(tmp_path):
     assert not target.exists() and source.read_bytes() == b'not an audio file'
 
 
+@pytest.mark.parametrize('suffix', ['mp4', 'mkv', 'mov', 'avi', 'webm'])
+def test_bundled_qt_reads_the_audio_track_of_every_advertised_video_container(tmp_path, suffix):
+    """A video is only a container around one audio track; the private copy must be a WAV."""
+    source = tmp_path/('录屏.' + suffix)
+    shutil.copyfile(FIXTURES/('clip.' + suffix), source)
+    original = source.read_bytes()
+    target = tmp_path/'private.wav'
+    details = import_wave(source, target, video=True)
+    assert .9 < details['duration'] < 1.1
+    assert source.read_bytes() == original
+    import wave
+    with wave.open(str(target), 'rb') as stream:
+        assert stream.getsampwidth() == 2 and stream.getnframes() > 0
+
+
+def test_a_video_without_an_audio_track_is_refused_with_a_track_hint(tmp_path):
+    source = tmp_path/'无声录屏.mp4'
+    shutil.copyfile(FIXTURES/'silent.mp4', source)
+    target = tmp_path/'private.wav'
+    from voice_workbench.errors import VoiceError
+    with pytest.raises(VoiceError) as error:
+        import_wave(source, target, video=True)
+    assert error.value.code == 'RECOGNITION_AUDIO_INVALID'
+    assert '视频音轨' in error.value.message and '音轨' in error.value.hint
+    assert not target.exists() and source.read_bytes() == (FIXTURES/'silent.mp4').read_bytes()
+
+
 def test_decode_worker_timeout_cleans_partial_output(tmp_path, monkeypatch):
     source = tmp_path/'clip.mp3'
     source.write_bytes(b'fixture')

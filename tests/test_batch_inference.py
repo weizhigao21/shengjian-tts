@@ -15,7 +15,7 @@ import pytest
 from voice_workbench.api import create_app
 from voice_workbench.batch_inference.backend import BatchBackend
 from voice_workbench.batch_inference.policy import model_signature
-from voice_workbench.batch_inference.process import BatchProcess
+from voice_workbench.batch_inference.process import BatchProcess, PROCESS_GRACE
 from voice_workbench.batch_inference.qwen_worker import QwenEngine
 from voice_workbench.batch_inference.schemas import BatchSettings
 from voice_workbench.config import ConfigStore
@@ -26,11 +26,37 @@ from test_model_capabilities import gguf
 from test_service import ControlledRunner, make_wave, wait_job
 
 
+class PromptStub:
+    """Stands in for a tensor: the cache only needs device and detach/cpu."""
+
+    def __init__(self, value):
+        self.value, self.device = value, 'cpu'
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def to(self, device):
+        return self
+
+
+class PromptItem:
+    """Module level so the fake torch.save below can pickle it."""
+
+    def __init__(self, ref_code, ref_spk_embedding, x_vector_only_mode, icl_mode, ref_text=None):
+        self.ref_code, self.ref_spk_embedding = ref_code, ref_spk_embedding
+        self.x_vector_only_mode, self.icl_mode, self.ref_text = x_vector_only_mode, icl_mode, ref_text
+
+
 class BatchProbe:
     def __init__(self):
         self.calls = []
         self.process = None
         self.loaded = False
+        self.unloaded = False
+        self.unloads = 0
         self.key = None
         self.last_used = time.monotonic()
         self.block = threading.Event()
@@ -39,7 +65,7 @@ class BatchProbe:
 
     def generate(self, settings, signature, payload, cancelled, timeout):
         self.calls.append(deepcopy(payload))
-        warm = self.process is not None
+        warm = self.process is not None and self.loaded
         self.process = SimpleNamespace(poll=lambda: None)
         self.key = signature
         while self.block.is_set() and not cancelled.is_set():
@@ -55,12 +81,26 @@ class BatchProbe:
         for item in payload['items']:
             make_wave(Path(item['output']))
         self.loaded = True
+        self.unloaded = False
         self.last_used = time.monotonic()
         return {'ok': True, 'count': len(payload['items']), 'warm_model': warm, 'prompt_cache_hit': warm}
+
+    def release(self, idle, unload_after):
+        """Same two tiers as BatchProcess.release: weights, then the process."""
+        if idle >= unload_after + PROCESS_GRACE:
+            self.interrupt()
+            return True
+        if self.process is None or self.unloaded:
+            return False
+        self.unloaded = True
+        self.unloads += 1
+        self.loaded = False
+        return True
 
     def interrupt(self):
         self.process = None
         self.loaded = False
+        self.unloaded = False
         self.key = None
 
 
@@ -99,8 +139,12 @@ def batch_manager(tmp_path, monkeypatch):
 
 def test_bilingual_queue_uses_one_batch_backend_and_finishes_odd_tail_warm(batch_manager):
     manager, native, probe = batch_manager
+    # Equal lengths keep these rows in script order. Selection now gathers
+    # similar lengths together, so lines of different lengths would group by
+    # language instead of mixing -- correct for speed, but not what this test
+    # is about: one batch backend must serve both languages.
     segments = [{'voice_id': 'qwen', 'text': text, 'overrides': {'language': language}} for text, language in
-                [('你好', 'zh'), ('Hello', 'en'), ('欢迎', 'zh'), ('Welcome', 'en'), ('再见', 'zh')]]
+                [('你好', 'zh'), ('Hi', 'en'), ('欢迎', 'zh'), ('Yo', 'en'), ('再见', 'zh')]]
     job_id = manager.submit('双语测试', 'qwen', segments)
     done = wait_job(manager.store.get, job_id, ('done',))
     assert [len(call['items']) for call in probe.calls] == [2, 2, 1]
@@ -118,6 +162,29 @@ def test_bilingual_queue_uses_one_batch_backend_and_finishes_odd_tail_warm(batch
     repair = wait_job(manager.store.get, repaired, ('done',))
     assert not repair['segments'][0]['cached'] and len(probe.calls) == 4
     assert len(probe.calls[-1]['items']) == 2
+
+
+def test_a_batch_gathers_lines_of_similar_length(batch_manager):
+    """The longest line in a batch sets the frame count for every row in it.
+
+    The SDK stops decoding only when the longest row emits its end token; the
+    surplus frames of the shorter rows are trimmed afterwards, so that time is
+    spent and then thrown away. Selection therefore gathers lengths around the
+    row that opened the batch instead of taking the next seven in script order.
+    """
+    manager, native, probe = batch_manager
+    manager.batch.settings.max_batch_size = 6
+    lengths = [2, 20, 3, 19, 4, 18, 5, 17, 6, 16, 7, 15, 8, 14, 9, 13, 10, 12, 11, 21, 22, 23, 24, 25]
+    job_id = manager.submit('长度聚拢', 'qwen', [{'text': '字' * n} for n in lengths])
+    done = wait_job(manager.store.get, job_id, ('done',))
+    sizes = [[len(item['text']) for item in call['items']] for call in probe.calls]
+    # Script order opens with 2 and 20 in the same batch: a span of 18.
+    assert len(probe.calls) == 4
+    assert max(sizes[0]) - min(sizes[0]) <= 6
+    budget = sum(max(s) * len(s) for s in sizes)
+    assert sum(sum(s) for s in sizes) / budget > 0.72
+    # Reordering the batch must not lose or duplicate a row.
+    assert sorted(s['text'] for s in done['segments']) == sorted('字' * n for n in lengths)
 
 
 def test_native_opt_out_and_cold_single_keep_existing_runner(batch_manager):
@@ -337,13 +404,81 @@ def test_worker_sdk_contract_reuses_one_model_and_one_prompt_for_real_batch_list
         'items': [{'text': '你好', 'language': 'Chinese', 'output': str(tmp_path/'一.wav')},
                   {'text': 'Hello', 'language': 'English', 'output': str(tmp_path/'二.wav')}]}
     engine = QwenEngine()
+    reads = []
+    original = Path.read_bytes
+    monkeypatch.setattr(Path, 'read_bytes', lambda self: reads.append(self) or original(self))
     first, second = engine.run(message), engine.run(message)
     assert len(loads) == len(prompts) == 1 and len(calls) == 2
     assert loads[0][1]['local_files_only'] and loads[0][1]['attn_implementation'] == 'sdpa'
     assert calls[0]['text'] == ['你好', 'Hello'] and calls[0]['language'] == ['Chinese', 'English']
     assert calls[0]['voice_clone_prompt'] is calls[1]['voice_clone_prompt']
     assert seeds == [42, 42] and not first['prompt_cache_hit'] and second['prompt_cache_hit']
+    # The reference is read and hashed once per process, not once per batch.
+    assert len(reads) == 1
+    # The batch report has to add up: model + writes is the window the panel has
+    # always shown, and the import time is what happens before it can start.
+    assert first['generate_seconds'] + first['write_seconds'] == pytest.approx(first['inference_seconds'])
+    assert first['import_seconds'] >= 0 and first['server_seconds'] >= first['inference_seconds']
+    assert first['entered_at'] <= time.time()
     assert (tmp_path/'一.wav').is_file() and (tmp_path/'二.wav').is_file()
+
+
+def test_voice_prompt_is_reused_after_a_process_restart(tmp_path, monkeypatch):
+    """Encoding the reference costs 1.2 s and gives the same answer every time.
+
+    It used to live only in the worker's memory, so an idle unload or a restart
+    paid it again. On disk it has to survive both -- and a file written by another
+    torch build must fall back to rebuilding rather than failing the batch.
+    """
+    import pickle, types
+    voice, settings = assets(tmp_path)
+    built = []
+
+    Item, Stub = PromptItem, PromptStub
+
+    model = SimpleNamespace(
+        create_voice_clone_prompt=lambda **kw: built.append(kw) or [
+            Item(Stub('code'), Stub('embedding'), False, True, '参考')],
+        generate_voice_clone=lambda **kw: ([[0]], 24000))
+    torch = SimpleNamespace(float32='float32', cuda=SimpleNamespace(is_available=lambda: False),
+        inference_mode=nullcontext, set_num_threads=lambda _: None, manual_seed=lambda _: None,
+        save=lambda payload, path: Path(path).write_bytes(pickle.dumps(payload)),
+        load=lambda path, **kw: pickle.loads(Path(path).read_bytes()))
+    sdk = types.ModuleType('qwen_tts.inference.qwen3_tts_model')
+    sdk.VoiceClonePromptItem = Item
+    package, inner = types.ModuleType('qwen_tts'), types.ModuleType('qwen_tts.inference')
+    package.__path__, inner.__path__ = [], []
+    package.Qwen3TTSModel = SimpleNamespace(from_pretrained=lambda *a, **kw: model)
+    package.inference, inner.qwen3_tts_model = inner, sdk
+    monkeypatch.setitem(sys.modules, 'torch', torch)
+    monkeypatch.setitem(sys.modules, 'soundfile', SimpleNamespace(write=lambda path, *a, **kw: make_wave(Path(path))))
+    monkeypatch.setitem(sys.modules, 'qwen_tts', package)
+    monkeypatch.setitem(sys.modules, 'qwen_tts.inference', inner)
+    monkeypatch.setitem(sys.modules, 'qwen_tts.inference.qwen3_tts_model', sdk)
+    message = {'settings': settings.model_copy(update={'device': 'cpu'}).model_dump(),
+        'root': str(tmp_path), 'voice': voice, 'seed': 1,
+        'options': {'max_new_tokens': 64, 'subtalker_dosample': False},
+        'items': [{'text': '你好', 'language': 'Chinese', 'output': str(tmp_path/'一.wav')}]}
+
+    cold = QwenEngine()
+    first = cold.run(message)
+    assert not first['prompt_cache_hit'] and not first['prompt_disk_hit']
+    assert not cold.prompt_error, cold.prompt_error
+    assert len(built) == 1 and list((tmp_path/'runtime'/'prompt-cache').glob('*.pt'))
+
+    # A brand new engine stands in for a restarted worker: nothing in memory.
+    restarted = QwenEngine()
+    second = restarted.run(message)
+    assert len(built) == 1, '参考音频不该被重新编码'
+    assert second['prompt_disk_hit'] and not second['prompt_cache_hit']
+    assert second['prompt_seconds'] < first['prompt_seconds'] + 0.2
+
+    # A file this build cannot read must cost a rebuild, not the batch.
+    for path in (tmp_path/'runtime'/'prompt-cache').glob('*.pt'):
+        path.write_bytes(b'not a torch file')
+    third = QwenEngine()
+    rebuilt = third.run(message)
+    assert len(built) == 2 and not rebuilt['prompt_disk_hit'] and rebuilt['ok']
 
 
 def test_each_batch_tidies_pooled_vram_once_before_it_generates(tmp_path, monkeypatch):
@@ -367,6 +502,10 @@ def test_each_batch_tidies_pooled_vram_once_before_it_generates(tmp_path, monkey
             FakePath.reliefs += 1
             tidies.append(len(calls))
             return True
+        # Both graph paths are retried between batches and settle afterwards;
+        # the tidy above is the only one this test is about.
+        def rearm(self, device=None): return False
+        def settle(self): pass
 
     model = SimpleNamespace(
         create_voice_clone_prompt=lambda **kw: ['cached-prompt'],
@@ -430,6 +569,12 @@ def test_a_job_with_rows_still_waiting_keeps_the_batch_worker_resident(batch_man
     probe.block.clear()
     wait_job(manager.store.get, job_id, ('done',))
     assert manager.store.pending() is False
+    # The lane is popped a moment after the last row is written to the store, so
+    # "done" and "no lane held" are not the same instant.
+    for _ in range(100):
+        if manager.batch_idle():
+            break
+        time.sleep(.01)
     assert manager.batch_idle() is True
     # The gap between two batches of one job looks idle to `active` alone.
     monkeypatch.setattr(manager.store, 'pending', lambda: True)
@@ -463,8 +608,11 @@ def test_the_stall_guard_is_told_whether_the_worker_is_already_warm(monkeypatch)
     monkeypatch.setattr(process, 'start', lambda settings, signature: (SimpleNamespace(stdin=Pipe()), answers))
     for warm in (False, True):
         assert process.loaded is warm
-        assert process.generate(BatchSettings(python=sys.executable), 'one',
-                                {'items': [{'text': '一条文本'}]}, threading.Event(), 600) == {'ok': True}
+        answer = process.generate(BatchSettings(python=sys.executable), 'one',
+                                  {'items': [{'text': '一条文本'}]}, threading.Event(), 600)
+        # The worker's own fields pass through untouched; the round trip is the
+        # parent's measurement and rides alongside them.
+        assert answer['ok'] is True and answer['roundtrip_seconds'] >= 0
     assert seen == [False, True]
 
 
@@ -558,9 +706,69 @@ def test_batch_limits_and_idle_release_keep_model_residency_bounded(batch_manage
     assert wait_job(manager.store.get, identity, ('done',))['completed'] == 3
     assert all(sum(len(item['text']) for item in call['items']) <= 100 for call in probe.calls)
     assert [len(call['items']) for call in probe.calls] == [2, 1]
+    # Idle: the weights go back to the card first, the interpreter stays -- it is
+    # the interpreter, not the weights, that costs the next job its first minute.
     probe.last_used -= 400
     manager.batch.expire()
+    assert probe.unloads == 1 and probe.process is not None and not probe.loaded
+    manager.batch.expire()
+    assert probe.unloads == 1, '一次空闲只交还一次权重'
+    # Only a long silence releases the process itself.
+    probe.last_used -= PROCESS_GRACE
+    manager.batch.expire()
     assert probe.process is None
+
+
+def test_an_idle_worker_gives_the_weights_back_and_keeps_its_interpreter(tmp_path, monkeypatch):
+    """Killing the worker at the first idle minute threw its imports away.
+
+    Measured on this machine: 8-50 s of interpreter and library import before a
+    worker can read a request, then 5-8 s of weights. So the weights go back to
+    the card alone, and the process outlives them by the grace period.
+    """
+    folder = tmp_path/'voice_workbench/batch_inference'
+    folder.mkdir(parents=True)
+    (folder/'qwen_worker.py').write_text(
+        "import sys,json,time\n"
+        "for line in sys.stdin:\n"
+        " p=json.loads(line)\n"
+        " if p.get('unload'):\n"
+        "  print(json.dumps({'ok':True,'unloaded':True}),flush=True)\n"
+        "  continue\n"
+        " print(json.dumps({'ok':True,'count':len(p.get('items') or []),"
+        "'server_seconds':0.01,'entered_at':time.time()}),flush=True)\n")
+    monkeypatch.setattr('voice_workbench.batch_inference.process.resource_root', lambda: tmp_path)
+    process = BatchProcess(tmp_path)
+    settings = BatchSettings(python=sys.executable)
+    event = threading.Event()
+    items = {'items': [{'text': '一'}]}
+    try:
+        first = process.generate(settings, 'one', items, event, 5)
+        assert first['count'] == 1
+        # Four numbers that add up to the round trip: interpreter start, what the
+        # worker saw, and whatever is left in the pipe.
+        assert 0 <= first['spawn_seconds'] < 30 and first['roundtrip_seconds'] >= 0.01
+        assert first['ipc_seconds'] >= 0
+        pid, spawned = process.process.pid, process.spawned_at
+        assert process.loaded and spawned
+        assert process.release(200, 120) and process.unloaded and not process.loaded
+        assert process.process is not None and process.process.pid == pid, '进程必须活着'
+        assert process.release(200, 120) is False, '权重只交还一次'
+        # The rest reply travels on the same pipe: a batch must never read it as
+        # its own answer, whether it lands before or during the next request.
+        warm = process.generate(settings, 'one', items, event, 5)
+        assert warm['count'] == 1
+        # Interpreter start belongs to the first batch of the process, not to
+        # every one after it: subtracting it again each time flattened the
+        # leftover to zero and hid exactly what these fields were added to find.
+        assert warm['spawn_seconds'] == 0
+        assert warm['ipc_seconds'] >= 0
+        assert process.loaded and not process.unloaded
+        assert process.release(200, 120) is True
+        assert process.release(120 + PROCESS_GRACE, 120) is True
+        assert process.process is None
+    finally:
+        process.interrupt()
 
 
 def test_missing_queued_reference_does_not_crash_scheduler(batch_manager):
@@ -605,6 +813,18 @@ def test_batch_settings_ui_applies_config_without_replacing_dirty_input(tmp_path
         assert saved['enabled'] is False and saved['predictor_fastpath'] is False
         assert saved['predictor_cuda_graph'] is False
         assert '关闭' in control.status.text() and control.isEnabled()
+        # Where a batch's seconds went, including the part the model never sees:
+        # a cold worker's interpreter and imports.
+        control.dirty = False
+        control.bind({'ready': True, 'settings': {**control.settings, 'enabled': True}, 'reason': '',
+                      'loaded': False, 'resident': True,
+                      'last_result': {'batch_size': 8, 'batch_seconds': 71.28, 'import_seconds': 45.2,
+                                      'spawn_seconds': 0.4, 'load_seconds': 7.4, 'prompt_seconds': 1.3,
+                                      'write_seconds': 0.02, 'ipc_seconds': 0.01}})
+        assert '环境驻留' in control.status_badge.text()
+        line = control.status.text()
+        assert '冷启动 45.6 秒' in line and '加载权重 7.4 秒' in line and '音色编码 1.3 秒' in line
+        assert '写盘' not in line and '其它' not in line
         window.close()
 
 

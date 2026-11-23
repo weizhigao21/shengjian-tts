@@ -14,9 +14,14 @@ from ...subtitles import normalize_timestamp
 from ...recent_works import external_work
 from .recognition_references import RecognitionReferences
 
-AUDIO_FILES = "音频 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.wma *.aiff *.aif)"
+AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
+VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".m2ts",
+                  ".mts", ".mpg", ".mpeg", ".3gp", ".ogv"}
 # Formats the native reader and the Qt player both accept; kept in step with the service.
-DROP_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
+DROP_SUFFIXES = AUDIO_SUFFIXES | VIDEO_SUFFIXES
+AUDIO_FILES = ("音频或视频 (" + " ".join("*" + suffix for suffix in sorted(DROP_SUFFIXES)) + ");;"
+               "音频 (" + " ".join("*" + suffix for suffix in sorted(AUDIO_SUFFIXES)) + ");;"
+               "视频 (" + " ".join("*" + suffix for suffix in sorted(VIDEO_SUFFIXES)) + ")")
 STATUSES = {"queued": "等待识别", "running": "识别中", "done": "识别完成",
             "failed": "识别失败", "cancelled": "已取消"}
 BUSY = ("queued", "running")
@@ -214,9 +219,9 @@ class RecognitionController(RecognitionReferences):
             self.panel.lines.blockSignals(False)
             self.panel.clock.setText("00:00.00")
         self.rendered_session, self.rendered_lines = identity, signature
-        self.panel.drop_title.setText(state.get("name") or "把音频拖到这里")
+        self.panel.drop_title.setText(state.get("name") or "把音频或视频拖到这里")
         self.panel.drop_hint.setText("正在识别音频，请稍候…" if state.get("status") in BUSY else
-                                    "拖入音频后自动识别文字并按标点换行。")
+                                    "拖入音频或视频后自动识别文字并按标点换行。")
         self.render_details()
         self.panel.drop_zone.setEnabled(not self.busy())
 
@@ -235,14 +240,18 @@ class RecognitionController(RecognitionReferences):
         if not self.session:
             self.panel.audio_name.setText("尚未导入音频")
             self.panel.audio_name.setToolTip("")
-            self.panel.info.setText("把音频拖到下方区域，或点击「导入音频」。支持 WAV / FLAC / MP3 / M4A / OGG 等格式。")
+            self.panel.info.setText("把音频或视频拖到下方区域，或点击「导入音视频」。支持 WAV / FLAC / MP3 / M4A / OGG 等音频，"
+                                    "MP4 / MKV / MOV / AVI / WEBM 等视频会自动提取音轨。")
             self.panel.status.setText("导入后会自动识别；识别完成后点击任意一行即可播放那一段。")
             return
         duration = state.get("duration") or 0.0
         source = state.get("source_path") or state.get("audio") or ""
-        self.panel.audio_name.setText("当前音频：" + Path(source).name)
+        video = state.get("source_kind") == "video"
+        self.panel.audio_name.setText("当前音频：" + Path(source).name + ("（已提取视频音轨）" if video else ""))
         self.panel.audio_name.setToolTip(source + "\n右键可将整段音频保存到声音库 → 参考声音。")
         details = f"{duration:.2f} 秒"
+        if video:
+            details += " · 视频音轨"
         if state.get("recognized_language"):
             details += f" · 识别语言 {state['recognized_language']}"
         if state.get("processing_seconds"):
@@ -270,7 +279,7 @@ class RecognitionController(RecognitionReferences):
 
     @staticmethod
     def dropped_path(mime):
-        """The first dropped item that is a local audio file, if any."""
+        """The first dropped item that is a local audio or video file, if any."""
         if not mime.hasUrls():
             return None
         for url in mime.urls():
@@ -299,21 +308,23 @@ class RecognitionController(RecognitionReferences):
         self.panel.title.blockSignals(False)
         self.panel.audio_name.setText("当前音频：" + Path(value["path"]).name)
         self.panel.audio_name.setToolTip(value["path"])
-        self.panel.info.setText("正在导入音频…")
+        self.panel.info.setText("正在从视频提取音轨…" if value.get("video") else "正在导入音频…")
         self.panel.drop_title.setText(Path(value["path"]).name)
-        self.panel.drop_hint.setText("正在读取音频并准备识别，请稍候…")
+        self.panel.drop_hint.setText("正在读取视频音轨并准备识别，请稍候…" if value.get("video")
+                                     else "正在读取音频并准备识别，请稍候…")
         self.panel.drop_zone.show()
         self.panel.drop_zone.setEnabled(False)
         self.panel.lines.hide()
         self.panel.clock.setText("00:00.00")
-        self.panel.status.setText("正在导入音频，完成后自动识别。")
+        self.panel.status.setText("正在从视频提取音轨，完成后自动识别。"
+                                 if value.get("video") else "正在导入音频，完成后自动识别。")
 
     def import_audio(self, path=None):
         if not self.owner.ready:
             self.panel.status.setText("请先连接本地服务。")
             return
         if not path:
-            path, _ = QFileDialog.getOpenFileName(self.panel, "选择要识别的音频", "", AUDIO_FILES)
+            path, _ = QFileDialog.getOpenFileName(self.panel, "选择要识别的音频或视频", "", AUDIO_FILES)
         if not path:
             return
         if not self.options.get("asr"):
@@ -331,7 +342,8 @@ class RecognitionController(RecognitionReferences):
         work = external_work("recognition", "importing-" + str(sequence), body["name"], time.time(), status="importing")
         work["pending_import"] = True
         self.stop()
-        self.importing = {"path": str(path), "name": body["name"], "work": work}
+        self.importing = {"path": str(path), "name": body["name"], "work": work,
+                          "video": Path(path).suffix.lower() in VIDEO_SUFFIXES}
         self.submitting = True
         self.render_sessions()
         self.render_importing()
@@ -554,6 +566,7 @@ class RecognitionController(RecognitionReferences):
         self.panel.title.setReadOnly(importing)
         self.panel.history.setEnabled(ready and not importing)
         self.panel.import_button.setEnabled(ready and not busy)
+        self.panel.drop_button.setEnabled(ready and not busy)
         self.panel.recognize_button.setEnabled(bool(ready and self.session and self.options.get("asr") and not busy))
         self.panel.cancel_button.setEnabled(bool(busy and self.options.get("active")
                                                  and self.session and self.options["active"]["session_id"] == self.session["id"]))

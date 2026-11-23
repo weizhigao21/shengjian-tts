@@ -2,6 +2,8 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTabBar
 
+from ...ui import INK, MUTED, PAPER
+
 
 SPEECH_TASKS = {"tts", "clone", "design", "vdes"}
 RECOGNITION_TASKS = {"stt", "asr"}
@@ -42,11 +44,12 @@ class ModelCategories(QTabBar):
         self.setDrawBase(False)
         self.setUsesScrollButtons(True)
         self.setElideMode(Qt.TextElideMode.ElideNone)
-        self.setStyleSheet("QTabBar#modelCategories::tab { padding: 8px 12px; margin-right: 4px;"
-                           " border: 1px solid transparent; border-radius: 6px; color: #737377; }"
-                           "QTabBar#modelCategories::tab:selected { background: #fff2e9;"
-                           " border-color: #f1c4a6; color: #ac4c16; }"
-                           "QTabBar#modelCategories::tab:hover { background: #f4f4f2; }")
+        self.setStyleSheet(
+            "QTabBar#modelCategories::tab { padding: 4px 12px; margin-right: 6px;"
+            f" border: 1px solid transparent; border-radius: 13px; color: {MUTED}; font-size: 12px; }}"
+            f"QTabBar#modelCategories::tab:selected {{ background: {INK};"
+            f" border-color: {INK}; color: #ffffff; font-weight: 600; }}"
+            f"QTabBar#modelCategories::tab:hover {{ background: {PAPER}; color: {INK}; }}")
         for title, value in (("全部", "all"), ("语音生成", "tts"), ("语音识别", "stt"),
                              ("时间对齐", "align"), ("音频编辑", "edit"), ("其他音频", "other"), ("已适配", "adapted")):
             self.setTabData(self.addTab(title), value)

@@ -3,6 +3,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import json
+import shutil
 import tempfile
 import threading
 import time
@@ -23,6 +24,8 @@ from voice_workbench.speech_recognition.lines import (ALIGNER_SAMPLE_RATE, build
 from voice_workbench.speech_recognition.schemas import SelectionRequest
 from test_audio_editing import wav
 from test_model_capabilities import gguf
+
+FIXTURES = Path(__file__).parent/'fixtures/recognition'
 
 # The exact payload shape the engine returns for POST /v1/audio/alignments. The seconds
 # fields were produced from a 48 kHz clip, so they are 16000/48000 of the truth; the
@@ -263,6 +266,26 @@ def test_import_recognises_and_keeps_a_playable_range_per_line(tmp_path, monkeyp
         assert client.get(state['audio_url']).status_code == 200
         assert not client.app.state.manager.recognition.gpu_busy
         assert client.get('/health').json()['recognition'] is None
+
+
+def test_a_video_is_imported_as_the_one_audio_track_it_carries(tmp_path, monkeypatch):
+    """A dropped video needs no separate "extract audio" step and no change to the source."""
+    monkeypatch.setattr('voice_workbench.speech_recognition.service.RecognitionRunner', FakeRecognition)
+    source = tmp_path / '录屏.mp4'
+    shutil.copyfile(FIXTURES/'clip.mp4', source)
+    original = source.read_bytes()
+    with TestClient(create_app(tmp_path / 'data')) as client:
+        setup_engine(tmp_path, client)
+        response = client.post('/recognition/sessions', json={'path': str(source), 'language': 'zh'})
+        assert response.status_code == 201, response.text
+        state = wait_session(client, response.json()['id'])['state']
+        assert state['status'] == 'done' and state['error'] is None
+        assert state['source_kind'] == 'video' and state['source_path'] == str(source.resolve())
+        # The private copy is always a WAV: the player never has to demux the video again.
+        assert state['audio'].endswith('.wav')
+        assert state['duration'] == pytest.approx(1.02, abs=.1)
+        assert client.get(state['audio_url']).status_code == 200
+        assert source.read_bytes() == original
 
 
 def test_terminal_state_never_lands_while_the_engine_still_looks_busy(tmp_path, monkeypatch):
@@ -608,6 +631,27 @@ def test_recognition_page_only_imports_supported_audio_drops(qtbot, tmp_path):
     controller.session = None
     controller.render_details()
     assert '拖到下方区域' in window.recognition.info.text()
+    window.close()
+
+
+def test_recognition_page_takes_a_video_drop_and_says_only_the_track_is_read(qtbot, tmp_path):
+    window = Window(18894, tmp_path, autostart=False)
+    qtbot.addWidget(window)
+    controller = window.recognition.controller
+    video = tmp_path / '会议录屏.mp4'
+    video.write_bytes(b'\0\0\0\0')          # the drop gate reads the suffix, not the contents
+    dropped = QMimeData()
+    dropped.setUrls([QUrl.fromLocalFile(str(video))])
+    assert controller.accepts(dropped)
+    assert Path(controller.dropped_path(dropped)) == video
+    controller.session = None
+    controller.render_details()
+    assert '视频' in window.recognition.info.text() and '提取音轨' in window.recognition.info.text()
+    assert '视频' in window.recognition.drop_hint.text()
+    controller.importing = {'path': str(video), 'name': video.stem, 'work': {}, 'video': True}
+    controller.render_importing()
+    assert '提取音轨' in window.recognition.info.text() and '提取音轨' in window.recognition.status.text()
+    assert window.recognition.import_button.text() == '导入音视频'
     window.close()
 
 

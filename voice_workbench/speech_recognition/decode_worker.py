@@ -1,4 +1,9 @@
-"""Qt decoding runs on a child's main thread; the HTTP service stays Qt-free."""
+"""Qt decoding runs on a child's main thread; the HTTP service stays Qt-free.
+
+The same decoder reads a video container: ``--video`` only changes the wording and
+the patience, because a container has to be demultiplexed before its one audio
+track can be decoded and a two-hour recording is not a two-minute one.
+"""
 import argparse
 from array import array
 import math
@@ -11,6 +16,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="识别音频解码")
     parser.add_argument("source", type=Path)
     parser.add_argument("target", type=Path)
+    parser.add_argument("--video", action="store_true", help="从视频容器中提取第一条音轨")
     args = parser.parse_args(argv)
     from PyQt6.QtCore import QCoreApplication, QTimer, QUrl
     from PyQt6.QtMultimedia import QAudioDecoder, QAudioFormat
@@ -67,8 +73,10 @@ def main(argv=None):
 
         decoder.bufferReady.connect(read_buffer)
         decoder.error.connect(lambda _: fail(decoder.errorString()))
-        decoder.finished.connect(lambda: app.exit(0) if frames else fail("音频没有可读取的声音数据"))
-        QTimer.singleShot(115000, lambda: fail("音频解码超时，请使用较短的录音重试"))
+        decoder.finished.connect(lambda: app.exit(0) if frames else fail(
+            "视频没有可读取的音轨" if args.video else "音频没有可读取的声音数据"))
+        QTimer.singleShot(290000 if args.video else 115000, lambda: fail(
+            "视频音轨提取超时，请改用更短的视频重试" if args.video else "音频解码超时，请使用较短的录音重试"))
         def start():
             decoder.setSource(QUrl.fromLocalFile(str(args.source.resolve())))
             decoder.start()
