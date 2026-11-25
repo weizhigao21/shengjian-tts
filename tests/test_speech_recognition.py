@@ -349,6 +349,24 @@ def test_missing_aligner_estimates_line_times_and_reports_it(tmp_path, monkeypat
         assert [call[0] for call in runner.calls] == ['asr']
 
 
+def test_long_audio_without_an_aligner_is_still_recognised_window_by_window(tmp_path, monkeypatch):
+    monkeypatch.setattr('voice_workbench.speech_recognition.service.RecognitionRunner', FakeRecognition)
+    source = wav(tmp_path / '长音频.wav', seconds=150)
+    with TestClient(create_app(tmp_path / 'data')) as client:
+        setup_engine(tmp_path, client, families=('qwen3_asr',))
+        session = wait_session(client, client.post('/recognition/sessions',
+                                                  json={'path': str(source)}).json()['id'])
+        state = session['state']
+        assert state['status'] == 'done'
+        assert '未安装强制对齐器' in state['warning']
+        runner = client.app.state.manager.recognition.runner
+        # The long file is transcribed 45-second window by window, not in one request,
+        # and no alignment request is sent when there is no aligner.
+        calls = [call[0] for call in runner.calls]
+        assert calls.count('asr') >= 3 and 'align' not in calls
+        assert state['lines'] and state['lines'][-1]['end'] <= 150.0 + 0.001
+
+
 def test_retry_cancel_and_remove_keep_the_imported_audio_intact(tmp_path, monkeypatch):
     monkeypatch.setattr('voice_workbench.speech_recognition.service.RecognitionRunner', FakeRecognition)
     source = wav(tmp_path / '原文.wav', seconds=1)
@@ -655,13 +673,93 @@ def test_recognition_page_takes_a_video_drop_and_says_only_the_track_is_read(qtb
     window.close()
 
 
+def test_recognition_export_follows_the_active_translation_tab(qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    window = Window(18895, tmp_path, autostart=False)
+    qtbot.addWidget(window)
+    controller = window.recognition.controller
+    controller.session = demo_session(tmp_path, [
+        {'index': 1, 'start': 0.32, 'end': 1.2, 'text': 'Download complete,'},
+        {'index': 2, 'start': 1.4, 'end': 2.56, 'text': 'Keep the scroll position.'}], stem='c')
+    controller.session['state']['translation'] = {
+        'target': 'zh', 'lines': [
+            {'index': 1, 'start': 0.32, 'end': 1.2, 'text': 'Download complete,', 'translated': '下载完成，'},
+            {'index': 2, 'start': 1.4, 'end': 2.56, 'text': 'Keep the scroll position.', 'translated': '保留滚动位置。'}]}
+    controller.render_session()
+    panel = window.recognition
+    panel.result_tabs.setCurrentIndex(1)
+    assert panel.export_button.text() == '导出译文'
+
+    output = tmp_path / '字幕译文.txt'
+    seen = {}
+
+    def save(_parent, title, name, filters):
+        seen.update(title=title, name=name, filters=filters)
+        return str(output), '纯文本 (*.txt)'
+
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', save)
+    controller.export_subtitles()
+    assert seen['title'] == '导出译文'
+    assert seen['name'].endswith('.zh.srt')
+    assert output.read_text(encoding='utf-8') == '下载完成，\n保留滚动位置。'
+    assert '已导出译文' in panel.status.text()
+
+    panel.result_tabs.setCurrentIndex(0)
+    assert panel.export_button.text() == '导出字幕'
+    output = tmp_path / '字幕原文.txt'
+    controller.export_subtitles()
+    assert output.read_text(encoding='utf-8') == 'Download complete,\nKeep the scroll position.'
+    assert '已导出原文' in panel.status.text()
+    window.close()
+
+
+def test_recognition_has_a_separate_chinese_subtitle_export(qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    window = Window(18890, tmp_path, autostart=False)
+    qtbot.addWidget(window)
+    controller = window.recognition.controller
+    controller.session = demo_session(tmp_path, [
+        {'index': 1, 'start': 0.32, 'end': 1.2, 'text': 'Download complete,'},
+        {'index': 2, 'start': 1.4, 'end': 2.56, 'text': 'Keep the scroll position.'}], stem='c')
+    controller.session['state']['translation'] = {
+        'target': 'zh', 'lines': [
+            {'index': 1, 'start': 0.32, 'end': 1.2, 'text': 'Download complete,', 'translated': '下载完成，'},
+            {'index': 2, 'start': 1.4, 'end': 2.56, 'text': 'Keep the scroll position.', 'translated': '保留滚动位置。'}]}
+    controller.render_session()
+    panel = window.recognition
+    assert panel.result_tabs.currentIndex() == 0
+    assert panel.export_translation_button.text() == '导出中文字幕'
+    assert not panel.export_translation_button.isHidden()
+
+    output = tmp_path / '中文字幕.srt'
+    seen = {}
+
+    def save(_parent, title, name, filters):
+        seen.update(title=title, name=name)
+        return str(output), 'SRT 字幕 (*.srt)'
+
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', save)
+    controller.export_translated_subtitles()
+    assert seen['title'] == '导出中文字幕'
+    assert seen['name'].endswith('.zh.srt')
+    assert output.read_text(encoding='utf-8') == (
+        '1\n00:00:00,32 --> 00:00:01,20\n下载完成，\n\n'
+        '2\n00:00:01,40 --> 00:00:02,56\n保留滚动位置。\n')
+    assert '已导出中文字幕' in panel.status.text()
+    window.close()
+
+
 def test_creation_home_offers_recognition_beside_the_other_modes(qtbot, tmp_path):
     window = Window(18892, tmp_path, autostart=False)
     qtbot.addWidget(window)
     window.show()
     window.open_creation_home()
-    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition', 'float'}
+    assert set(window.creation_choices) == {'article', 'dialogue', 'audio', 'recognition',
+                                            'recognition_batch', 'float'}
     assert '语音识别' in window.creation_choices['recognition'].text()
+    assert '批量识别' in window.creation_choices['recognition_batch'].text()
     window.start_creation('recognition')
     window.open_creation_home()
     assert window.creation_pages.currentIndex() == 0

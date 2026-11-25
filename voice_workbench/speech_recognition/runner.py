@@ -32,6 +32,10 @@ ALIGN_ENDPOINTS = ("/v1/audio/alignments", "/v1/tasks/run")
 # skipped once a request would exceed it. Kept in sync with the config written
 # in ``start``: the value is what the native side actually enforces.
 MAX_REQUEST_BODY_BYTES = 104857600
+# A single recognition releases the engine immediately; a batch keeps it warm for
+# the whole queue, so the idle window has to outlast the longest decode gap.
+DEFAULT_IDLE_UNLOAD_MS = 120000
+BATCH_IDLE_UNLOAD_MS = 600000
 
 
 def _model_entry(voice, name, path):
@@ -45,6 +49,10 @@ def _model_entry(voice, name, path):
 
 class RecognitionRunner(AudioCppRunner):
     """One engine process, two models: ``asr`` for text, ``align`` for timings."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.idle_unload_ms = DEFAULT_IDLE_UNLOAD_MS
 
     def start(self, voices, cancelled):
         """Launch (or reuse) the engine with the ASR and aligner models resident."""
@@ -64,7 +72,7 @@ class RecognitionRunner(AudioCppRunner):
                            for voice, name in zip(voices, ("asr", "align"))]
                 config = {"host": "127.0.0.1", "port": port, "backend": voices[0]["device"], "device": 0,
                           "threads": self.cpu_threads or min(8, max(1, (os.cpu_count() or 4) // 2)),
-                          "lazy_load": True, "max_loaded_models": 2, "idle_unload_ms": 120000,
+                          "lazy_load": True, "max_loaded_models": 2, "idle_unload_ms": self.idle_unload_ms,
                           "log_request_body": False, "max_request_body_bytes": MAX_REQUEST_BODY_BYTES,
                           "models": entries}
                 native_config_path = self.native_paths.config(config)

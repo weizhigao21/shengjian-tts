@@ -53,14 +53,23 @@ def test_notifications_get_no_response():
 
 def test_tools_list_exposes_every_tool():
     names = [tool["name"] for tool in mcp._handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]]
-    assert names == ["list_voices", "speak", "speak_dialogue", "get_job", "transcribe"]
+    assert names == [
+        "list_voices", "speak", "speak_dialogue", "get_job", "transcribe",
+        "list_translation_sessions", "get_subtitle", "correct_subtitle", "list_translation_terms",
+        "add_translation_term", "update_translation_term", "disable_translation_term",
+        "list_translation_memory", "add_translation_memory", "update_translation_memory",
+        "delete_translation_memory",
+        "translate_subtitle", "save_translation", "list_translation_runs", "get_translation_run",
+    ]
 
 
 def test_unknown_tool_is_reported_to_the_model():
     response = mcp._handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                             "params": {"name": "nope", "arguments": {}}})
     assert response["result"]["isError"] is True
-    assert "list_voices" in response["result"]["content"][0]["text"]
+    text = response["result"]["content"][0]["text"]
+    assert "nope" in text and "tools/list" in text
+    assert "list_voices" not in text
 
 
 def test_connection_error_becomes_readable_hint(monkeypatch):

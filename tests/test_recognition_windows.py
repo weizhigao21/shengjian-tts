@@ -170,6 +170,18 @@ def test_a_window_whose_alignment_fails_keeps_its_audio_and_its_text(tmp_path):
     assert [start for _, start, _ in units] == sorted(start for _, start, _ in units)
 
 
+def test_no_aligner_still_recognises_every_window_and_estimates_its_timing(tmp_path):
+    audio, windows = window_audio(tmp_path)
+    texts = ['window number %d spoken here' % index for index in range(len(windows))]
+    runner = WindowRunner(texts=list(texts))
+    text, units, warning, language, _wall = recognize_windows(
+        runner, [], audio, windows, 'English', threading.Event(), align=False)
+    assert runner.aligned == []
+    assert '未安装强制对齐器' in warning
+    assert all(body in text for body in texts)
+    assert units and [start for _, start, _ in units] == sorted(start for _, start, _ in units)
+
+
 def test_a_crowded_front_of_the_window_is_not_mistaken_for_a_good_alignment():
     collapsed = [('word%d' % index, index * 0.08, index * 0.08 + 0.08) for index in range(57)]
     collapsed.append(('tail', 4.56, 38.4))

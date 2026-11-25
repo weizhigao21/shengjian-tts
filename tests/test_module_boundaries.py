@@ -39,7 +39,18 @@ def test_modular_routes_preserve_the_previous_external_http_contract(tmp_path):
     for path in list(actual['paths']):
         if path.startswith('/recognition/'):
             actual['paths'].pop(path)
-    for name in ('RecognizeRequest', 'SessionState', 'SelectionRequest'):
+    for name in ('RecognizeRequest', 'SessionState', 'SelectionRequest',
+                 'LineCorrection', 'LineCorrections'):
+        actual['components']['schemas'].pop(name)
+    # Batch queue and translation are new independent entries too; they add
+    # routes and schemas without touching the published contract.
+    actual['components']['schemas'].pop('BatchRequest')
+    for path in list(actual['paths']):
+        if path.startswith('/translation/'):
+            actual['paths'].pop(path)
+    for name in ('TranslationSettings', 'TranslationRequest', 'TermInput', 'TermUpdate',
+                 'MemoryInput', 'MemoryUpdate', 'AgentTranslateRequest', 'AgentChatRequest',
+                 'ExternalTranslationLine', 'ApplyTranslationRequest'):
         actual['components']['schemas'].pop(name)
     # Model discovery adds an endpoint without changing the published routes.
     assert actual['paths'].pop('/models/scan')['post']['responses'].get('202')

@@ -12,18 +12,23 @@ from ..config import atomic_json
 from ..errors import VoiceError
 from . import segments
 from .audio_import import import_wave
+from .batch import BatchRecognition
+from .dedupe import dedupe_lines, dedupe_transcript
+from .formats import ALLOWED_SUFFIXES, VIDEO_SUFFIXES
 from .lines import (build_lines, estimate_units, extract_units, fallback_lines,
                     reattach_punctuation)
-from .runner import RecognitionRunner
-from .languages import ALIGN_LANGUAGES, alignment_language
+from .runner import BATCH_IDLE_UNLOAD_MS, DEFAULT_IDLE_UNLOAD_MS, RecognitionRunner
+from .languages import ALIGN_LANGUAGES, alignment_language, LANGUAGE_CHOICES
 from .store import RecognitionStore
 
-# Formats the native reader and the Qt player both accept.
-AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
-# Video containers the bundled Qt/FFmpeg decoder opens; only the audio track is kept.
-VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".m2ts",
-                  ".mts", ".mpg", ".mpeg", ".3gp", ".ogv"}
-ALLOWED_SUFFIXES = AUDIO_SUFFIXES | VIDEO_SUFFIXES
+# A batch's own stop request has to stop the decoder too, not only the recogniser.
+class _AnyStop:
+    def __init__(self, *events):
+        self.events = events
+
+    def is_set(self):
+        return any(event.is_set() for event in self.events)
+
 
 # A clip that needs this many windows is recognised window by window rather than in
 # one request. A single request over a very long file silently drops speech — measured
@@ -36,6 +41,10 @@ PIECEWISE_RECOGNITION_WINDOWS = 3
 # The aligner emits one 80 ms frame for a word it could not place. Used to tell a
 # real short word from a placeholder.
 ONE_FRAME_SECONDS = 0.085
+
+# Agent corrections are line-level text edits; never allow timings to be rewritten.
+MAX_CORRECTION_LINES = 100
+MAX_CORRECTION_TEXT = 2000
 
 # How far a placeholder end may be stretched to reach the next word. Without a cap a
 # single word absorbed the 30 seconds of silence that followed it and the subtitle
@@ -50,9 +59,15 @@ class SpeechRecognizer:
         self.root.mkdir(exist_ok=True)
         self.store = RecognitionStore(self.root)
         self.runner = RecognitionRunner(self.root)
+        self.runner.idle_unload_ms = DEFAULT_IDLE_UNLOAD_MS
         self.active = None
         self.thread = None
         self.gpu_busy = False
+        self.batching = BatchRecognition(self)
+
+    @property
+    def batch_active(self):
+        return self.batching.active_id
 
     # ---------------------------------------------------------------- discovery
 
@@ -100,7 +115,8 @@ class SpeechRecognizer:
         available = self._available()
         return {"asr": available["asr"], "align": available["align"], "runtime": self.manager.models.runtime(),
                 "selection": self._selection(), "languages": LANGUAGE_CHOICES,
-                "active": dict(self.active) if self.active else None}
+                "active": dict(self.active) if self.active else None,
+                "batch": self.batching.active_state()}
 
     # ------------------------------------------------------------------ session
 
@@ -109,6 +125,88 @@ class SpeechRecognizer:
         state = record["state"]
         state["audio_url"] = f"/recognition/audio/{state['audio']}" if state.get("audio") else None
         return {**record, "state": state}
+
+    def correct_lines(self, identity, corrections, origin="agent"):
+        """Rewrite line text without touching timings; stale translation is cleared.
+
+        This is intentionally a small, auditable operation: the agent can fix an
+        ASR error but cannot add/remove subtitle lines, change their order, or
+        rewrite start/end times.
+        """
+        if hasattr(corrections, "model_dump"):
+            corrections = corrections.model_dump().get("corrections") or []
+        if not isinstance(corrections, list) or not corrections:
+            raise VoiceError("RECOGNITION_LINES_INVALID", "至少提供一行要修正的字幕",
+                             "每项需要 index 和 text。", "语音识别")
+        if len(corrections) > MAX_CORRECTION_LINES:
+            raise VoiceError("RECOGNITION_LINES_INVALID",
+                             f"一次最多修正 {MAX_CORRECTION_LINES} 行",
+                             "把修改拆成更小的批次。", "语音识别")
+        clean, seen = [], set()
+        for item in corrections:
+            if hasattr(item, "model_dump"):
+                item = item.model_dump()
+            if not isinstance(item, dict):
+                raise VoiceError("RECOGNITION_LINES_INVALID", "每项修正都必须是对象", stage="语音识别")
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                raise VoiceError("RECOGNITION_LINES_INVALID", "字幕行号必须是整数", stage="语音识别") from None
+            text = " ".join(str(item.get("text") or "").split())
+            if not text:
+                raise VoiceError("RECOGNITION_LINES_INVALID", f"第 {index} 行的新文本不能为空",
+                                 stage="语音识别")
+            if len(text) > MAX_CORRECTION_TEXT:
+                raise VoiceError("RECOGNITION_LINES_INVALID",
+                                 f"第 {index} 行的文本超过 {MAX_CORRECTION_TEXT} 字", stage="语音识别")
+            if index in seen:
+                raise VoiceError("RECOGNITION_LINES_INVALID", f"第 {index} 行重复提交了两次",
+                                 stage="语音识别")
+            seen.add(index)
+            clean.append({"index": index, "text": text,
+                          "reason": str(item.get("reason") or "").strip()[:200]})
+
+        with self.manager.lock:
+            state = self.store.get(identity)["state"]
+            if state.get("status") in ("queued", "running"):
+                raise VoiceError("RECOGNITION_BUSY", "识别仍在进行，完成后才能修改字幕",
+                                 "等识别结束后再校对。", "语音识别")
+            lines = [dict(line) for line in (state.get("lines") or [])]
+            if not lines:
+                raise VoiceError("RECOGNITION_LINES_INVALID", "这条记录还没有可修正的字幕", stage="语音识别")
+            positions = {}
+            for position, line in enumerate(lines):
+                try:
+                    positions[int(line.get("index"))] = position
+                except (TypeError, ValueError):
+                    continue
+            changed = []
+            for item in clean:
+                position = positions.get(item["index"])
+                if position is None:
+                    raise VoiceError("RECOGNITION_LINES_INVALID",
+                                     f"找不到第 {item['index']} 行字幕", "先重新读取字幕行号。",
+                                     "语音识别")
+                old = str(lines[position].get("text") or "")
+                if old == item["text"]:
+                    continue
+                lines[position]["text"] = item["text"]
+                changed.append({"index": item["index"], "old": old, "text": item["text"],
+                                "reason": item["reason"]})
+            if not changed:
+                return {"session_id": identity, "corrected": [], "translation_cleared": False,
+                        "line_count": len(lines)}
+            translation = state.get("translation")
+            update = {"lines": lines, "text": "\n".join(str(line.get("text") or "") for line in lines),
+                      "correction_log": (list(state.get("correction_log") or [])[-49:] +
+                                         [{"at": time.time(), "changes": changed,
+                                           "source": str(origin or "agent")}])}
+            if translation:
+                # Timings still match, but translations of the old text no longer do.
+                update["translation"] = None
+            self.store.update(identity, update)
+        return {"session_id": identity, "corrected": changed,
+                "translation_cleared": bool(changed and translation), "line_count": len(lines)}
 
     def audio_path(self, filename):
         import re
@@ -119,7 +217,8 @@ class SpeechRecognizer:
             raise VoiceError("RECOGNITION_AUDIO_NOT_FOUND", "音频不在识别目录中", stage="语音识别")
         return path
 
-    def import_audio(self, path, name="", language="auto"):
+    def import_audio(self, path, name="", language="auto", *, batch=False, cancelled=None,
+                     batch_id=None, batch_index=None, dedupe=True):
         source = Path(path).resolve()
         if not source.is_file():
             raise VoiceError("FILE_MISSING", f"文件不存在：{source}", "重新选择音频或视频文件。", "导入音频")
@@ -130,7 +229,7 @@ class SpeechRecognizer:
                              "（只取音轨识别，原文件不变）。", "导入音频")
         video = suffix in VIDEO_SUFFIXES
         with self.manager.lock:
-            self._require_idle()
+            self._require_idle(batch=batch)
         selection = self.choose(language=language)
         # Refuse before copying anything: a session without an ASR model could only fail.
         if not selection.get("asr_model") or not Path(selection["asr_model"]).is_file():
@@ -138,20 +237,22 @@ class SpeechRecognizer:
                              "识别需要 ASR 模型；对齐器用于给出精确时间。", "语音识别")
         filename = uuid.uuid4().hex + ".wav"
         target = self.audio_path(filename)
+        stop = self.manager.stopping if cancelled is None else _AnyStop(cancelled, self.manager.stopping)
         try:
             # Decoding must not hold the queue lock. Recheck admission before committing.
-            details = import_wave(source, target, cancelled=self.manager.stopping, video=video)
+            details = import_wave(source, target, cancelled=stop, video=video)
             with self.manager.lock:
-                self._require_idle()
+                self._require_idle(batch=batch)
                 identity = self.store.create({
                     "name": (name or "").strip() or source.stem[:200] or "未命名音频",
                     "audio": filename, "source_path": str(source), "source_kind": "video" if video else "audio",
                     "language": language,
                     "duration": details["duration"], "status": "queued", "error": None,
-                    "text": "", "lines": [], "processing_seconds": None,
-                    "asr_model": selection.get("asr_model"), "align_model": selection.get("align_model")})
+                    "text": "", "lines": [], "processing_seconds": None, "dedupe": bool(dedupe),
+                    "asr_model": selection.get("asr_model"), "align_model": selection.get("align_model"),
+                    "batch_id": batch_id, "batch_index": batch_index})
                 try:
-                    self._launch(identity)
+                    self._launch(identity, batch=batch)
                 except Exception:
                     self.store.remove(identity)
                     raise
@@ -160,15 +261,54 @@ class SpeechRecognizer:
             raise
         return self.session(identity)
 
-    def retry(self, identity):
+    def retry(self, identity, batch=False, dedupe=None):
         with self.manager.lock:
             state = self.store.get(identity)["state"]
-            self._require_idle()
+            self._require_idle(batch=batch)
             if not self.audio_path(state["audio"]).is_file():
                 raise VoiceError("RECOGNITION_AUDIO_NOT_FOUND", "音频文件已不存在，请重新导入", stage="语音识别")
             selection = self.choose()
-            self._launch(identity, {"asr_model": selection.get("asr_model"), "align_model": selection.get("align_model")})
+            changes = {"asr_model": selection.get("asr_model"), "align_model": selection.get("align_model")}
+            if dedupe is not None:
+                changes["dedupe"] = bool(dedupe)
+            self._launch(identity, changes, batch=batch)
         return self.session(identity)
+
+    def session_reusable(self, identity, batch_id=None):
+        """True when a failed/cancelled attempt still has the audio copy to retry."""
+        try:
+            state = self.store.get(identity)["state"]
+        except VoiceError:
+            return False
+        if batch_id and state.get("batch_id") != batch_id:
+            return False
+        if state.get("status") not in ("failed", "cancelled", "queued", "running"):
+            return False
+        if not state.get("audio"):
+            return False
+        try:
+            return self.audio_path(state["audio"]).is_file()
+        except VoiceError:
+            return False
+
+    def remove_batch_sessions(self, batch_id):
+        """Drop every recognition record made by a queue, audio included."""
+        with self.manager.lock:
+            rows = self.store.batch_sessions(batch_id)
+            active = (self.active or {}).get("session_id")
+            if active and any(identity == active for identity, _ in rows):
+                raise VoiceError("RECOGNITION_BUSY", "该批次中的音频正在识别，请先取消", stage="批量识别")
+            filenames = [state.get("audio") for _, state in rows if state.get("audio")]
+            # Delete the records first; an unlink that fails (player still holding
+            # the file) leaves only an orphan WAV, which the next start-up prune
+            # collects. The reverse order would leave records without audio.
+            self.store.remove_sessions([identity for identity, _ in rows])
+            for filename in filenames:
+                try:
+                    self.audio_path(filename).unlink(missing_ok=True)
+                except (OSError, VoiceError):
+                    pass
+            return len(rows)
 
     def remove(self, identity):
         with self.manager.lock:
@@ -180,14 +320,18 @@ class SpeechRecognizer:
                 self.audio_path(state["audio"]).unlink(missing_ok=True)
         return {"removed": identity}
 
-    def _require_idle(self):
+    def _require_idle(self, batch=False):
+        if self.batch_active and not batch:
+            raise VoiceError("RECOGNITION_BUSY", "已有批量识别正在进行，请等待完成或停止后再试", stage="语音识别")
         if self.active:
             raise VoiceError("RECOGNITION_BUSY", "已有音频正在识别，请等待或取消后重试", stage="语音识别")
-        self.manager.require_idle_engine("语音识别")
+        # The batch queue reserves the engine for its whole run; only the batch
+        # thread itself may re-enter that reservation between items.
+        self.manager.require_idle_engine("语音识别", recognition_owner=batch)
 
-    def _launch(self, identity, changes=None):
+    def _launch(self, identity, changes=None, batch=False):
         with self.manager.lock:
-            self._require_idle()
+            self._require_idle(batch=batch)
             previous = self.store.get(identity)["state"]
             self.store.update(identity, {**(changes or {}), "status": "queued", "error": None})
             try:
@@ -195,7 +339,7 @@ class SpeechRecognizer:
                 self.cancelled = threading.Event()
                 self.gpu_busy = True
                 self.manager.release_runners()
-                thread = threading.Thread(target=self._execute, args=(identity, self.cancelled),
+                thread = threading.Thread(target=self._execute, args=(identity, self.cancelled, batch),
                                           name="recognition", daemon=True)
                 thread.start()
                 self.thread = thread
@@ -205,7 +349,7 @@ class SpeechRecognizer:
                 self.manager.wake.set()
                 raise
 
-    def _execute(self, identity, cancelled):
+    def _execute(self, identity, cancelled, hold_engine=False):
         started = time.perf_counter()
         outcome = None
         try:
@@ -233,11 +377,13 @@ class SpeechRecognizer:
             requested = state.get("language", "auto")
             windows = segments.windows(audio, state.get("duration"))
             transcript, units, warning, text, language = {}, [], "", "", ""
-            if align_voice and len(windows) >= PIECEWISE_RECOGNITION_WINDOWS:
-                # Long clip: recognise and align on the same windows, so no text has
-                # to be dealt out by assumed speech rate.
+            if len(windows) >= PIECEWISE_RECOGNITION_WINDOWS:
+                # Long clip: recognise each window with its own text. This stays
+                # true without an aligner as well — one request over a very long
+                # file silently drops speech, whether or not timings are precise.
                 text, units, warning, language, wall_ms = recognize_windows(
-                    self.runner, voices, audio, windows, requested, cancelled)
+                    self.runner, voices, audio, windows, requested, cancelled,
+                    align=bool(align_voice))
                 transcript = {"timing": {"wall_ms": round(wall_ms, 1)}}
                 if not text:
                     warning = "未识别到文字，可能是静音或没有清晰语音；请检查音频后重试。"
@@ -266,13 +412,24 @@ class SpeechRecognizer:
                     warning = "未安装强制对齐器，每行时间按标点估算；安装 Qwen3 对齐器后可精确到词。"
             if cancelled.is_set():
                 raise VoiceError("CANCELLED", "识别已取消")
+            dedupe_removed, dedupe = 0, bool(state.get("dedupe", True))
+            if dedupe:
+                text, units, dedupe_removed = dedupe_transcript(text, units)
             lines = (build_lines(units, state.get("duration"), text=text) if units
                      else fallback_lines(text, state.get("duration")))
+            if dedupe:
+                # A failed alignment is estimated as a few large units, so a loop can
+                # hide inside one line. Compress line text and adjacent identical lines.
+                lines, removed = dedupe_lines(lines)
+                dedupe_removed += removed
+                if dedupe_removed:
+                    note = f"已清理 {dedupe_removed} 处连续重复。"
+                    warning = f"{warning} {note}".strip()
             if cancelled.is_set():
                 raise VoiceError("CANCELLED", "识别已取消")
             outcome = {"status": "done", "error": None, "text": text, "lines": lines,
                        "warning": warning, "processing_seconds": time.perf_counter() - started,
-                       "recognized_language": language,
+                       "recognized_language": language, "dedupe_removed": dedupe_removed,
                        "timing": transcript.get("timing")}
         except Exception as exc:
             from ..errors import describe_error
@@ -284,8 +441,11 @@ class SpeechRecognizer:
                            "processing_seconds": time.perf_counter() - started}
         finally:
             try:
-                # Release the engine so article generation need not share VRAM.
-                self.runner.interrupt()
+                # A single recognition frees the engine immediately. A batch keeps
+                # one process warm across files; BatchRecognition releases it once
+                # the whole queue (or the stop request) is finished.
+                if not hold_engine:
+                    self.runner.interrupt()
             finally:
                 # Clear the flags first and publish the terminal state last, so a session can
                 # never look finished while the software still reports the engine busy.
@@ -294,6 +454,13 @@ class SpeechRecognizer:
                     self.active = None
                     self.store.update(identity, outcome)
                     self.manager.wake.set()
+
+    def release_engine(self):
+        """Stop the engine process and restore the normal idle unload window."""
+        try:
+            self.runner.interrupt()
+        finally:
+            self.runner.idle_unload_ms = DEFAULT_IDLE_UNLOAD_MS
 
     def cancel(self, identity):
         with self.manager.lock:
@@ -305,6 +472,7 @@ class SpeechRecognizer:
         return self.session(identity)
 
     def close(self):
+        self.batching.close()
         if self.active:
             self.cancelled.set()
         self.runner.interrupt()
@@ -406,8 +574,8 @@ def _fill_short_ends(units, span):
     return filled
 
 
-def recognize_windows(runner, voices, audio, windows, requested_language, cancelled):
-    """Transcribe and align each window with its own text.
+def recognize_windows(runner, voices, audio, windows, requested_language, cancelled, align=True):
+    """Transcribe each window with its own text, aligning when an aligner is present.
 
     Returns ``(text, units, warning, language, wall_ms)``. Recognising the file as a
     whole loses speech on long recordings, and the leftover transcript can only be
@@ -415,6 +583,10 @@ def recognize_windows(runner, voices, audio, windows, requested_language, cancel
     elsewhere, which the aligner answers with a frame per word. Recognising where the
     words actually are removes the guess: every window is aligned against exactly what
     was said in it, so a window can fail on its own without dragging the rest along.
+
+    ``align=False`` keeps the same windowed transcription but estimates each line's
+    timing from punctuation, so a long file without an aligner no longer falls back to
+    one lossy request over the whole recording.
 
     The transcript is the concatenation of the window texts, joined with a space where
     the script separates words. A word repeated across a window boundary is dropped
@@ -424,6 +596,7 @@ def recognize_windows(runner, voices, audio, windows, requested_language, cancel
         raise VoiceError("NATIVE_PATH_ENCODING", "系统临时目录含非 ASCII 字符",
                          "设置 TMP 为可写的英文路径后重启程序。", "语音识别")
     units, failed, language = [], [], ""
+    note = ""
     started = time.perf_counter()
     # "auto" makes every window guess for itself, and a window that guesses wrong is
     # transcribed worse. The first window decides, the rest inherit it.
@@ -433,16 +606,21 @@ def recognize_windows(runner, voices, audio, windows, requested_language, cancel
             if cancelled.is_set():
                 raise VoiceError("CANCELLED", "识别已取消")
             staged = Path(folder) / f"piece-{index:04d}.wav"
-            body, detected, local = "", "", []
+            body, detected, local, align_error = "", "", [], ""
             try:
                 segments.cut(audio, window["start"], window["end"], staged)
                 payload = runner.transcribe(voices, staged, voice, cancelled)
                 body = str(payload.get("text") or "").strip()
                 detected = alignment_language(requested_language, payload.get("language")) or ""
                 # The alignment reads the staged file, so it has to happen before the
-                # cleanup below deletes it.
-                if body and detected:
-                    local = extract_units(runner.align(voices, staged, body, detected, cancelled))
+                # cleanup below deletes it. A failed alignment still keeps the text.
+                if align and body and detected and detected in ALIGN_LANGUAGES:
+                    try:
+                        local = extract_units(runner.align(voices, staged, body, detected, cancelled))
+                    except Exception as exc:
+                        if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
+                            raise
+                        align_error = str(exc)[:300]
             except Exception as exc:
                 if cancelled.is_set() or isinstance(exc, VoiceError) and exc.code == "CANCELLED":
                     raise
@@ -462,7 +640,16 @@ def recognize_windows(runner, voices, audio, windows, requested_language, cancel
                          for word, start, end in local]
             else:
                 local = estimate_units(body, window["start"], window["end"])
-                failed.append(index)
+                if align:
+                    failed.append(index)
+                    if align_error:
+                        note = note or align_error
+                    elif not detected:
+                        note = note or "引擎未返回语言"
+                    elif detected not in ALIGN_LANGUAGES:
+                        note = note or f"对齐器不支持语言 {detected}"
+                    else:
+                        note = note or "对齐器没有返回时间点"
             if units and _first_word(local[0][0]) and _first_word(local[0][0]) == _last_word(units[-1][0]):
                 # Same word on both sides of the cut: it was spoken once.
                 local = local[1:]
@@ -474,8 +661,13 @@ def recognize_windows(runner, voices, audio, windows, requested_language, cancel
                 units[-1] = (word + (" " if " " in body else ""), start, end)
     text = "".join(word for word, _, _ in units).strip()
     wall_ms = (time.perf_counter() - started) * 1000
+    if not align:
+        return (text, units,
+                "未安装强制对齐器，每行时间按标点估算；安装 Qwen3 对齐器后可精确到词。",
+                language, wall_ms)
     if failed:
-        note = f"{len(failed)}/{len(windows)} 个片段未能精确对齐，这些片段按其时间范围估算"
+        note = f"{len(failed)}/{len(windows)} 个片段未能精确对齐，这些片段按其时间范围估算" \
+               + (f"：{note}" if note else "")
         return text, units, note, language, wall_ms
     return text, units, "", language, wall_ms
 
@@ -503,8 +695,3 @@ def _family_of(path, fallback):
         return _read_package(str(path), stat.st_size, stat.st_mtime_ns).get("family") or fallback
     except Exception:
         return fallback
-
-
-LANGUAGE_CHOICES = [("自动判断", "auto"), ("中文", "zh"), ("英语", "en"), ("粤语", "yue"), ("日语", "ja"),
-                    ("韩语", "ko"), ("德语", "de"), ("法语", "fr"), ("西班牙语", "es"), ("俄语", "ru"),
-                    ("葡萄牙语", "pt"), ("意大利语", "it")]

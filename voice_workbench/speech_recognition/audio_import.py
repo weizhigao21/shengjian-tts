@@ -38,7 +38,7 @@ def import_wave(source, target, cancelled=None, video=False):
                 deadline = time.monotonic() + seconds
                 while True:
                     if cancelled is not None and cancelled.is_set():
-                        raise VoiceError("SERVICE_STOPPING", "服务正在停止，音频导入已取消", stage="导入音频")
+                        raise VoiceError("SERVICE_STOPPING", "音频导入已取消", stage="导入音频")
                     try:
                         _, error = process.communicate(timeout=.25)
                         break

@@ -440,6 +440,8 @@ def test_creation_cards_wrap_three_per_row(window):
         assert placed["文章"] == (0, 0)
         assert placed["音频编辑"] == (0, 2)
         assert placed["语音识别"] == (1, 0)
-        assert placed["边剪边配"] == (1, 1)
+        assert placed["批量识别"] == (1, 1)
+        assert placed["边剪边配"] == (1, 2)
+        assert placed["继续当前作品"] == (2, 0)
     finally:
         window.creation_choices = keep

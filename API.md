@@ -36,7 +36,7 @@
 | `POST /jobs/draft`、`PATCH /jobs/{id}/document` | 创建作品、保存标题与草稿 |
 | `POST /jobs`、`POST /jobs/{id}/generate` | 提交生成、向作品追加批次，返回 202 |
 | `GET /jobs`、`GET /jobs/{id}` | 普通作品列表、片段进度与错误 |
-| `GET /recent-works` | 最近 100 个文章、对话、音频编辑和识别任务的只读摘要，按创建时间倒序 |
+| `GET /recent-works` | 最近 100 个文章、对话、音频编辑、识别和批量识别任务的只读摘要，按创建时间倒序 |
 | `DELETE /jobs/{id}`、`POST /jobs/{id}/restore`、`PATCH /jobs/{id}` | 删除、恢复、重命名作品 |
 | `POST /jobs/{id}/retry`、`POST /jobs/{id}/cancel` | 重试失败片段、取消生成 |
 | `POST /jobs/{id}/generations/{generation}/cancel` | 取消指定批次 |
@@ -52,9 +52,23 @@
 | `GET /recognition/options`、`POST /recognition/selection` | 识别可用的 ASR / 对齐器模型、引擎与语言；保存默认选择 |
 | `GET /recognition/sessions`、`POST /recognition/sessions` | 识别记录列表、导入音频或视频并开始识别（返回 201） |
 | `GET /recognition/sessions/{id}`、`PATCH /recognition/sessions/{id}` | 识别状态、文本与分行；保存名称 |
+| `PATCH /recognition/sessions/{id}/lines` | 修正字幕行文本（不改时间码；旧译文会被清除） |
 | `POST /recognition/sessions/{id}/retry`、`POST /recognition/sessions/{id}/cancel` | 重新识别、取消当前识别 |
 | `DELETE /recognition/sessions/{id}` | 删除识别记录及其音频副本 |
 | `GET /recognition/audio/{filename}` | 读取管理目录内的识别音频 |
+| `GET /recognition/batches`、`POST /recognition/batches` | 批量识别记录列表、创建并启动队列（返回 201） |
+| `GET /recognition/batches/{id}`、`DELETE /recognition/batches/{id}` | 批量队列状态与每项进度、删除批次及其子会话和音频副本 |
+| `POST /recognition/batches/{id}/cancel`、`POST /recognition/batches/{id}/retry` | 停止队列、继续未完成项 |
+| `POST /recognition/sessions/{id}/translation` | 翻译该条识别结果（同步返回译文） |
+| `GET /translation/options`、`POST /translation/settings` | 翻译提供方、语言与 API 设置 |
+| `GET /translation/terms`、`POST /translation/terms` | 查询术语、新增术语（返回 201） |
+| `PATCH /translation/terms/{id}`、`DELETE /translation/terms/{id}` | 修改术语、软删除术语 |
+| `GET /translation/memory`、`POST /translation/memory` | 查询翻译记忆、手动新增记忆（返回 201） |
+| `PATCH /translation/memory/{id}`、`DELETE /translation/memory/{id}` | 修改记忆译文/质量/启用状态、软删除翻译记忆 |
+| `POST /translation/agent/translate` | Agent 翻译某条识别记录，返回译文和运行 trace |
+| `POST /translation/agent/chat` | 用自然语言调用受控术语/记忆工具 |
+| `POST /translation/sessions/{id}/apply` | 写回外部 Agent 自己模型产出的完整译文 |
+| `GET /translation/agent/runs`、`GET /translation/agent/runs/{id}` | 查询 Agent 运行记录与单次 trace |
 | `GET /models`、`POST /models/import` | 模型目录、下载状态、导入 GGUF |
 | `POST /models/scan` | 后台扫描当前引擎声明及官方 GGUF 目录，返回 202；使用 `source` 字段 |
 | `POST /models/{id}/download`、`POST /models/{id}/pause`、`POST /models/{id}/remove` | 下载、暂停、移除模型 |
@@ -98,7 +112,7 @@ v0.7.51 起，`POST /models/runtime/download` 和 `/models/runtime/upgrade` 可�
 
 ## 语音识别
 
-侧栏使用 `GET /recent-works` 汇总各模式。文章 / 对话保留原作品 ID；音频编辑与识别摘要分别使用 `audio:<id>`、`recognition:<id>` 作为列表 ID，并通过 `source_id` 返回原 ID、`task_type` 返回模式。外部任务的详情仍从 `/audio-editor/projects/{source_id}` 或 `/recognition/sessions/{source_id}` 读取。汇总只读现有数据库，不迁移或合并数据库，不返回工作流临时记录；原 `/jobs` 结构不变。
+侧栏使用 `GET /recent-works` 汇总各模式。文章 / 对话保留原作品 ID；音频编辑、识别与批量识别摘要分别使用 `audio:<id>`、`recognition:<id>`、`recognition_batch:<id>` 作为列表 ID，并通过 `source_id` 返回原 ID、`task_type` 返回模式。已有批次记录的子会话不会再作为独立 `recognition` 行返回；批次记录的 `completed` / `total` 按条目状态统计。外部任务的详情仍从 `/audio-editor/projects/{source_id}`、`/recognition/sessions/{source_id}` 或 `/recognition/batches/{source_id}` 读取。汇总只读现有数据库，不迁移或合并数据库，不返回工作流临时记录；原 `/jobs` 结构不变。
 
 识别复用统一引擎：`GET /recognition/options` 按引擎的 `model_specs` 任务声明把已安装模型分为 `asr` 与 `align` 两组，并返回 `runtime`、`selection`、`languages` 和当前是否 `active`。`POST /recognition/selection` 的全部字段可选，只覆盖传入项，`asr_model` / `align_model` 已不存在的路径会被剔除。
 
@@ -110,11 +124,25 @@ v0.7.51 起，`POST /models/runtime/download` 和 `/models/runtime/upgrade` 可�
 }
 ```
 
-`POST /recognition/sessions` 复制音频到数据目录并返回 201 与会话 ID；未选择或缺少 ASR 模型时返回 400，格式或路径无效时返回 400。会话状态为 `queued` / `running` / `done` / `failed` / `cancelled`，`done` 时包含 `text`、`lines`、`duration`、`warning`、`recognized_language`、`timing` 和 `audio_url`；`source_kind` 记录导入的是 `audio` 还是 `video`。
+`POST /recognition/sessions` 复制音频到数据目录并返回 201 与会话 ID；未选择或缺少 ASR 模型时返回 400，格式或路径无效时返回 400。会话状态为 `queued` / `running` / `done` / `failed` / `cancelled`，`done` 时包含 `text`、`lines`、`duration`、`warning`、`recognized_language`、`timing` 和 `audio_url`；`source_kind` 记录导入的是 `audio` 还是 `video`。批量识别的每个文件是一条独立会话，摘要和详情都带 `batch_id` / `batch_index`；`GET /recognition/sessions` 还返回 `line_count`、`translated_lines` 和 `target`，便于外部 Agent 找出未翻译的批次条目；`translated_lines` 只统计非空译文。`PATCH /recognition/sessions/{id}/lines` 接受 `corrections` 数组（每项 `index`、`text`、可选 `reason`），只改字幕文本并保留 `start` / `end`，同时刷新会话的 `text`；如果已有译文，会把 `translation` 置空，提示重新翻译。识别仍在进行时返回 400。
 
 `lines` 每项含 `index`（从 1 开始）、`start`、`end`（秒，相对音频开头）与 `text`，可直接用于点击播放；时间戳来自引擎的 16 kHz 采样帧号换算，分行按句末、从句、长度、时长与停顿综合判断。未安装强制对齐器时按标点估算每行时间，并通过 `warning` 说明。`language` 可取 `auto` 或 `recognition/options` 中给出的代码。
 
 识别与音频编辑共用管理器的推理互斥，`GET /health` 的 `recognition` 字段显示当前会话 ID；识别期间 `POST /engine/release` 和 `PUT /models/runtime` 返回 400。删除会话会同时删除该音频副本，重新识别沿用同一会话并覆盖上一次结果。详见[语音识别说明](docs/SPEECH_RECOGNITION.md)。
+
+`POST /recognition/batches` 接受 `paths`（1–200 个本机路径）、`language`、`format`（`srt` / `txt` / `srt+txt`，默认 `srt`）、可选 `name` 和 `dedupe`（默认 `true`）。创建时校验全部文件存在且格式受支持，随后在后台按顺序复用单文件识别流程；每项完成后把字幕写到该文件所在目录，同名字幕内容相同则复用、不同则另存为 `<文件名>.识别字幕.<ext>`。`dedupe` 开启时在写行前折叠连续重复词和相邻重复行，用来清理 ASR 在音乐、噪声上的解码循环；传 `false` 可保留原始输出。批量状态为 `queued` / `running` / `cancelling` / `done` / `cancelled` / `failed` / `interrupted`；`items` 每项含 `path`、`name`、`status`、`session_id`、`exported`（导出文件列表）、`export_error`、`error`、`hint`。批量运行期间单文件导入返回 400；停止后未处理项为 `cancelled`，可由 `/retry` 继续。删除批次会同时删除其子会话和音频副本；`/retry` 对仍有音频副本的失败项复用原会话，不重复解码源文件。
+
+`POST /recognition/sessions/{id}/translation` 接受可选的 `provider`（`api` / `local`）与 `target`。`api` 会把字幕按最多 20 行一批发往 OpenAI 兼容的 `/chat/completions`，要求返回等长 JSON 数组，结果写入会话的 `translation`（含 `target`、`provider`、`model`、`seconds` 与每行 `translated`），原 `lines` 不变；本地模型当前返回 400 并提示接口预留。`GET /translation/options` 的 `settings` 只暴露 `has_key`，不返回 API Key。
+
+`POST /translation/agent/translate` 的请求体为 `session_id`（必填）、可选 `target` / `provider` / `use_memory`（默认 `true`）。Agent 按启用术语和翻译记忆处理：术语按原文子串匹配，最多 100 条注入提示词；记忆按归一化原文与语言对精确命中，命中行不再请求模型；其余行分批翻译，并检查行数、术语和数字。成功返回 `{translation, run}`，`translation.agent` 含 `terms`、`memory_hits`、`issues`、`repaired` 和 `agent_run_id`；失败返回 400，`translation` 不覆盖旧结果，`run.status` 为 `failed`。
+
+`GET /translation/terms` 支持 `query`、`target`、`enabled_only`，以及分页参数 `limit`（默认 200，最大 500）和 `offset`（默认 0）；`POST /translation/terms` 接受 `source`、`target`、可选 `source_lang`、`target_lang`、`note`、`priority`（0–100）和 `preserve_metadata`。同一原文与语言对重复新增会更新译法，不产生重复行；传 `preserve_metadata=true` 时保留原有说明和优先级（桌面新增默认如此，避免只改译法却把备注清空）；`DELETE` 为软删除。`GET /translation/memory` 支持 `query`、`target`、`limit`、`offset`；`POST /translation/memory` 接受原文、译文、语言对、来源与质量，重复原文与语言对会更新译文；传 `preserve_metadata=true` 时保留原有来源信息（桌面手动新增默认如此）；`PATCH /translation/memory/{id}` 可改 `target`、`quality`（1 普通 / 2 确认）和 `enabled`，不改原文与来源；`DELETE` 为软删除。桌面端按每页 50 条加载，未传 `limit` 的 MCP 调用仍保持原来的 200 条上限。
+
+`POST /translation/agent/chat` 接受 `message`（必填）、可选 `session_id` 与 `target`，使用当前翻译 API 模型；模型必须支持 OpenAI 兼容的 `tools` / `tool_calls`，否则返回明确的 HTTP 错误，不会静默降级。可用工具包括 `search_terms`、`list_terms`、`add_term`、`update_term`、`disable_term`、`search_memory`、`add_memory`、`delete_memory`、`get_subtitle`；每次最多 5 轮、8 次工具调用，运行 trace 写入 `agent_runs`。API Key 不进入消息、trace 或响应。
+
+`POST /translation/sessions/{id}/apply` 接受 `target`、`provider`、`model` 和 `lines`（每项含原始 `index` 与 `translated`）。它用于外部 MCP Agent 用自己的模型额度翻译后回写：`lines` 必须覆盖原始字幕的每一个行号，不能重复、不能多行，有文字的行不能返回空译文；服务端保留原文与时间码，只写 `translation` 字段。缺行、重复或空译文返回 400，旧译文保持不变。成功返回 `{translation, run}`，`translation.agent.external` 为 `true`；通过术语和数字质检的行会写入本地翻译记忆，`translation.agent.memory_written` 返回写入行数。
+
+翻译目标语言在设置、Agent、术语、记忆和 `apply` 中统一归一：`zh-CN`、`zh_CN`、`zh-Hans`、`zh-TW` 都写成 `zh`，`en-US` 写成 `en`，`ja-JP` 写成 `ja`；不支持的语言仍返回 400 `TRANSLATION_TARGET_UNKNOWN`。
 
 语音识别导入时，PCM WAV 保存独立副本，其他支持格式转换为私有 PCM WAV。视频容器（MP4 / MKV / MOV / AVI / WEBM 等）只提取第一条音轨写成同样的私有 PCM WAV，原文件不改动；没有音轨的视频返回 400。推理引擎被配音、识别或 AI 编辑占用时拒绝新识别，返回 400，不留下等待记录或音频副本；重试被拒绝时保留原状态。成功提交固定本次模型与语言，取消旧版残留的等待记录会将其标记为已取消。
 

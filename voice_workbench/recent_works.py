@@ -1,15 +1,16 @@
 """Read-only sidebar summaries for every creation mode, including before boot."""
 from pathlib import Path
 from contextlib import closing
+import json
 import sqlite3
 
 from .naming import work_type
 from .store import Store
 
 WORK_NAMES = {"article": "文章", "dialogue": "对话", "audio": "音频编辑", "recognition": "语音识别",
-              "float": "边剪边配"}
+              "recognition_batch": "批量识别", "float": "边剪边配"}
 WORK_ICONS = {"article": "article", "dialogue": "dialogue", "audio": "audio", "recognition": "recognize",
-              "float": "float"}
+              "recognition_batch": "recognize", "float": "float"}
 # A float work is an ordinary job with segments, so it carries no mode of its own in
 # editor_state; the title the panel gives it is the mark that survives restarts.
 FLOAT_TITLE = "边剪边配"
@@ -28,10 +29,12 @@ def task_type(value):
     return work_type(value)
 
 
-def external_work(kind, identity, name, created, updated=None, status="done"):
+def external_work(kind, identity, name, created, updated=None, status="done", total=1, completed=None):
+    if completed is None:
+        completed = total if status == "done" else 0
     return {"id": kind + ":" + identity, "source_id": identity, "task_type": kind,
             "title": name, "display_title": name, "created": created, "updated": updated or created,
-            "status": status, "total": 1, "completed": int(status == "done")}
+            "status": status, "total": total, "completed": completed}
 
 
 def segment_audio_records(root, job_id, limit=200):
@@ -77,9 +80,13 @@ def read_recent(root, limit=100):
                         ORDER BY v.created DESC,v.rowid DESC LIMIT 1),'done') AS status
             FROM projects p ORDER BY p.created DESC LIMIT ?"""),
         ("recognition", root / "recognition/recognition.sqlite3", """
-            SELECT id,created,updated,json_extract(state,'$.name') AS name,
-                   json_extract(state,'$.status') AS status
-            FROM sessions ORDER BY created DESC LIMIT ?"""),
+            SELECT s.id,s.created,s.updated,json_extract(s.state,'$.name') AS name,
+                   json_extract(s.state,'$.status') AS status
+            FROM sessions s
+            WHERE COALESCE(json_extract(s.state,'$.batch_id'),'')=''
+               OR NOT EXISTS (SELECT 1 FROM batches b
+                              WHERE b.id=json_extract(s.state,'$.batch_id'))
+            ORDER BY s.created DESC LIMIT ?"""),
     )
     for kind, path, query in queries:
         if not path.is_file():
@@ -92,4 +99,25 @@ def read_recent(root, limit=100):
         except sqlite3.Error:
             # An unavailable independent mode must not hide the other saved works.
             continue
+    recognition = root / "recognition/recognition.sqlite3"
+    if recognition.is_file():
+        try:
+            with closing(sqlite3.connect(recognition.as_uri() + "?mode=ro", uri=True, timeout=.2)) as db:
+                db.row_factory = sqlite3.Row
+                for row in db.execute("SELECT id,created,updated,state FROM batches "
+                                      "ORDER BY created DESC LIMIT ?", (limit,)):
+                    state = json.loads(row["state"] or "{}")
+                    items = state.get("items") or []
+                    if not items:
+                        continue
+                    processed = sum(item.get("status") in ("done", "failed", "cancelled")
+                                    for item in items)
+                    result.append(external_work(
+                        "recognition_batch", row["id"],
+                        state.get("name") or f"批量识别 · {len(items)} 个文件",
+                        row["created"], row["updated"], state.get("status") or "queued",
+                        total=len(items), completed=processed))
+        except (sqlite3.Error, ValueError, TypeError):
+            # A malformed batch record must not hide the other saved works.
+            pass
     return sorted(result, key=lambda r: (r["created"], r["id"]), reverse=True)[:limit]

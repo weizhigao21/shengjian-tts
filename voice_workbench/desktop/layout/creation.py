@@ -81,8 +81,8 @@ def creation_home(window):
     layout.addSpacing(6)
     layout.addWidget(label("选择一种创作方式，声音和作品都留在本机。", "muted"))
     layout.addSpacing(24)
-    # Three per row: five cards squeezed into one line cut every description to
-    # an ellipsis. The sixth card is the way back into the work already open.
+    # Three per row, so every card keeps a readable description, with "继续当前作品"
+    # taking the remaining slot on the last row.
     options = QGridLayout()
     options.setHorizontalSpacing(16)
     options.setVerticalSpacing(16)
@@ -92,6 +92,7 @@ def creation_home(window):
         ("dialogue", "对话", "dialogue", "多角色对白\n输入 @ 选择音色，每段独立编辑"),
         ("audio", "音频编辑", "audio", "裁剪、拼接与音量调整\nVevo2 换声和台词修改"),
         ("recognition", "语音识别", "recognize", "拖入音频自动识别文字\n点击每行播放对应片段"),
+        ("recognition_batch", "批量识别", "recognize", "一次拖入多个音频或视频\n一个批次统一管理字幕与翻译"),
         ("float", "边剪边配", "float", "悬浮小窗常驻\n打字即生成，拖进时间线"),
     )
     for position, (mode, name, symbol, description) in enumerate(entries):

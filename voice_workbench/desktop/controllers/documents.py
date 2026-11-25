@@ -51,6 +51,8 @@ class DocumentController:
                 tooltip = f"{category} · {display_title(value)}\n创建时间：{stamp}\n{status} · {value['completed']}/{value['total']}"
                 if task_type(value) == "float":
                     tooltip += "\n点击这一行，在小窗里接着配音"
+                elif task_type(value) == "recognition_batch":
+                    tooltip += "\n批次 ID：" + value.get("source_id", "") + "\n点击这一行，打开批次里的全部字幕"
                 elif task_type(value) not in ("audio", "recognition"):
                     tooltip += "\n把这一行拖到其他程序，可带走该作品最新生成的音频"
                 for col, text in enumerate((display_title(value), status, f"{value['completed']}/{value['total']}")):
@@ -83,12 +85,18 @@ class DocumentController:
                 return "recognition:" + recognition.session["id"]
         if mode == 2 and self.audio_editor.controller.project:
             return "audio:" + self.audio_editor.controller.project["id"]
+        if mode == 4 and self.batch_recognition.batch_id:
+            return "recognition_batch:" + self.batch_recognition.batch_id
         return self.selected_job
 
     def open_other_recent(self, value):
         if value.get("pending_import"):
             return
         kind, identity = task_type(value), value["source_id"]
+        if kind == "recognition_batch":
+            self.batch_recognition.pause()
+            self.open_batch_recognition(identity)
+            return
         if kind == "recognition":
             controller = self.recognition.controller
             if not controller.importing or not controller.importing.get("preview", True):
@@ -137,7 +145,7 @@ class DocumentController:
                 # it into the article editor and take the page away from the timeline.
                 self.open_float_work(self.jobs_table.item(row, 0).data(256))
                 return
-            if task_type(value) in ("audio", "recognition"):
+            if task_type(value) in ("audio", "recognition", "recognition_batch"):
                 self.open_other_recent(value)
                 return
             self.recent_sequence = getattr(self, "recent_sequence", 0) + 1
@@ -209,7 +217,7 @@ class DocumentController:
             menu.addAction(icon("float"), "在小窗里打开", lambda: self.open_float_work(value["id"]))
         else:
             menu.addAction(icon("pen"), "打开任务", open_task)
-        if task_type(value) in ("audio", "recognition"):
+        if task_type(value) in ("audio", "recognition", "recognition_batch"):
             return menu
         if not floating:
             menu.addAction(icon("pen"), "重命名", lambda: self.rename_job(value))
@@ -224,7 +232,7 @@ class DocumentController:
         if not 0 <= row < len(self.jobs):
             return []
         value = self.jobs[row]
-        if task_type(value) in ("audio", "recognition"):
+        if task_type(value) in ("audio", "recognition", "recognition_batch"):
             return []
         folder = (self.data_dir / "audio").resolve()
         records = []
@@ -355,11 +363,13 @@ class DocumentController:
         self.tabs.setCurrentIndex(index)
 
     def sync_navigation(self, index):
-        self.transport.setVisible(index != 0 or self.creation_pages.currentIndex() not in (2, 3))
+        self.transport.setVisible(index != 0 or self.creation_pages.currentIndex() not in (2, 3, 4))
         if index != 0:
             self.audio_editor.controller.save()
             self.audio_editor.controller.stop()
             self.recognition.controller.pause()
+            if hasattr(self, "batch_recognition"):
+                self.batch_recognition.pause()
         names = ("语音创作", "声音库", "工作流联动", "设置")
         self.page_title.setText("工作台  /  " + names[index])
         for i, control in enumerate(self.nav_buttons):
@@ -371,6 +381,8 @@ class DocumentController:
             self.settings.refresh()
         else:
             self.settings.player.pause()
+            if index == 0 and self.creation_pages.currentIndex() == 4 and hasattr(self, "batch_recognition"):
+                self.batch_recognition.resume()
 
     def new_document(self):
         if getattr(self, "submitting", False):

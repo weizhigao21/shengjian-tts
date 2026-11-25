@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -47,9 +48,10 @@ class ToolError(Exception):
 
 
 def _call(method, path, **kwargs):
+    timeout = kwargs.pop("timeout", 60.0)
     try:
         # trust_env=False：本机请求绝不能走系统代理，否则 HTTP_PROXY 会把它变成 502。
-        with httpx.Client(base_url=API, timeout=httpx.Timeout(60.0, connect=3.0), trust_env=False) as client:
+        with httpx.Client(base_url=API, timeout=httpx.Timeout(timeout, connect=3.0), trust_env=False) as client:
             response = client.request(method, path, **kwargs)
     except httpx.ConnectError:
         raise ToolError(
@@ -334,18 +336,354 @@ def tool_transcribe(arguments):
     raise ToolError("识别仍在进行，会话 ID 是 " + identity + "，稍后可以在声笺里查看结果。")
 
 
+# ---------------------------------------------------------------- 翻译知识库
+
+
+def _revision(lines):
+    """Stable hash of the source lines: text or line order changes invalidate a read."""
+    payload = [[line.get("index"), line.get("text") or ""] for line in lines]
+    digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def _translated_count(translation):
+    return sum(1 for line in (translation or {}).get("lines") or []
+               if str(line.get("translated") or "").strip())
+
+
+def _translation_meta(translation):
+    translation = translation or {}
+    agent = translation.get("agent") or {}
+    return {"target": translation.get("target") or "",
+            "provider": translation.get("provider") or "",
+            "model": translation.get("model") or "",
+            "run_id": translation.get("agent_run_id") or agent.get("run_id") or ""}
+
+
+def _translation_summary(identity, translation, target=""):
+    """MCP 只回写回执，不回显整段原文和译文；需要全文时再读一次。"""
+    translation = translation or {}
+    lines = translation.get("lines") or []
+    agent = translation.get("agent") or {}
+    return {"session_id": identity,
+            "target": translation.get("target") or target or "",
+            "line_count": len(lines),
+            "translated_lines": _translated_count(translation),
+            "revision": _revision(lines),
+            "run_id": translation.get("agent_run_id") or agent.get("run_id") or "",
+            "issues": len(agent.get("issues") or []),
+            "memory_written": agent.get("memory_written", 0)}
+
+
+def _bounded_int(arguments, name, default, low, high):
+    try:
+        value = int(arguments.get(name) or default)
+    except (TypeError, ValueError):
+        raise ToolError(name + " 必须是整数。") from None
+    return max(low, min(high, value))
+
+
+
+def tool_list_translation_sessions(arguments):
+    records = _call("GET", "/recognition/sessions")
+    batch_id = str(arguments.get("batch_id") or "").strip()
+    status = str(arguments.get("status") or "").strip()
+    if batch_id:
+        records = [record for record in records if str(record.get("batch_id") or "") == batch_id]
+    if status:
+        records = [record for record in records if str(record.get("status") or "") == status]
+    total = len(records)
+    limit = _bounded_int(arguments, "limit", 20, 1, 200)
+    fields = ("id", "name", "status", "batch_id", "batch_index",
+              "line_count", "translated_lines", "target")
+    sessions = [{key: record.get(key) for key in fields} for record in records[:limit]]
+    return {"count": len(sessions), "total": total, "has_more": total > limit,
+            "batch_id": batch_id or None, "sessions": sessions}
+
+
+def tool_get_subtitle(arguments):
+    identity = str(arguments.get("session_id") or "").strip()
+    if not identity:
+        raise ToolError("session_id 不能为空。")
+    record = _call("GET", "/recognition/sessions/" + identity)
+    state = record.get("state") or {}
+    lines = state.get("lines") or []
+    translation = state.get("translation") or {}
+    translated = {line.get("index"): line.get("translated") for line in translation.get("lines") or []}
+    translated_lines = _translated_count(translation)
+    revision = _revision(lines)
+    known = str(arguments.get("known_revision") or "").strip()
+    if known and known == revision:
+        return {"session_id": identity, "revision": revision, "unchanged": True,
+                "line_count": len(lines), "translated_lines": translated_lines,
+                "target": translation.get("target") or ""}
+
+    cursor = _bounded_int(arguments, "cursor", 0, 0, len(lines))
+    limit = _bounded_int(arguments, "limit", 50, 1, 200)
+    page = lines[cursor:cursor + limit]
+    end = cursor + len(page)
+    fmt = str(arguments.get("format") or "compact").strip().lower()
+    if fmt not in ("compact", "objects"):
+        raise ToolError('format 只支持 "compact" 或 "objects"。')
+    include_timecodes = bool(arguments.get("include_timecodes", False))
+    include_translation = arguments.get("include_translation")
+    if include_translation is None:
+        # 旧客户端显式用 objects 时保留 0.9.8 的合并译文形状。
+        include_translation = fmt == "objects"
+    include_translation = bool(include_translation)
+
+    result = {
+        "session_id": identity,
+        "name": state.get("name"),
+        "status": state.get("status"),
+        "language": state.get("recognized_language"),
+        "duration_seconds": state.get("duration"),
+        "batch_id": state.get("batch_id"),
+        "batch_index": state.get("batch_index"),
+        "line_count": len(lines),
+        "translated_lines": translated_lines,
+        "target": translation.get("target") or "",
+        "revision": revision,
+        "cursor": cursor,
+        "next_cursor": end if end < len(lines) else None,
+        "done": end >= len(lines),
+        "has_translation": bool(translation),
+    }
+    if state.get("warning"):
+        result["warning"] = state["warning"]
+    if fmt == "compact":
+        columns = ["i"]
+        if include_timecodes:
+            columns += ["start", "end"]
+        columns.append("text")
+        if include_translation:
+            columns.append("translated")
+        rows = []
+        for line in page:
+            row = [line.get("index")]
+            if include_timecodes:
+                row += [line.get("start"), line.get("end")]
+            row.append(line.get("text") or "")
+            if include_translation:
+                row.append(translated.get(line.get("index")))
+            rows.append(row)
+        result["columns"] = columns
+        result["lines"] = rows
+        if include_translation:
+            result["translation_meta"] = _translation_meta(translation)
+    else:
+        rows = []
+        for line in page:
+            item = {"index": line.get("index"), "start": line.get("start"),
+                    "end": line.get("end"), "text": line.get("text")}
+            if include_translation:
+                item["translated"] = translated.get(line.get("index"))
+            rows.append(item)
+        result["lines"] = rows
+        if include_translation:
+            result["translation"] = translation
+    return result
+
+
+
+def tool_correct_subtitle(arguments):
+    identity = str(arguments.get("session_id") or "").strip()
+    if not identity:
+        raise ToolError("session_id 不能为空。")
+    corrections = arguments.get("corrections") or []
+    if not isinstance(corrections, list) or not corrections:
+        raise ToolError("corrections 不能为空，每项需要 index 和 text。")
+    clean = []
+    for item in corrections:
+        if not isinstance(item, dict):
+            raise ToolError("corrections 的每一项都必须是对象。")
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            raise ToolError("corrections[].index 必须是整数。") from None
+        text = " ".join(str(item.get("text") or "").split())
+        if not text:
+            raise ToolError("corrections[].text 不能为空。")
+        clean.append({"index": index, "text": text,
+                      "reason": str(item.get("reason") or "")[:200]})
+    return _call("PATCH", "/recognition/sessions/" + identity + "/lines",
+                 json={"corrections": clean})
+
+
+def tool_list_translation_terms(arguments):
+    params = {"enabled_only": bool(arguments.get("enabled_only", True))}
+    if arguments.get("query"):
+        params["query"] = str(arguments["query"])
+    if arguments.get("target_lang"):
+        params["target"] = str(arguments["target_lang"])
+    return {"terms": _call("GET", "/translation/terms", params=params)}
+
+
+def tool_add_translation_term(arguments):
+    source = str(arguments.get("source") or "").strip()
+    translation = str(arguments.get("translation") or "").strip()
+    if not source or not translation:
+        raise ToolError("source 和 translation 都不能为空。")
+    body = {"source": source, "target": translation,
+            "source_lang": str(arguments.get("source_lang") or ""),
+            "target_lang": str(arguments.get("target_lang") or ""),
+            "note": str(arguments.get("note") or ""),
+            "priority": int(arguments.get("priority") or 0)}
+    return {"term": _call("POST", "/translation/terms", json=body)}
+
+
+def tool_update_translation_term(arguments):
+    identity = str(arguments.get("term_id") or "").strip()
+    if not identity:
+        raise ToolError("term_id 不能为空。")
+    body = {}
+    if "translation" in arguments:
+        body["target"] = str(arguments["translation"] or "")
+    if "note" in arguments:
+        body["note"] = str(arguments["note"] or "")
+    if "priority" in arguments:
+        body["priority"] = int(arguments["priority"])
+    if "enabled" in arguments:
+        body["enabled"] = bool(arguments["enabled"])
+    if not body:
+        raise ToolError("至少提供 translation、note、priority 或 enabled 中的一项。")
+    return {"term": _call("PATCH", "/translation/terms/" + identity, json=body)}
+
+
+def tool_disable_translation_term(arguments):
+    identity = str(arguments.get("term_id") or "").strip()
+    if not identity:
+        raise ToolError("term_id 不能为空。")
+    return {"term": _call("DELETE", "/translation/terms/" + identity)}
+
+
+def tool_list_translation_memory(arguments):
+    params = {"enabled_only": bool(arguments.get("enabled_only", True))}
+    if arguments.get("query"):
+        params["query"] = str(arguments["query"])
+    if arguments.get("target_lang"):
+        params["target"] = str(arguments["target_lang"])
+    return {"memories": _call("GET", "/translation/memory", params=params)}
+
+
+def tool_add_translation_memory(arguments):
+    source = str(arguments.get("source") or "").strip()
+    translation = str(arguments.get("translation") or "").strip()
+    if not source or not translation:
+        raise ToolError("source 和 translation 都不能为空。")
+    body = {"source": source, "target": translation,
+            "source_lang": str(arguments.get("source_lang") or ""),
+            "target_lang": str(arguments.get("target_lang") or ""),
+            "quality": max(1, min(2, int(arguments.get("quality") or 1)))}
+    return {"memory": _call("POST", "/translation/memory", json=body)}
+
+
+def tool_update_translation_memory(arguments):
+    identity = str(arguments.get("memory_id") or "").strip()
+    if not identity:
+        raise ToolError("memory_id 不能为空。")
+    body = {}
+    if "translation" in arguments:
+        body["target"] = str(arguments["translation"] or "").strip()
+        if not body["target"]:
+            raise ToolError("translation 不能为空。")
+    if "quality" in arguments:
+        body["quality"] = max(1, min(2, int(arguments["quality"])))
+    if "enabled" in arguments:
+        body["enabled"] = bool(arguments["enabled"])
+    if not body:
+        raise ToolError("至少提供 translation、quality 或 enabled 中的一项。")
+    return {"memory": _call("PATCH", "/translation/memory/" + identity, json=body)}
+
+
+def tool_delete_translation_memory(arguments):
+    identity = str(arguments.get("memory_id") or "").strip()
+    if not identity:
+        raise ToolError("memory_id 不能为空。")
+    return {"memory": _call("DELETE", "/translation/memory/" + identity)}
+
+
+def tool_translate_subtitle(arguments):
+    identity = str(arguments.get("session_id") or "").strip()
+    if not identity:
+        raise ToolError("session_id 不能为空。")
+    body = {"session_id": identity, "use_memory": bool(arguments.get("use_memory", True))}
+    if arguments.get("target_lang"):
+        body["target"] = str(arguments["target_lang"])
+    if arguments.get("provider"):
+        body["provider"] = str(arguments["provider"])
+    # Agent 翻译可能逐行重试，给本机 HTTP 留出比普通生成更长的等待。
+    response = _call("POST", "/translation/agent/translate", json=body, timeout=600.0)
+    summary = _translation_summary(identity, response.get("translation") or {},
+                                   body.get("target") or "")
+    run = response.get("run") or {}
+    summary["status"] = run.get("status") or ""
+    summary["run_id"] = run.get("id") or summary["run_id"]
+    if arguments.get("include_translation"):
+        summary["translation"] = response.get("translation") or {}
+        summary["run"] = run
+    return summary
+
+
+def tool_save_translation(arguments):
+    identity = str(arguments.get("session_id") or "").strip()
+    if not identity:
+        raise ToolError("session_id 不能为空。")
+    target = str(arguments.get("target_lang") or "").strip()
+    if not target:
+        raise ToolError("target_lang 不能为空，例如 zh、en。")
+    lines = arguments.get("lines") or []
+    if not isinstance(lines, list) or not lines:
+        raise ToolError("lines 不能为空，每项需要 index 和 translated。")
+    clean = []
+    for item in lines:
+        if not isinstance(item, dict):
+            raise ToolError("lines 的每一项都必须是对象。")
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            raise ToolError("lines[].index 必须是整数。") from None
+        clean.append({"index": index, "translated": str(item.get("translated") or "")})
+    body = {"target": target,
+            "provider": str(arguments.get("provider") or "external"),
+            "model": str(arguments.get("model") or ""),
+            "lines": clean}
+    response = _call("POST", "/translation/sessions/" + identity + "/apply", json=body)
+    summary = _translation_summary(identity, response.get("translation") or {}, target)
+    summary["run_id"] = (response.get("run") or {}).get("id") or summary["run_id"]
+    if arguments.get("include_translation"):
+        summary["translation"] = response.get("translation") or {}
+        summary["run"] = response.get("run") or {}
+    return summary
+
+
+def tool_list_translation_runs(arguments):
+    params = {}
+    if arguments.get("session_id"):
+        params["session_id"] = str(arguments["session_id"])
+    return {"runs": _call("GET", "/translation/agent/runs", params=params)}
+
+
+def tool_get_translation_run(arguments):
+    identity = str(arguments.get("run_id") or "").strip()
+    if not identity:
+        raise ToolError("run_id 不能为空。")
+    return {"run": _call("GET", "/translation/agent/runs/" + identity)}
+
+
 # ---------------------------------------------------------------- 工具清单
 
 TOOLS = [
     {
         "name": "list_voices",
-        "description": "列出声笺声音库里可用的音色预设。生成语音前先调用它拿到 voice_id；不带 voice_id 调用 speak 时会用列表里的第一个。",
+        "description": "列出可用音色预设。生成前先取 voice_id；省略时用第一个。",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         "run": tool_list_voices,
     },
     {
         "name": "speak",
-        "description": "把一段文字转成本机 WAV 音频，返回音频文件的绝对路径。适合念台词、旁白、短段落。文字里的 markdown 会被自动清理，长文本按句自动分段，返回多条音频。",
+        "description": "把文字转成本机 WAV，返回绝对路径。自动清 markdown、按句分段。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -362,7 +700,7 @@ TOOLS = [
     },
     {
         "name": "speak_dialogue",
-        "description": "生成多角色对白：每句台词用各自的音色，返回按顺序排列的音频路径。适合广播剧、播客、有声书片段。",
+        "description": "多角色对白：每句用各自音色，返回按顺序的音频路径。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -388,7 +726,7 @@ TOOLS = [
     },
     {
         "name": "get_job",
-        "description": "查询一次生成任务的进度和已完成的音频路径。speak 返回 status=generating 时用它接着查。",
+        "description": "查生成任务进度；speak 返回 generating 时继续查。",
         "inputSchema": {
             "type": "object",
             "properties": {"job_id": {"type": "string", "description": "speak 返回的 job_id。"}},
@@ -398,7 +736,7 @@ TOOLS = [
     },
     {
         "name": "transcribe",
-        "description": "把本机音频或视频文件转成文字，并给出每行的起止时间（秒）；视频只读取音轨，原文件不改动。需要声笺里已下载识别模型。",
+        "description": "把本机音频/视频转文字，返回逐行起止秒；视频只读音轨，不改原文件。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -408,6 +746,233 @@ TOOLS = [
             "required": ["path"],
         },
         "run": tool_transcribe,
+    },
+    {
+        "name": "list_translation_sessions",
+        "description": "列出识别记录摘要，先拿 session_id。可按 batch_id/status 筛选；默认 20 条。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最多返回多少条，默认 20，最大 200。"},
+                "batch_id": {"type": "string", "description": "只返回某个批量识别批次中的文件。"},
+                "status": {"type": "string", "description": "按识别状态筛选，如 done、running、failed。"},
+            },
+            "additionalProperties": False,
+        },
+        "run": tool_list_translation_sessions,
+    },
+    {
+        "name": "get_subtitle",
+        "description": "按块读取字幕：默认 compact、不含时间码；known_revision 未变时只回 unchanged。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "识别会话 ID，来自 list_translation_sessions。"},
+                "cursor": {"type": "integer", "description": "起始行位置，默认 0。"},
+                "limit": {"type": "integer", "description": "本次最多返回多少行，默认 50，最大 200。"},
+                "include_timecodes": {"type": "boolean", "description": "是否返回 start/end，默认 false。"},
+                "include_translation": {"type": "boolean", "description": "是否返回已有译文；objects 模式默认 true。"},
+                "format": {"type": "string", "enum": ["compact", "objects"],
+                           "description": "compact 返回 columns+数组（默认）；objects 兼容旧客户端。"},
+                "known_revision": {"type": "string", "description": "上次读取的 revision；未变只回 unchanged。"},
+            },
+            "required": ["session_id"],
+        },
+        "run": tool_get_subtitle,
+    },
+    {
+        "name": "correct_subtitle",
+        "description": "修正字幕行文本，只改文字不改时间码；旧译文会被清除，需重新翻译。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "识别会话 ID。"},
+                "corrections": {"type": "array", "minItems": 1, "maxItems": 100,
+                                "items": {"type": "object", "properties": {
+                                    "index": {"type": "integer", "description": "字幕行号，来自 get_subtitle。"},
+                                    "text": {"type": "string", "description": "修正后的整行文本。"},
+                                    "reason": {"type": "string", "description": "修正理由，简短。"}},
+                                    "required": ["index", "text"]}},
+            },
+            "required": ["session_id", "corrections"],
+        },
+        "run": tool_correct_subtitle,
+    },
+    {
+        "name": "list_translation_terms",
+        "description": "查术语库；翻译前先查，固定译法优先。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "按原文或译文搜索。"},
+                "target_lang": {"type": "string", "description": "目标语言筛选，如 zh、en。"},
+                "enabled_only": {"type": "boolean", "description": "只返回启用词条，默认 true。"},
+            },
+            "additionalProperties": False,
+        },
+        "run": tool_list_translation_terms,
+    },
+    {
+        "name": "add_translation_term",
+        "description": "新增或更新固定译法；同原文+语言对会更新，不重复建。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "原文术语。"},
+                "translation": {"type": "string", "description": "固定译文。"},
+                "source_lang": {"type": "string", "description": "源语言代码，可留空。"},
+                "target_lang": {"type": "string", "description": "目标语言代码，如 zh；留空表示所有目标。"},
+                "note": {"type": "string", "description": "使用说明。"},
+                "priority": {"type": "integer", "description": "优先级 0–100，越大越优先。"},
+            },
+            "required": ["source", "translation"],
+        },
+        "run": tool_add_translation_term,
+    },
+    {
+        "name": "update_translation_term",
+        "description": "修改现有术语的译文、说明、优先级或启用状态。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "term_id": {"type": "string", "description": "术语 ID，来自 list_translation_terms。"},
+                "translation": {"type": "string", "description": "新的固定译文。"},
+                "note": {"type": "string", "description": "新的说明。"},
+                "priority": {"type": "integer", "description": "优先级 0–100。"},
+                "enabled": {"type": "boolean", "description": "是否启用。"},
+            },
+            "required": ["term_id"],
+        },
+        "run": tool_update_translation_term,
+    },
+    {
+        "name": "disable_translation_term",
+        "description": "停用术语（软删除）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"term_id": {"type": "string", "description": "术语 ID。"}},
+            "required": ["term_id"],
+        },
+        "run": tool_disable_translation_term,
+    },
+    {
+        "name": "list_translation_memory",
+        "description": "查翻译记忆；精确命中可直接复用译文。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "按原文或译文搜索。"},
+                "target_lang": {"type": "string", "description": "目标语言筛选。"},
+                "enabled_only": {"type": "boolean", "description": "只返回启用记忆，默认 true。"},
+            },
+            "additionalProperties": False,
+        },
+        "run": tool_list_translation_memory,
+    },
+    {
+        "name": "add_translation_memory",
+        "description": "写入或更新翻译记忆；同归一原文+语言对会更新。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "原文。"},
+                "translation": {"type": "string", "description": "译文。"},
+                "source_lang": {"type": "string", "description": "源语言代码。"},
+                "target_lang": {"type": "string", "description": "目标语言代码。"},
+                "quality": {"type": "integer", "description": "1 普通，2 已确认；默认 1。"},
+            },
+            "required": ["source", "translation"],
+        },
+        "run": tool_add_translation_memory,
+    },
+    {
+        "name": "update_translation_memory",
+        "description": "修改已有翻译记忆的译文、质量或启用状态。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "记忆 ID，来自 list_translation_memory。"},
+                "translation": {"type": "string", "description": "新的译文。"},
+                "quality": {"type": "integer", "description": "1 普通，2 已确认。"},
+                "enabled": {"type": "boolean", "description": "是否启用。"},
+            },
+            "required": ["memory_id"],
+        },
+        "run": tool_update_translation_memory,
+    },
+    {
+        "name": "delete_translation_memory",
+        "description": "停用记忆（软删除）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"memory_id": {"type": "string", "description": "记忆 ID。"}},
+            "required": ["memory_id"],
+        },
+        "run": tool_delete_translation_memory,
+    },
+    {
+        "name": "translate_subtitle",
+        "description": "用声笺翻译 Agent 翻整条记录：查术语、复用记忆、质检、写记忆。需先配置翻译模型。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "识别会话 ID。"},
+                "target_lang": {"type": "string", "description": "目标语言代码，如 zh、en；省略时用设置。"},
+                "provider": {"type": "string", "description": "提供方 id，如 api、local；省略时用设置。"},
+                "use_memory": {"type": "boolean", "description": "是否读取和写入翻译记忆，默认 true。"},
+                "include_translation": {"type": "boolean", "description": "默认 false，只回行数与 run_id；true 才回显完整译文，占大量 token。"},
+            },
+            "required": ["session_id"],
+        },
+        "run": tool_translate_subtitle,
+    },
+    {
+        "name": "save_translation",
+        "description": "外部 Agent 回写整条译文；lines 必须覆盖全部原始行号，不改原文和时间码。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "识别会话 ID。"},
+                "target_lang": {"type": "string", "description": "目标语言代码，如 zh、en；必填。"},
+                "provider": {"type": "string", "description": "外部来源标记，例如 workbuddy、doubao。"},
+                "model": {"type": "string", "description": "外部 Agent 使用的模型名，可留空。"},
+                "lines": {
+                    "type": "array",
+                    "description": "完整译文，按原始字幕行号。",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "index": {"type": "integer", "description": "原始字幕行号。"},
+                            "translated": {"type": "string", "description": "这一行的译文。"},
+                        },
+                        "required": ["index", "translated"],
+                    },
+                },
+                "include_translation": {"type": "boolean", "description": "默认 false，只回写回执；true 才回显完整译文，占大量 token。"},
+            },
+            "required": ["session_id", "target_lang", "lines"],
+        },
+        "run": tool_save_translation,
+    },
+    {
+        "name": "list_translation_runs",
+        "description": "查翻译 Agent 运行记录，可按 session_id 筛选。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string", "description": "只查看这条识别记录的运行。"}},
+            "additionalProperties": False,
+        },
+        "run": tool_list_translation_runs,
+    },
+    {
+        "name": "get_translation_run",
+        "description": "读取一次运行记录：trace、结果摘要和错误。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"run_id": {"type": "string", "description": "运行 ID。"}},
+            "required": ["run_id"],
+        },
+        "run": tool_get_translation_run,
     },
 ]
 
@@ -436,7 +1001,7 @@ def _dispatch(method, params):
         name = params.get("name")
         tool = _BY_NAME.get(name)
         if tool is None:
-            raise ToolError("没有名为 " + str(name) + " 的工具。可用：" + "、".join(_BY_NAME))
+            raise ToolError("没有名为 " + str(name) + " 的工具，请先 tools/list 查看。")
         return tool["run"](params.get("arguments") or {})
     if method in ("resources/list", "prompts/list"):
         return {"resources": []} if method == "resources/list" else {"prompts": []}
@@ -463,7 +1028,8 @@ def _handle(message):
                 "result": {"content": [{"type": "text", "text": "内部错误：" + str(exc)}], "isError": True}}
     if method == "tools/call":
         return {"jsonrpc": "2.0", "id": identifier,
-                "result": {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}],
+                "result": {"content": [{"type": "text",
+                                        "text": json.dumps(result, ensure_ascii=False, separators=(",", ":"))}],
                            "isError": False}}
     return {"jsonrpc": "2.0", "id": identifier, "result": result}
 
@@ -484,7 +1050,7 @@ def main():
             continue
         response = _handle(message)
         if response is not None:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
             sys.stdout.flush()
 
 

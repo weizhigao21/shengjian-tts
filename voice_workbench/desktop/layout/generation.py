@@ -169,6 +169,9 @@ class GenerationLayout:
         from .recognition import RecognitionPanel
         self.recognition = RecognitionPanel(self)
         self.creation_pages.addWidget(self.recognition)
+        from .recognition_batch import BatchRecognitionPanel
+        self.batch_recognition = BatchRecognitionPanel(self, self.recognition.controller)
+        self.creation_pages.addWidget(self.batch_recognition)
         self.creation_pages.currentChanged.connect(self.creation_page_changed)
         self.creation_pages.setCurrentIndex(1)
         self.tabs.addWidget(self.creation_pages)

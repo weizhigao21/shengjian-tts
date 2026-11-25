@@ -1,7 +1,7 @@
 """Speech recognition page: drop audio in, read the transcript, play one line at a time."""
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit,
-                            QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                            QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget)
 
 from ...ui import ORANGE, ElidedLabel, button, icon, label
 from ..controllers.recognition import RecognitionController
@@ -15,6 +15,13 @@ LINE_STYLE = ("QListWidget#recognitionLines { background: white; border: 1px sol
               "QListWidget#recognitionLines::item { padding: 7px 8px; border-radius: 6px; }"
               "QListWidget#recognitionLines::item:hover { background: #faf7f2; }"
               "QListWidget#recognitionLines::item:selected { background: #fbeee4; color: #1c1b19; }")
+TRANSLATION_LINE_STYLE = ("QListWidget#recognitionTranslations { background: white; border: 1px solid #e5e0d8;"
+                          " border-radius: 10px; padding: 4px; }"
+                          "QListWidget#recognitionTranslations::item { padding: 7px 8px; border-radius: 6px;"
+                          " color: #2f6f9f; }"
+                          "QListWidget#recognitionTranslations::item:hover { background: #f4f8fb; }"
+                          "QListWidget#recognitionTranslations::item:selected { background: #e8f1f7;"
+                          " color: #1c1b19; }")
 
 
 class RecognitionPanel(QWidget):
@@ -119,7 +126,28 @@ class RecognitionPanel(QWidget):
             lambda position: self.controller.reference_context_menu(self.lines, position))
         self.lines.setToolTip("点击播放；右键保存片段到声音库。可按住 Shift 选择连续多行，参考音频需要 1–60 秒。")
         self.lines.hide()
-        content.addWidget(self.lines, 1)
+
+        self.translated_lines = RecognitionLines()
+        self.translated_lines.setObjectName("recognitionTranslations")
+        self.translated_lines.setStyleSheet(TRANSLATION_LINE_STYLE)
+        self.translated_lines.setWordWrap(True)
+        self.translated_lines.setUniformItemSizes(False)
+        self.translated_lines.setAlternatingRowColors(False)
+        self.translated_lines.itemClicked.connect(
+            lambda item: self.controller.play_line(self.translated_lines.row(item)))
+        self.translated_lines.setToolTip("译文；点击播放对应行。原文和时间码不会改变。")
+        self.translated_lines.hide()
+
+        self.result_tabs = QTabWidget()
+        self.result_tabs.setObjectName("recognitionResultTabs")
+        self.result_tabs.setDocumentMode(True)
+        self.result_tabs.addTab(self.lines, "原文")
+        self.result_tabs.addTab(self.translated_lines, "译文")
+        self.result_tabs.setTabVisible(1, False)
+        self.lines.hide()
+        self.translated_lines.hide()
+        self.result_tabs.hide()
+        content.addWidget(self.result_tabs, 1)
 
         self.status = label("导入后会自动识别。", "hint")
         self.status.setWordWrap(True)
@@ -135,10 +163,15 @@ class RecognitionPanel(QWidget):
         self.cancel_button = button("取消识别", self.controller.cancel, "close", "ghost")
         self.copy_button = button("复制文字", self.controller.copy_text, "copy", "ghost")
         self.export_button = button("导出字幕", self.controller.export_subtitles, "export", "ghost")
+        self.export_translation_button = button(
+            "导出中文字幕", self.controller.export_translated_subtitles, "export", "ghost")
+        self.export_translation_button.setToolTip("只导出译文，不混入原文；时间码沿用原字幕。")
+        self.export_translation_button.hide()
         transport.addWidget(self.toggle)
         transport.addWidget(self.cancel_button)
         transport.addWidget(self.copy_button)
         transport.addWidget(self.export_button)
+        transport.addWidget(self.export_translation_button)
         transport.addStretch()
         content.addLayout(transport)
         playback = QHBoxLayout()
@@ -205,6 +238,33 @@ class RecognitionPanel(QWidget):
         side.addSpacing(8)
         self.setup_button = button("模型 / 引擎管理", lambda: self.controller.open_model_download(), "settings")
         side.addWidget(self.setup_button)
+        side.addSpacing(14)
+        side.addWidget(label("批量识别", "groupTitle"))
+        side.addSpacing(2)
+        self.batch_button = button("打开批量识别…", self.controller.open_batch, "recognize", "ghost")
+        self.batch_button.setToolTip("一次添加多个音频或视频，逐个识别并自动导出字幕到原文件所在文件夹。")
+        side.addWidget(self.batch_button)
+        batch_hint = label("一次加入多个文件，逐个识别；每完成一个，自动把 SRT / TXT 写回它所在的文件夹。",
+                           "hint")
+        batch_hint.setWordWrap(True)
+        side.addWidget(batch_hint)
+        side.addSpacing(14)
+        side.addWidget(label("音频翻译", "groupTitle"))
+        side.addSpacing(2)
+        self.translate_button = button("翻译 / 查看译文…", self.controller.open_translation, "sparkle", "ghost")
+        side.addWidget(self.translate_button)
+        self.translation_state = label("尚未翻译", "hint")
+        self.translation_state.setWordWrap(True)
+        side.addWidget(self.translation_state)
+        self.knowledge_button = button("术语库 / 记忆…", self.controller.open_translation_knowledge,
+                                       "article", "ghost")
+        self.knowledge_button.setToolTip("管理固定译法和已确认的翻译记忆；Agent 翻译会自动读取。")
+        side.addWidget(self.knowledge_button)
+        translate_hint = label("默认走翻译 Agent：查术语、复用记忆、质检并记录过程；可接 OpenAI 兼容 API，"
+                               "本地模型接口已预留。译文单独保存，不改动原识别文字；完成后点上方「译文」标签查看。",
+                               "hint")
+        translate_hint.setWordWrap(True)
+        side.addWidget(translate_hint)
         side.addSpacing(14)
         side.addWidget(label("怎么用", "groupTitle"))
         side.addSpacing(2)

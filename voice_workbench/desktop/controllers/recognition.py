@@ -10,21 +10,17 @@ from PyQt6.QtWidgets import QFileDialog
 
 from ..api_client import checked
 from ..audio_output import SystemAudioOutput
-from ...subtitles import normalize_timestamp
 from ...recent_works import external_work
+from ...speech_recognition.exporting import is_chinese, srt_text, translated_lines
+from ...speech_recognition.formats import ALLOWED_SUFFIXES, VIDEO_SUFFIXES, dialog_filter
+from ...speech_recognition.languages import LANGUAGE_CHOICES
 from .recognition_references import RecognitionReferences
 
-AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif"}
-VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".ts", ".m2ts",
-                  ".mts", ".mpg", ".mpeg", ".3gp", ".ogv"}
-# Formats the native reader and the Qt player both accept; kept in step with the service.
-DROP_SUFFIXES = AUDIO_SUFFIXES | VIDEO_SUFFIXES
-AUDIO_FILES = ("音频或视频 (" + " ".join("*" + suffix for suffix in sorted(DROP_SUFFIXES)) + ");;"
-               "音频 (" + " ".join("*" + suffix for suffix in sorted(AUDIO_SUFFIXES)) + ");;"
-               "视频 (" + " ".join("*" + suffix for suffix in sorted(VIDEO_SUFFIXES)) + ")")
+AUDIO_FILES = dialog_filter()
 STATUSES = {"queued": "等待识别", "running": "识别中", "done": "识别完成",
             "failed": "识别失败", "cancelled": "已取消"}
 BUSY = ("queued", "running")
+BATCH_BUSY = ("queued", "running", "cancelling")
 
 
 class RecognitionController(RecognitionReferences):
@@ -44,10 +40,14 @@ class RecognitionController(RecognitionReferences):
         self.continuous = False
         self.rendered_session = None
         self.rendered_lines = None
+        self.rendered_translation = None
         self.selection_sequence = 0
         self.save_sequence = 0
         self.importing = None
         self.preparing_reference = False
+        self.batch_dialog = None
+        self.translation_dialog = None
+        self.knowledge_dialog = None
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -61,6 +61,8 @@ class RecognitionController(RecognitionReferences):
         self.timer = QTimer(self.panel)
         self.timer.timeout.connect(lambda: self.refresh(force=False))
         self.timer.start(1200)
+        if hasattr(self.panel, "result_tabs"):
+            self.panel.result_tabs.currentChanged.connect(self.sync_export_label)
         self.name_timer = QTimer(self.panel)
         self.name_timer.setSingleShot(True)
         self.name_timer.timeout.connect(self.save_name)
@@ -157,6 +159,21 @@ class RecognitionController(RecognitionReferences):
         control.setCurrentIndex(index if index >= 0 else 0)
         control.blockSignals(False)
 
+    def load_options(self, success=None, failure=None):
+        """取一次识别设置；批量页也要知道语言表和模型，不能只靠识别页的轮询。"""
+        def fetch(client):
+            response = client.get("/recognition/options")
+            if response.status_code == 404:
+                raise RuntimeError("当前本地服务版本不支持语音识别，请关闭旧声笺及其服务后重新启动。")
+            return checked(response)
+
+        def done(value):
+            self.options = value
+            if success:
+                success()
+
+        self.owner.call(fetch, done, failure or self.failure)
+
     def render_options(self):
         selection = self.options.get("selection") or {}
         self.fill(self.panel.asr, [(f"{m['name']} · {m['family']}", m["path"]) for m in self.options.get("asr", [])],
@@ -165,7 +182,10 @@ class RecognitionController(RecognitionReferences):
                   "未安装对齐器（时间估算）", selection.get("align_model"))
         language = ((self.panel.language.currentData() or self.state().get("language")) if self.session and self.session["id"] == self.rendered_session
                     else selection.get("language"))
-        self.fill(self.panel.language, list(self.options.get("languages") or []), preferred=language)
+        # 服务还没答复时先用本地语言表，避免下拉框是空的、点了没反应。
+        self.fill(self.panel.language,
+                  [tuple(item) for item in (self.options.get("languages") or LANGUAGE_CHOICES)],
+                  preferred=language)
 
     def render_sessions(self):
         if self.importing and self.importing.get("preview", True):
@@ -197,8 +217,22 @@ class RecognitionController(RecognitionReferences):
             return
         state = self.state()
         lines = state.get("lines") or []
+        translation = state.get("translation") or {}
+        translated = translation.get("lines") or []
         self.panel.drop_zone.setVisible(not lines)
+        self.panel.result_tabs.setVisible(bool(lines))
         self.panel.lines.setVisible(bool(lines))
+        if not translated and self.panel.result_tabs.currentIndex() == 1:
+            self.panel.result_tabs.setCurrentIndex(0)
+        self.panel.result_tabs.setTabVisible(1, bool(translated))
+        self.panel.translated_lines.setVisible(bool(translated))
+        self.panel.result_tabs.setTabText(1, f"译文 {len(translated)}" if translated else "译文")
+        if translated:
+            target = translation.get("target") or ""
+            self.panel.translation_state.setText(
+                f"已有译文：{len(translated)} 行" + (f" · 目标 {target}" if target else ""))
+        else:
+            self.panel.translation_state.setText("尚未翻译；外部 Agent 回写后会自动出现在「译文」")
         identity = self.session["id"] if self.session else None
         switched = identity != self.rendered_session
         if switched or self.session is None:
@@ -218,17 +252,28 @@ class RecognitionController(RecognitionReferences):
                 self.panel.lines.addItem(self.line_text(line))
             self.panel.lines.blockSignals(False)
             self.panel.clock.setText("00:00.00")
+        translation_signature = tuple((line.get("index"), line.get("translated")) for line in translated)
+        if switched or translation_signature != self.rendered_translation:
+            self.panel.translated_lines.blockSignals(True)
+            self.panel.translated_lines.clear()
+            for line in translated:
+                self.panel.translated_lines.addItem(
+                    self.line_text(line, text=line.get("translated") or ""))
+            self.panel.translated_lines.blockSignals(False)
         self.rendered_session, self.rendered_lines = identity, signature
+        self.rendered_translation = translation_signature
         self.panel.drop_title.setText(state.get("name") or "把音频或视频拖到这里")
         self.panel.drop_hint.setText("正在识别音频，请稍候…" if state.get("status") in BUSY else
                                     "拖入音频或视频后自动识别文字并按标点换行。")
         self.render_details()
+        self.sync_export_label()
         self.panel.drop_zone.setEnabled(not self.busy())
 
     @staticmethod
-    def line_text(line, playing=False):
+    def line_text(line, playing=False, text=None):
         clock = f"{RecognitionController.clock(line['start'])} – {RecognitionController.clock(line['end'])}"
-        return ("▶  " if playing else "") + f"[{clock}]  " + line["text"]
+        body = line.get("text") if text is None else text
+        return ("▶  " if playing else "") + f"[{clock}]  " + (body or "")
 
     @staticmethod
     def clock(seconds):
@@ -242,7 +287,8 @@ class RecognitionController(RecognitionReferences):
             self.panel.audio_name.setToolTip("")
             self.panel.info.setText("把音频或视频拖到下方区域，或点击「导入音视频」。支持 WAV / FLAC / MP3 / M4A / OGG 等音频，"
                                     "MP4 / MKV / MOV / AVI / WEBM 等视频会自动提取音轨。")
-            self.panel.status.setText("导入后会自动识别；识别完成后点击任意一行即可播放那一段。")
+            self.panel.status.setText(self.batch_hint() or
+                                      "导入后会自动识别；识别完成后点击任意一行即可播放那一段。")
             return
         duration = state.get("duration") or 0.0
         source = state.get("source_path") or state.get("audio") or ""
@@ -252,6 +298,8 @@ class RecognitionController(RecognitionReferences):
         details = f"{duration:.2f} 秒"
         if video:
             details += " · 视频音轨"
+        if state.get("batch_id"):
+            details += " · 批量任务"
         if state.get("recognized_language"):
             details += f" · 识别语言 {state['recognized_language']}"
         if state.get("processing_seconds"):
@@ -266,7 +314,23 @@ class RecognitionController(RecognitionReferences):
             status = f"识别完成，共 {len(lines)} 行。点击任意一行播放对应的音频片段。"
         elif state.get("status") in BUSY:
             status = "正在识别，请稍候…" + ("首次运行需要加载模型。" if state.get("status") == "queued" else "")
-        self.panel.status.setText(state.get("error") or state.get("warning") or status)
+        message = state.get("error") or state.get("warning") or status
+        hint = self.batch_hint()
+        self.panel.status.setText((hint + " " + message) if hint and message else (hint or message))
+
+    def batch_hint(self):
+        batch = self.options.get("batch") or {}
+        status = batch.get("status")
+        if status in BATCH_BUSY:
+            text = f"批量识别进行中：已完成 {batch.get('done', 0)}/{batch.get('total', 0)}"
+            if batch.get("current_name"):
+                text += f"，当前「{batch['current_name']}」"
+            if batch.get("failed"):
+                text += f"，失败 {batch['failed']}"
+            return text + "。"
+        if status == "interrupted":
+            return "上次批量识别被中断，打开「批量识别」可继续未完成的文件。"
+        return ""
 
     def render_progress(self, row):
         for index in range(self.panel.lines.count()):
@@ -284,7 +348,7 @@ class RecognitionController(RecognitionReferences):
             return None
         for url in mime.urls():
             path = Path(url.toLocalFile()) if url.isLocalFile() else None
-            if path and path.is_file() and path.suffix.lower() in DROP_SUFFIXES:
+            if path and path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES:
                 return str(path)
         return None
 
@@ -292,6 +356,124 @@ class RecognitionController(RecognitionReferences):
         return self.dropped_path(mime) is not None
 
     # -------------------------------------------------------------------- actions
+
+    # ---------------------------------------------------------------- batch
+
+    def open_batch(self):
+        if not self.owner.ready:
+            self.panel.status.setText("请先连接本地服务。")
+            return
+        identity = getattr(self.owner, "batch_recognition", None)
+        self.owner.open_batch_recognition(identity.batch_id if identity else None)
+
+    def batches(self, success, failure):
+        self.owner.call(lambda c: checked(c.get("/recognition/batches")), success, failure)
+
+    def batch_state(self, identity, success, failure):
+        self.owner.call(lambda c: checked(c.get(f"/recognition/batches/{identity}")), success, failure)
+
+    def start_batch(self, body, success, failure):
+        self.owner.call(lambda c: checked(c.post("/recognition/batches", json=body, timeout=30)),
+                        success, failure)
+
+    def cancel_batch(self, identity, success, failure):
+        self.owner.call(lambda c: checked(c.post(f"/recognition/batches/{identity}/cancel", timeout=30)),
+                        success, failure)
+
+    def retry_batch(self, identity, success, failure):
+        self.owner.call(lambda c: checked(c.post(f"/recognition/batches/{identity}/retry", timeout=30)),
+                        success, failure)
+
+    def open_batch_result(self, identity):
+        self.owner.call(lambda c: checked(c.get(f"/recognition/sessions/{identity}")),
+                        self.open_session, self.failure)
+
+    def batch_busy(self):
+        batch = self.options.get("batch") or {}
+        return batch.get("status") in BATCH_BUSY
+
+    # ------------------------------------------------------------- translation
+
+    def open_translation(self):
+        if not self.session or not (self.state().get("lines") or []):
+            self.panel.status.setText("先识别出一段音频，再翻译它的字幕。")
+            return
+        from ..components.recognition_translation import TranslationDialog
+        if self.translation_dialog is None:
+            self.translation_dialog = TranslationDialog(self.owner, self)
+        self.translation_dialog.open_window(self.session)
+
+    def translation_options(self, success, failure):
+        self.owner.call(lambda c: checked(c.get("/translation/options")), success, failure)
+
+    def translation_session(self, identity, success, failure):
+        """Read the latest translation written by an external MCP agent."""
+        self.owner.call(lambda c: checked(c.get(f"/recognition/sessions/{identity}")), success, failure)
+
+    def save_translation_settings(self, body, success, failure):
+        self.owner.call(lambda c: checked(c.post("/translation/settings", json=body, timeout=15)),
+                        success, failure)
+
+    def translate_session(self, identity, body, success, failure):
+        self.owner.call(lambda c: checked(c.post(f"/recognition/sessions/{identity}/translation",
+                                                 json=body, timeout=180)), success, failure)
+
+    def translate_session_agent(self, identity, body, success, failure):
+        body = {**body, "session_id": identity}
+        self.owner.call(lambda c: checked(c.post("/translation/agent/translate", json=body, timeout=180)),
+                        success, failure)
+
+    def open_translation_knowledge(self, session_id="", target=""):
+        if not self.owner.ready:
+            self.panel.status.setText("请先连接本地服务，再管理翻译术语和记忆。")
+            return
+        # The toolbar button emits a bool `checked` signal; ignore it and fall back
+        # to the recognition record the page is currently showing, so the Agent tab
+        # can read/correct that subtitle instead of opening with no session.
+        if not isinstance(session_id, str):
+            session_id = ""
+        if not session_id and self.session:
+            session_id = self.session.get("id") or ""
+        from ..components.translation_knowledge import TranslationKnowledgeDialog
+        if self.knowledge_dialog is None:
+            self.knowledge_dialog = TranslationKnowledgeDialog(self.owner, self)
+        self.knowledge_dialog.open_window(session_id, target)
+
+    def translation_terms(self, query, target, success, failure, limit=200, offset=0):
+        self.owner.call(lambda c: checked(c.get("/translation/terms",
+                                                params={"query": query, "target": target,
+                                                        "limit": limit, "offset": offset}),
+                                          success, failure))
+
+    def add_translation_term(self, body, success, failure):
+        self.owner.call(lambda c: checked(c.post("/translation/terms", json=body, timeout=30)),
+                        success, failure)
+
+    def update_translation_term(self, identity, body, success, failure):
+        self.owner.call(lambda c: checked(c.patch(f"/translation/terms/{identity}", json=body, timeout=30)),
+                        success, failure)
+
+    def delete_translation_term(self, identity, success, failure):
+        self.owner.call(lambda c: checked(c.delete(f"/translation/terms/{identity}", timeout=30)),
+                        success, failure)
+
+    def translation_memory(self, query, target, success, failure, limit=200, offset=0):
+        self.owner.call(lambda c: checked(c.get("/translation/memory",
+                                                params={"query": query, "target": target,
+                                                        "limit": limit, "offset": offset}),
+                                          success, failure))
+
+    def add_translation_memory(self, body, success, failure):
+        self.owner.call(lambda c: checked(c.post("/translation/memory", json=body, timeout=30)),
+                        success, failure)
+
+    def delete_translation_memory(self, identity, success, failure):
+        self.owner.call(lambda c: checked(c.delete(f"/translation/memory/{identity}", timeout=30)),
+                        success, failure)
+
+    def agent_chat(self, body, success, failure):
+        self.owner.call(lambda c: checked(c.post("/translation/agent/chat", json=body, timeout=180)),
+                        success, failure)
 
     def open_model_download(self, task=None):
         """Use the existing verified downloader, focused on this mode's models."""
@@ -453,36 +635,82 @@ class RecognitionController(RecognitionReferences):
 
         self.owner.call(lambda c: checked(c.delete(f"/recognition/sessions/{identity}")), done, self.failure)
 
+    def view_lines(self):
+        """The lines shown by the active tab, with original timings preserved."""
+        source = self.state().get("lines") or []
+        translation = self.state().get("translation") or {}
+        translated = translated_lines(translation)
+        if self.panel.result_tabs.currentIndex() == 1 and translated:
+            return translated, True, translation
+        return source, False, translation
+
+    def sync_export_label(self, *_):
+        translation = self.state().get("translation") or {}
+        translated = translated_lines(translation)
+        on_translation = self.panel.result_tabs.currentIndex() == 1 and bool(translated)
+        target = translation.get("target") or ""
+        self.panel.export_button.setText("导出译文" if on_translation else "导出字幕")
+        self.panel.export_button.setToolTip(
+            "导出当前「译文」标签的 SRT / TXT；时间码沿用原文。" if on_translation
+            else "导出当前「原文」标签的 SRT / TXT。")
+        if hasattr(self.panel, "export_translation_button"):
+            self.panel.export_translation_button.setText(
+                "导出中文字幕" if is_chinese(target) else "导出译文")
+            self.panel.export_translation_button.setVisible(bool(translated))
+            self.panel.export_translation_button.setToolTip(
+                "只写译文，不混入原文；时间码沿用原字幕。")
+
     def export_subtitles(self):
-        lines = self.state().get("lines") or []
+        lines, translated, translation = self.view_lines()
         if not lines:
             self.panel.status.setText("还没有可导出的识别结果。")
             return
-        name = (self.state().get("name") or "识别结果") + ".srt"
-        path, _ = QFileDialog.getSaveFileName(self.panel, "导出字幕", name, "SRT 字幕 (*.srt);;纯文本 (*.txt)")
+        state = self.state()
+        if translated:
+            target = translation.get("target") or "译文"
+            name = f"{state.get('name') or '识别结果'}.{target}.srt"
+            title = "导出译文"
+            done_label = "已导出译文"
+        else:
+            name = (state.get("name") or "识别结果") + ".srt"
+            title = "导出字幕"
+            done_label = "已导出原文"
+        self._save_subtitle_lines(lines, title, name, done_label)
+
+    def export_translated_subtitles(self):
+        """Export the translated text only, independent of the visible tab."""
+        state = self.state()
+        translation = state.get("translation") or {}
+        lines = translated_lines(translation)
+        if not lines:
+            self.panel.status.setText("还没有译文可以导出；先翻译，或让 Agent 回写译文。")
+            return
+        target = translation.get("target") or "译文"
+        name = f"{state.get('name') or '识别结果'}.{target}.srt"
+        title = "导出中文字幕" if is_chinese(target) else "导出译文"
+        done_label = "已导出中文字幕" if is_chinese(target) else "已导出译文"
+        self._save_subtitle_lines(lines, title, name, done_label)
+
+    def _save_subtitle_lines(self, lines, title, name, done_label):
+        path, _ = QFileDialog.getSaveFileName(self.panel, title, name, "SRT 字幕 (*.srt);;纯文本 (*.txt)")
         if not path:
             return
-        target = Path(path)
+        destination = Path(path)
         try:
-            if target.suffix.lower() == ".txt":
-                target.write_text("\n".join(line["text"] for line in lines), encoding="utf-8")
+            if destination.suffix.lower() == ".txt":
+                destination.write_text("\n".join(line.get("text") or "" for line in lines), encoding="utf-8")
             else:
-                blocks = []
-                for line in lines:
-                    start = normalize_timestamp("", round(line["start"] * 1000)).replace(".", ",")
-                    end = normalize_timestamp("", round(line["end"] * 1000)).replace(".", ",")
-                    blocks.append(f"{line['index']}\n{start} --> {end}\n{line['text']}")
-                target.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
-            self.panel.status.setText("已导出：" + str(target))
+                destination.write_text(srt_text(lines), encoding="utf-8")
+            self.panel.status.setText(done_label + "：" + str(destination))
         except OSError as exc:
             self.owner.show_error(str(exc))
 
     def copy_text(self):
-        lines = self.state().get("lines") or []
+        lines, translated, _ = self.view_lines()
         if lines:
             from PyQt6.QtWidgets import QApplication
-            QApplication.clipboard().setText("\n".join(line["text"] for line in lines))
-            self.panel.status.setText("已复制识别文字。")
+            QApplication.clipboard().setText("\n".join(line.get("text") or "" for line in lines))
+            self.panel.status.setText("已复制译文文字。" if translated else "已复制识别文字。")
 
     # ------------------------------------------------------------------ playback
 
@@ -561,21 +789,34 @@ class RecognitionController(RecognitionReferences):
         ready = self.owner.ready
         state = self.state()
         busy = self.busy()
+        batch_busy = self.batch_busy()
         importing = bool(self.importing and self.importing.get("preview", True))
         lines = state.get("lines") or []
         self.panel.title.setReadOnly(importing)
         self.panel.history.setEnabled(ready and not importing)
-        self.panel.import_button.setEnabled(ready and not busy)
-        self.panel.drop_button.setEnabled(ready and not busy)
-        self.panel.recognize_button.setEnabled(bool(ready and self.session and self.options.get("asr") and not busy))
-        self.panel.cancel_button.setEnabled(bool(busy and self.options.get("active")
+        self.panel.import_button.setEnabled(ready and not busy and not batch_busy)
+        self.panel.drop_button.setEnabled(ready and not busy and not batch_busy)
+        self.panel.recognize_button.setEnabled(bool(ready and self.session and self.options.get("asr")
+                                                   and not busy and not batch_busy))
+        self.panel.cancel_button.setEnabled(bool(busy and not batch_busy and self.options.get("active")
                                                  and self.session and self.options["active"]["session_id"] == self.session["id"]))
-        self.panel.remove_button.setEnabled(bool(ready and self.session and not busy))
+        self.panel.remove_button.setEnabled(bool(ready and self.session and not busy and not batch_busy))
         self.panel.export_button.setEnabled(bool(lines) and not importing)
+        self.panel.export_translation_button.setEnabled(
+            bool(self.state().get("translation") and translated_lines(self.state().get("translation")))
+            and not importing)
         self.panel.copy_button.setEnabled(bool(lines) and not importing)
         self.panel.toggle.setEnabled(bool(lines) and not importing)
         self.panel.continuous.setEnabled(bool(lines) and not importing)
         self.panel.setup_button.setEnabled(ready and not importing)
+        if hasattr(self.panel, "batch_button"):
+            self.panel.batch_button.setEnabled(ready and not importing)
+            self.panel.batch_button.setToolTip("批量识别进行中，可在队列窗口查看进度。" if batch_busy
+                                               else "一次添加多个音频或视频，逐个识别并自动导出字幕。")
+        if hasattr(self.panel, "translate_button"):
+            self.panel.translate_button.setEnabled(bool(lines) and not importing)
+        if hasattr(self.panel, "knowledge_button"):
+            self.panel.knowledge_button.setEnabled(ready and not importing)
         for button, key in ((self.panel.asr_download, "asr"), (self.panel.aligner_download, "align")):
             button.setEnabled(ready and not importing)
             button.setText("管理" if self.options.get(key) else "下载")
@@ -588,4 +829,8 @@ class RecognitionController(RecognitionReferences):
             self.timer.stop()
         self.name_timer.stop()
         self.stop()
+        for dialog in (getattr(self, "batch_dialog", None), getattr(self, "translation_dialog", None),
+                       getattr(self, "knowledge_dialog", None)):
+            if dialog is not None:
+                dialog.close()
         self.player.setSource(QUrl())

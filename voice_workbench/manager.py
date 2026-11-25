@@ -54,6 +54,8 @@ class Manager(BatchExecution, InferenceTelemetry):
         self.audio_editor = AudioEditor(self)
         from .speech_recognition.service import SpeechRecognizer
         self.recognition = SpeechRecognizer(self)
+        from .translation.service import TranslationService
+        self.translation = TranslationService(self)
         self.batch = BatchBackend(self)
         from .batch_inference.benchmark import InferenceBenchmark
         self.benchmark = InferenceBenchmark(self)
@@ -149,9 +151,10 @@ class Manager(BatchExecution, InferenceTelemetry):
 
     def status(self):
         with self.lock:
+            batch = getattr(self.recognition, "batch_active", None)
             return {"current": {"job_id": self.current[0], "index": self.current[1]} if self.current else None,
                     "audio_editing": self.audio_editor.active,
-                    "recognition": self.recognition.active,
+                    "recognition": self.recognition.active or ({"batch": batch} if batch else None),
                     **self.execution_snapshot(),
                     "inference": self.batch.status(compact=True),
                     "inference_benchmark": self.benchmark.status(compact=True) if hasattr(self, 'benchmark') else {},
@@ -191,13 +194,19 @@ class Manager(BatchExecution, InferenceTelemetry):
     @property
     def editing_busy(self):
         return (self.audio_editor.gpu_busy or self.recognition.gpu_busy
+                or bool(getattr(self.recognition, "batch_active", None))
                 or bool(getattr(self, 'benchmark', None) and self.benchmark.gpu_busy))
 
-    def require_idle_engine(self, stage):
+    def require_idle_engine(self, stage, recognition_owner=False):
         """Call under lock before reserving the engine for editing or recognition."""
         if self.stopping.is_set():
             raise VoiceError("SERVICE_STOPPING", "服务正在停止，请重启后重试", stage=stage)
-        if self.active or self.editing_busy:
+        recognition_batch = bool(getattr(self.recognition, "batch_active", None))
+        busy = (self.active or self.audio_editor.gpu_busy
+                or (self.recognition.gpu_busy and not recognition_owner)
+                or (recognition_batch and not recognition_owner)
+                or bool(getattr(self, 'benchmark', None) and self.benchmark.gpu_busy))
+        if busy:
             raise VoiceError("ENGINE_BUSY", "推理引擎正在使用，请完成或取消当前配音、识别或 AI 编辑任务", stage=stage)
 
     def _capacity(self, job, item):
@@ -453,6 +462,7 @@ class Manager(BatchExecution, InferenceTelemetry):
         self.models.close()
         self.handoff.stop()
         self.audio_editor.close()
+        self.translation.close()
         self.recognition.close()
         self.thread.join(timeout=20)
         if self.thread.is_alive():

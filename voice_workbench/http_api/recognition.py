@@ -3,7 +3,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
 from ..errors import VoiceError
-from ..speech_recognition.schemas import RecognizeRequest, SelectionRequest, SessionState
+from ..speech_recognition.schemas import (BatchRequest, LineCorrections, RecognizeRequest,
+                                           SelectionRequest, SessionState)
+from ..translation.schemas import TranslationRequest
 from .context import manager
 
 router = APIRouter(prefix="/recognition")
@@ -25,9 +27,40 @@ def sessions(request: Request):
     return manager(request).recognition.store.recent()
 
 
+@router.get("/batches")
+def batches(request: Request):
+    return manager(request).recognition.batching.recent()
+
+
+@router.post("/batches", status_code=201)
+def create_batch(body: BatchRequest, request: Request):
+    return manager(request).recognition.batching.start(body.paths, body.language, body.format, body.name,
+                                                       body.dedupe)
+
+
+@router.get("/batches/{identity}")
+def batch(identity: str, request: Request):
+    return manager(request).recognition.batching.state(identity)
+
+
+@router.post("/batches/{identity}/cancel")
+def cancel_batch(identity: str, request: Request):
+    return manager(request).recognition.batching.cancel(identity)
+
+
+@router.post("/batches/{identity}/retry")
+def retry_batch(identity: str, request: Request):
+    return manager(request).recognition.batching.retry(identity)
+
+
+@router.delete("/batches/{identity}")
+def remove_batch(identity: str, request: Request):
+    return manager(request).recognition.batching.remove(identity)
+
+
 @router.post("/sessions", status_code=201)
 def create(body: RecognizeRequest, request: Request):
-    return manager(request).recognition.import_audio(body.path, body.name, body.language)
+    return manager(request).recognition.import_audio(body.path, body.name, body.language, dedupe=body.dedupe)
 
 
 @router.get("/sessions/{identity}")
@@ -43,9 +76,19 @@ def save(identity: str, body: SessionState, request: Request):
     return recognition.session(identity)
 
 
+@router.patch("/sessions/{identity}/lines")
+def correct_lines(identity: str, body: LineCorrections, request: Request):
+    return manager(request).recognition.correct_lines(identity, body.corrections, origin="manual")
+
+
 @router.post("/sessions/{identity}/retry")
 def retry(identity: str, request: Request):
     return manager(request).recognition.retry(identity)
+
+
+@router.post("/sessions/{identity}/translation")
+def translate(identity: str, body: TranslationRequest, request: Request):
+    return manager(request).translation.translate_session(identity, body.target, body.provider)
 
 
 @router.post("/sessions/{identity}/cancel")

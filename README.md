@@ -9,7 +9,7 @@
 本地语音生成 · 多角色对话 · 音频编辑 · 语音识别 · 双语工作流联动
 
 <p>
-  <img src="https://img.shields.io/badge/源码-v0.7.88-E87936?style=flat-square" alt="源码版本 v0.7.88" />
+  <img src="https://img.shields.io/badge/源码-v0.10.6-E87936?style=flat-square" alt="源码版本 v0.10.6" />
   <img src="https://img.shields.io/badge/平台-Windows_64位-505761?style=flat-square" alt="Windows 64 位" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-505761?style=flat-square" alt="GPLv3" /></a>
 </p>
@@ -26,13 +26,13 @@
 
 ## 版本与下载
 
-**当前源码：v0.7.88。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
+**当前源码：v0.10.6。** Windows 发行包精简开发资料，安装说明和授权文本收进运行库目录。Qwen 一键安装支持运行环境国内加速，覆盖独立 Python、PyTorch 和 Qwen SDK；模型默认使用魔搭，也可选择 HF 镜像。推理引擎支持 ghfast、GH-Proxy、官方直连与失败切换，下载保留续传和校验。Qwen 批量后端支持编码预测专用循环、启动条数门槛和实际推理状态；资源被其他程序占用导致卡住时自动缩小批量重试，连续成功后逐级恢复。测速每组 20 条，只比较两端都生效的采样参数。详见[批量推理说明](docs/BATCH_INFERENCE.md)与[更新记录](CHANGELOG.md)。
 
 **实验开关（默认关闭）：** 两层 CUDA Graph 都在设置页可开。编码预测器图已在 RTX 2080 Ti 完成编码 / 随机数 / 音频一致性验证，20 条中文和中英混合短句相对专用循环的热模型耗时减少约 50%（[验证报告](docs/CUDA_GRAPH_VALIDATION.md)）；本版新增的 Talker 整步图实测批 8 由 0.502 → 0.285 秒 / 条（1.76 倍）、批 2 由 2.030 → 0.973（2.09 倍），RTF 0.161 → 0.092，但它与 SDK 原循环只能做到「同参数近似」而非逐位相同（[整步图说明](docs/TALKER_GRAPH.md)）。
 
-**当前本地构建：v0.7.88 · Windows x64 · 解压即用，无需安装 Python。** 独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。最新公开包见 [最新发行页](https://github.com/weizhigao21/shengjian-tts/releases/latest)。
+**当前本地源码：v0.10.6 · Windows x64 · 解压即用，无需安装 Python。** 独立 Qwen 批量后端可在设置页一键下载专用环境，无需预装 Python。最新公开包见 [最新发行页](https://github.com/weizhigao21/shengjian-tts/releases/latest)。
 
-从 [v0.7.72 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.72) 下载 `shengjian-v0.7.72-windows-x64.zip`，同页提供 `SHA256SUMS.txt`，源码见该标签。装有更新器的版本（v0.7.33 起）可在「设置 → 常规」直接检查并安装这次更新，v0.7.28 需要先手动装一次完整包。当前源码 v0.7.88 的 `shengjian-v0.7.88-windows-x64.zip` 与 `SHA256SUMS.txt` 已生成在 `dist/`，发行页仍以上传版本为准。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
+从 [v0.7.72 发行页](https://github.com/weizhigao21/shengjian-tts/releases/tag/v0.7.72) 下载 `shengjian-v0.7.72-windows-x64.zip`，同页提供 `SHA256SUMS.txt`，源码见该标签。装有更新器的版本（v0.7.33 起）可在「设置 → 常规」直接检查并安装这次更新，v0.7.28 需要先手动装一次完整包。`dist/` 中当前保留 v0.10.6 的 `shengjian-v0.10.6-windows-x64.zip`、上一版 v0.10.2、v0.10.1 与 v0.10.0 包以及 `SHA256SUMS.txt`；源码与本地发行包均为 v0.10.6，发行页仍以上传版本为准。模型和 audio.cpp 引擎在程序内按需下载，首次下载需要网络；准备完成后可本地生成。
 
 ## 可以做什么
 
@@ -43,7 +43,8 @@
 | **IndexTTS 情绪控制** | 2.0 / 2.5 支持跟随音色、参考演绎、情绪调节和文字引导，提供 12 个预设、八维微调与强度设置。 |
 | **多角色对话** | 输入 `@` 选择音色，为每框命名角色、调整参数并单独生成；选中框后，播放器和历史列表只显示它的音频。 |
 | **音频编辑** | 导入 PCM WAV 或打开生成记录，拖动选区、裁剪 / 拼接 / 调整音量，保留各次版本；可接入 Vevo2 换声和台词修改。 |
-| **语音识别** | 拖入音频或视频自动转写文字，按标点分行并给出每行时间范围；点击任意一行播放对应片段，结果可导出 SRT / TXT。 |
+| **语音识别** | 拖入音频或视频自动转写文字，按标点分行并给出每行时间范围；独立的「批量识别」模式可一次管理多个文件，一个批次在最近作品中只占一条记录；每完成一个就把 SRT / TXT 自动写回原文件所在文件夹，并可在批次页查看每个文件的字幕与译文进度；点击任意一行播放对应片段。 |
+| **音频翻译** | 翻译当前识别结果，术语库固定译法、翻译记忆复用、Agent 质检与受控指令；译文单独保存，不改原文与时间码；切到「译文」可直接导出对应字幕。 |
 | **边剪边配** | 主窗口让位，留一个置顶小窗：选音色、拉语速、打字即生成，每行一条独立音频，抓住六点直接拖进剪辑软件的时间线。每用一次就在任务列表里留一条带小窗图标的任务，点它直接回到小窗继续配，`Ctrl+Alt+Space` 随时叫出。 |
 | **声音库** | 保存声音预设、导入或用麦克风直接录参考音频；在生成记录列表或音频管理中右键，把生成音频保存为参考声音。 |
 | **音频管理** | 文章 / 对话分类，默认最新在前；对白按 ID 关联全部历史音频，支持详情、搜索与批量删除。 |
@@ -129,7 +130,7 @@
 | :--- | :--- |
 | **文章** | 输入长文或导入 TXT / LRC / SRT / VTT，在右侧统一配置声音与参数，点击「开始生成」。 |
 | **对话** | 输入 `@` 选择已保存的音色预设，自动创建对白框；Enter 新增下一条，Shift+Enter 换行。点击对白框调整它的参数，逐条生成或整批生成。 |
-| **语音识别** | 拖入音频或视频立即显示文件名和导入状态（视频自动提取音轨，原文件不改动）；模型旁可下载识别 / 对齐模型，完成后点行播放或导出字幕，最近作品可回到记录。 |
+| **语音识别** | 拖入音频或视频立即显示文件名和导入状态（视频自动提取音轨，原文件不改动）；模型旁可下载识别 / 对齐模型，完成后点行播放或导出字幕，最近作品可回到记录。创建首页「批量识别」卡或右栏「打开批量识别…」进入独立批量模式：一次加入多个文件，一个批次在任务目录里只占一条记录，不再把每个识别会话零散排在侧栏；批次表格按行数收缩，右侧可直接查看选中文件的 SRT/TXT 字幕和译文，也可复制批次 ID 与 MCP 翻译指令；逐个识别并把字幕自动导出到各自文件夹；主界面切到「译文」后，「导出字幕」会改为导出译文；「翻译当前结果」默认走翻译 Agent：查术语、复用翻译记忆、质检并记录运行过程，也可接 OpenAI 兼容 API；「术语库 / 记忆」管理固定译法和已确认句子。 |
 
 文章 / 对话在创建后固定。对白左上角可填写角色名称；命名后隐藏短 ID，悬停约 1.2 秒可查看完整 ID、音色、模型与音频数量。修改名字保留原 ID 和历史音频，修改文本或参数后可点击回转箭头重新生成。
 
@@ -219,9 +220,9 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 
 ## AI 助手接入（MCP）
 
-让 Claude Desktop、Cursor、Cline 之类的 AI 客户端直接调用本机声笺说话。走 MCP 的 stdio 协议，不开新端口、不暴露网络，也不和桌面端抢推理实例——它只是把请求转给已经在运行的那个服务。
+让 Claude Desktop、Cursor、Cline 之类的 AI 客户端直接调用本机声笺：生成语音、读字幕、查术语、复用翻译记忆，也可以让外部 Agent 触发一次完整的字幕翻译。走 MCP 的 stdio 协议，不开新端口、不暴露网络，也不和桌面端抢推理实例——它只是把请求转给已经在运行的那个服务。
 
-在客户端配置里加一项（路径换成你的项目目录）：
+在客户端配置里加一项（路径换成你的项目目录；发行包用 `声笺服务.exe` 的 `mcp` 模式）：
 
 ```json
 {
@@ -234,7 +235,23 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 }
 ```
 
-先打开声笺桌面端，或单独运行 `python -m voice_workbench serve`，再让客户端连接。
+发行包也可以直接指向 `C:\DIY\声笺\声笺服务.exe`，参数用 `["mcp"]`；不需要 Python 环境。
+
+WorkBuddy 的 MCP 配置（设置 → MCP）：
+```json
+{
+  "mcpServers": {
+    "shengjian": {
+      "type": "stdio",
+      "command": "C:\\DIY\\声笺\\声笺服务.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+豆包工作在「插件 · 技能 · 伙伴 → 新建自定义连接器」里选择 STDIO：命令填 `C:\DIY\声笺\声笺服务.exe`，参数填 `mcp`。
+
+先打开声笺桌面端，或单独运行 `python -m voice_workbench serve`，再让客户端连接。MCP 进程只通过本机 HTTP 调用服务，不直接打开 SQLite，也不会额外占用一个推理实例。完整工具边界和下一阶段的 Client 说明见 [MCP 接入设计](docs/MCP_INTEGRATION.md)。
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -243,8 +260,25 @@ python scripts/install_workflow_adapter.py --target "D:\双语音声工作流"
 | `speak_dialogue` | 多角色对白，每句用各自的音色 |
 | `get_job` | 查生成进度与已完成片段 |
 | `transcribe` | 音频转文字，带每行起止时间 |
+| `list_translation_sessions` | 列出最近的识别记录，拿 `session_id` |
+| `get_subtitle` | 分页读原文和已有译文；默认 compact 数组，`cursor/limit` 按 50 行一块，可带 `known_revision` 只查变化 |
+| `list_translation_terms` | 查术语库，可按目标语言和关键词筛选 |
+| `add_translation_term` | 新增或更新固定译法 |
+| `update_translation_term` | 修改译文、说明、优先级和启用状态 |
+| `disable_translation_term` | 停用术语，软删除 |
+| `list_translation_memory` | 查翻译记忆 |
+| `add_translation_memory` | 写入或更新翻译记忆 |
+| `delete_translation_memory` | 停用翻译记忆，软删除 |
+| `translate_subtitle` | 用确定性 Agent 翻译整条字幕，可指定目标语言和提供方 |
+| `save_translation` | 把外部 Agent 自己模型产出的完整译文写回声笺，不改原文和时间码；`target_lang` 必填，默认只回写回执 |
+| `list_translation_runs` | 查看翻译 Agent 运行记录 |
+| `get_translation_run` | 读取一次运行的完整 trace、结果和错误 |
 
-返回本地路径而不是 http 链接：AI 客户端常在沙箱里，抓不到 `127.0.0.1`，但能直接读文件。文字里的 markdown 会自动清掉，长文本按句切段，每段一条音频。
+想用豆包工作、WorkBuddy 等客户端自己的模型额度翻译，走这条链路：客户端连接声笺 MCP → 调 `get_subtitle` 读字幕 → 客户端自己翻译 → 调 `save_translation` 把完整译文按原行号写回。声笺只校验行号和时间码并落库，不会调用自己的翻译 API；回写成功后，主界面「译文」标签会自动出现，翻译窗口和记忆库也会自动刷新，并把合格译文写入本地翻译记忆。主界面切到「译文」后「导出字幕」会导出译文；翻译窗口内的「导出译文 SRT」也可单独导出。0.9.1 已经回写、但记忆为空的旧记录，可以运行 `python scripts/backfill_translation_memory.py` 补写。
+
+0.10.1 起这条链路按 token 预算收紧：`get_subtitle` 默认 `format="compact"`、`limit=50`、不带时间码，返回 `columns` 和 `lines` 数组；430 行真实会话从 62.9KB 降到约 15.7KB，连续读同一会话可带 `revision` 作为 `known_revision`，未变化只回 142B。写回默认只返回 `line_count/translated_lines/revision/run_id/issues/memory_written`，不再回显 39.4KB 全文（回执约 0.2KB）；要调试全文才传 `include_translation=true`。`target_lang` 现在必填，写 `zh-CN` 会统一落成 `zh`。
+
+返回本地路径而不是 http 链接：AI 客户端常在沙箱里，抓不到 `127.0.0.1`，但能直接读文件。文字里的 markdown 会自动清掉，长文本按句切段，每段一条音频。术语和记忆的删除都只做软删除；MCP 不暴露删除识别记录、删除音频、读写任意文件或执行命令的能力。
 
 服务地址默认 `http://127.0.0.1:8765`，可用 `SHENGJIAN_API` 覆盖；单次等待上限由 `SHENGJIAN_MCP_WAIT` 控制（默认 120 秒），超过就返回 `job_id`，让 AI 用 `get_job` 接着查。生成的任务会出现在侧栏，标题带 `AI：` 前缀，便于识别和清理。
 
@@ -327,7 +361,10 @@ flowchart LR
 │  │  ├─ model_labels.py          模型身份及显示名称
 │  │  ├─ components/
 │  │  │  ├─ voice_mentions.py     @ 预设列表、悬停与标签身份
-│  │  │  └─ dialogue.py           音色标签、对白文本框及行操作
+│  │  │  ├─ dialogue.py           音色标签、对白文本框及行操作
+│  │  │  ├─ recognition_batch.py  批量识别队列、进度与导出结果（旧弹窗）
+│  │  │  ├─ recognition_translation.py 翻译设置、Agent 开关与译文表格
+│  │  │  └─ translation_knowledge.py 术语库、翻译记忆与 Agent 指令
 │  │  ├─ controllers/
 │  │  │  ├─ creation.py           模式切换、对白操作与编辑状态
 │  │  │  ├─ documents.py          作品列表、编辑、保存与导航
@@ -342,6 +379,7 @@ flowchart LR
 │  │  │  ├─ generation.py         文本编辑与参数面板
 │  │  │  ├─ player.py             播放器与记录浮层
 │  │  │  ├─ recognition.py        语音识别页面、拖放区与分行列表
+│  │  │  ├─ recognition_batch.py  独立批量模式页、批次表格与字幕预览
 │  │  │  ├─ workflow.py           工作流页面
 │  │  │  └─ common.py             布局辅助组件
 │  │  └─ settings/
@@ -358,7 +396,8 @@ flowchart LR
 │  │  ├─ voices.py                预设与参考声音接口
 │  │  ├─ jobs.py                  作品及生成接口
 │  │  ├─ audio.py                 音频与日志接口
-│  │  ├─ recognition.py           识别模型选项与识别记录接口
+│  │  ├─ recognition.py           识别模型选项、识别记录与批量队列接口
+│  │  ├─ translation.py           翻译提供方设置接口
 │  │  ├─ workflow.py              发现与临时音频交付
 │  │  └─ legacy.py                旧推理接口
 │  ├─ services/                    可复用应用服务
@@ -367,12 +406,20 @@ flowchart LR
 │  │  ├─ script_voices.py         行首音色解析与逐段生成配置
 │  │  └─ service_lock.py          数据目录服务实例锁
 │  ├─ recent_works.py             四类创作任务的只读最近作品摘要
-│  ├─ speech_recognition/          语音识别：分行、引擎调用与会话存储
+│  ├─ speech_recognition/          语音识别：分行、引擎调用、会话与批量队列
 │  │  ├─ lines.py                 时间戳换算、标点回填与分行
 │  │  ├─ runner.py                同一引擎进程内的识别与对齐请求
 │  │  ├─ service.py               模型选择、音频导入、执行与结果
-│  │  ├─ store.py                 识别会话 SQLite 存储
+│  │  ├─ batch.py                 批量队列、顺序执行与中断恢复
+│  │  ├─ exporting.py             SRT / TXT 生成与同名字幕保护
+│  │  ├─ formats.py               音频/视频后缀与文件选择过滤器
+│  │  ├─ store.py                 识别会话与批量记录 SQLite 存储
 │  │  └─ schemas.py               识别请求与状态结构
+│  ├─ translation/                 字幕翻译与 Agent：术语、记忆、工具调用与运行记录
+│  │  ├─ schemas.py               翻译设置、术语/记忆与 Agent 请求结构
+│  │  ├─ store.py                 术语、翻译记忆与 Agent 运行 SQLite 存储
+│  │  ├─ agent.py                 术语/记忆检索、分批翻译、质检与工具调用
+│  │  └─ service.py               OpenAI 兼容调用、本地模型占位与设置
 │  ├─ gui.py                       桌面启动与旧导入的兼容入口
 │  ├─ gui_layout.py                旧布局与模型名称函数的兼容导出
 │  ├─ service_status.py            本地服务启动错误的中文诊断
@@ -498,3 +545,9 @@ python scripts/render_readme.py
 声笺源代码按 [GPLv3](LICENSE) 发行，Copyright © 2026 weizhigao21。依赖、参考项目和模型分别遵循各自的许可，详见[第三方声明](THIRD_PARTY_NOTICES.md)与[依赖清单](licenses/README.md)。
 
 遇到问题可提交 [Issue](https://github.com/weizhigao21/shengjian-tts/issues)，附上程序、模型和引擎版本、复现步骤及相关日志；提交前移除个人文本和本机路径。
+
+
+
+
+
+

@@ -137,6 +137,36 @@ def test_recent_works_reads_all_modes_without_writing_or_creating_databases(tmp_
     assert len(set(WORK_ICONS.values())) == 5
 
 
+def test_batch_sessions_appear_once_as_one_task_instead_of_loose_records(tmp_path):
+    populate_modes(tmp_path)
+    from voice_workbench.speech_recognition.store import RecognitionStore
+    recognition = RecognitionStore(tmp_path / 'recognition')
+    first = recognition.create({'name': '第一段', 'audio': 'c' * 32 + '.wav', 'language': 'en',
+                                'status': 'done', 'text': 'Hello', 'lines': []})
+    second = recognition.create({'name': '第二段', 'audio': 'd' * 32 + '.wav', 'language': 'en',
+                                 'status': 'failed', 'text': '', 'lines': [], 'error': '解码失败'})
+    recognition.update(first, {'batch_index': 0})
+    recognition.update(second, {'batch_index': 1})
+    batch = recognition.create_batch({
+        'name': '批量识别 · 2 个文件', 'status': 'done', 'language': 'en', 'format': 'srt',
+        'items': [
+            {'path': str(tmp_path / '第一段.wav'), 'name': '第一段', 'status': 'done',
+             'session_id': first, 'exported': [], 'export_error': ''},
+            {'path': str(tmp_path / '第二段.wav'), 'name': '第二段', 'status': 'failed',
+             'session_id': second, 'exported': [], 'export_error': '', 'error': '解码失败'},
+        ]})
+    recognition.update(first, {'batch_id': batch})
+    recognition.update(second, {'batch_id': batch})
+    recognition.close()
+    records = read_recent(tmp_path)
+    batch_rows = [record for record in records if task_type(record) == 'recognition_batch']
+    assert len(batch_rows) == 1
+    assert batch_rows[0]['id'] == 'recognition_batch:' + batch
+    assert batch_rows[0]['completed'] == 2
+    assert batch_rows[0]['total'] == 2
+    assert not [record for record in records if record['id'] in ('recognition:' + first, 'recognition:' + second)]
+
+
 def test_new_recent_endpoint_leaves_jobs_contract_and_workflow_filtering_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr('voice_workbench.discovery.discover_yovoice', lambda _: [])
     ids = populate_modes(tmp_path)

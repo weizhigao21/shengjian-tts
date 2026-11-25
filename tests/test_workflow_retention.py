@@ -103,7 +103,10 @@ class Cache:
         self.saved.append((args, kwargs))
 
 
-def test_adapter_acknowledges_only_valid_successful_downloads_and_keeps_partial_results(tmp_path):
+def test_adapter_acknowledges_only_valid_successful_downloads_and_keeps_partial_results(tmp_path, monkeypatch):
+    # The assertion below pins the *second* download to a disk failure. Downloads
+    # run in a pool by design, so pin the worker count to make that order deterministic.
+    monkeypatch.setattr("integration.local_voice_client.DOWNLOAD_WORKERS", 1)
     runner = ControlledRunner()
     runner.fail_once.add("bad")
     tasks = [(1, "00:01", "good", str(tmp_path), 7), (2, "00:02", "download fails", str(tmp_path), 7),
